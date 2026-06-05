@@ -4,6 +4,7 @@
 
 use crate::forge::{Forge, MergeResult, Mergeability};
 use crate::runner::{ExecOutput, Handle, Runner, UnitSpec};
+use crate::{claude_meter, steps};
 use fleet_core::{
     gate_met, transition, ArtifactKind, Command, ErrorScope, Event, IterationKind, LogStream,
     Phase, ReviewSnapshot, Trigger,
@@ -146,20 +147,30 @@ impl<R: Runner, F: Forge> Run<R, F> {
         self.cost_usd > self.spec.usd_cap
     }
 
-    /// Run one agent step, streaming stdout as `Log` events. On runner failure,
-    /// fail the unit and return `None`.
+    /// Remaining USD budget (never negative) — passed to claude as `--max-budget-usd`.
+    fn remaining(&self) -> f64 {
+        (self.spec.usd_cap - self.cost_usd).max(0.0)
+    }
+
+    /// Run one step in `steps::WORKDIR`, streaming stdout as `Log` events and
+    /// back-filling usage from claude's stream-json if the runner didn't supply
+    /// it. On runner failure, fail the unit and return `None`.
     async fn agent_exec(
         &mut self,
         kind: IterationKind,
         n: u32,
+        stream: LogStream,
         argv: &[String],
     ) -> Option<ExecOutput> {
         self.emit(Event::Iteration { kind, n });
         let handle = self.handle.clone().expect("agent_exec without a handle");
-        match self.runner.exec(&handle, argv).await {
-            Ok(out) => {
+        match self.runner.exec(&handle, steps::WORKDIR, argv).await {
+            Ok(mut out) => {
                 for line in &out.stdout {
-                    self.emit(Event::Log { stream: LogStream::Agent, line: line.clone() });
+                    self.emit(Event::Log { stream, line: line.clone() });
+                }
+                if out.usage.is_none() {
+                    out.usage = claude_meter::parse_usage(&out.stdout);
                 }
                 Some(out)
             }
@@ -199,8 +210,10 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     if self.check_halt() {
                         continue;
                     }
-                    let argv = vec!["oracle".into(), self.spec.task.clone()];
-                    let Some(out) = self.agent_exec(IterationKind::Review, 0, &argv).await else {
+                    let argv = steps::oracle(&self.spec, self.remaining());
+                    let Some(out) =
+                        self.agent_exec(IterationKind::Review, 0, LogStream::Agent, &argv).await
+                    else {
                         continue;
                     };
                     let test_files = out.stdout.clone();
@@ -248,7 +261,13 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     }
                     self.n_build += 1;
                     let n = self.n_build;
-                    let Some(out) = self.agent_exec(IterationKind::Build, n, &["build".into()]).await
+                    let findings = match self.prev_blockers {
+                        Some(b) if b > 0 => format!("{b} blocker(s) from the last review"),
+                        _ => "none".into(),
+                    };
+                    let argv = steps::build(&self.spec, &findings, self.remaining());
+                    let Some(out) =
+                        self.agent_exec(IterationKind::Build, n, LogStream::Agent, &argv).await
                     else {
                         continue;
                     };
@@ -265,7 +284,9 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     }
                     self.n_check += 1;
                     let n = self.n_check;
-                    let Some(out) = self.agent_exec(IterationKind::Check, n, &["check".into()]).await
+                    let argv = steps::check(&self.spec);
+                    let Some(out) =
+                        self.agent_exec(IterationKind::Check, n, LogStream::Check, &argv).await
                     else {
                         continue;
                     };
@@ -286,8 +307,9 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     }
                     self.n_review += 1;
                     let round = self.n_review;
+                    let argv = steps::review(self.remaining());
                     let Some(out) =
-                        self.agent_exec(IterationKind::Review, round, &["review".into()]).await
+                        self.agent_exec(IterationKind::Review, round, LogStream::Agent, &argv).await
                     else {
                         continue;
                     };
@@ -321,7 +343,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         continue;
                     }
                     let handle = self.handle.clone().expect("merge_check without a handle");
-                    let bundle = match self.runner.export_bundle(&handle, "agent/spike").await {
+                    let bundle = match self.runner.export_bundle(&handle, &self.spec.branch).await {
                         Ok(p) => p,
                         Err(e) => {
                             self.emit(Event::Error {
@@ -333,11 +355,12 @@ impl<R: Runner, F: Forge> Run<R, F> {
                             continue;
                         }
                     };
+                    let branch = self.spec.branch.clone();
                     self.emit(Event::Artifact {
                         kind: ArtifactKind::Branch,
-                        reference: "agent/spike".into(),
+                        reference: branch.clone(),
                     });
-                    match self.forge.trial_merge(&bundle, "agent/spike").await {
+                    match self.forge.trial_merge(&bundle, &branch).await {
                         Ok(MergeResult::Clean) => self.goto(Trigger::MergeClean, None, None),
                         Ok(MergeResult::Conflict) => {
                             self.goto(Trigger::MergeConflict, Some("base conflict".into()), None)
@@ -355,7 +378,8 @@ impl<R: Runner, F: Forge> Run<R, F> {
 
                 Phase::PrOpen => {
                     if self.pr_url.is_none() {
-                        match self.forge.open_pr("agent/spike").await {
+                        let branch = self.spec.branch.clone();
+                        match self.forge.open_pr(&branch).await {
                             Ok(url) => {
                                 self.emit(Event::Artifact {
                                     kind: ArtifactKind::Pr,
@@ -484,6 +508,11 @@ mod tests {
             task: "do a thing".into(),
             usd_cap,
             gate: GateConfig { min_review_rounds: floor },
+            repo_url: "https://github.com/x/y".into(),
+            repo_slug: "x/y".into(),
+            base_branch: "main".into(),
+            branch: "agent/u1".into(),
+            test_cmd: "npm test".into(),
         }
     }
 

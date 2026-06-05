@@ -29,6 +29,23 @@ impl LocalDockerRunner {
     }
 }
 
+/// `docker exec -w <workdir> <name> <argv...>`, failing on non-zero exit.
+async fn exec_in(name: &str, workdir: &str, argv: &[&str]) -> Result<(), RunnerError> {
+    let mut a = vec!["exec".to_string(), "-w".to_string(), workdir.to_string(), name.to_string()];
+    a.extend(argv.iter().map(|s| s.to_string()));
+    docker_ok(a).await.map(|_| ())
+}
+
+/// Accept only `https://` or `git@`/`ssh://` URLs with safe characters (the URL
+/// flows into `git clone` as an argv element; this blocks option/scheme abuse).
+fn valid_repo_url(u: &str) -> bool {
+    let scheme_ok = u.starts_with("https://") || u.starts_with("ssh://") || u.starts_with("git@");
+    scheme_ok
+        && !u.contains(char::is_whitespace)
+        && u.chars().all(|c| c.is_ascii_graphic())
+        && !u.starts_with('-')
+}
+
 /// A conservative git-branch-name allowlist: non-empty, no leading `-` (option
 /// injection), no `..` (ref traversal), only ref-safe characters.
 fn valid_git_branch(b: &str) -> bool {
@@ -95,11 +112,37 @@ impl Runner for LocalDockerRunner {
         ])
         .await?;
 
+        // Clone the project into the named volume and create the agent branch.
+        // Validate inputs that flow into git as args (no shell is used).
+        if !valid_repo_url(&spec.repo_url) {
+            return Err(RunnerError::Failed(format!("unsafe repo url: {:?}", spec.repo_url)));
+        }
+        if !valid_git_branch(&spec.base_branch) || !valid_git_branch(&spec.branch) {
+            return Err(RunnerError::Failed("unsafe branch name".into()));
+        }
+        exec_in(&name, "/work", &["git", "clone", &spec.repo_url, "repo"]).await?;
+        for (k, v) in [
+            ("core.autocrlf", "false"),
+            ("core.fileMode", "false"),
+            ("core.symlinks", "false"),
+            ("user.email", "agent@command-center.local"),
+            ("user.name", "command-center agent"),
+        ] {
+            exec_in(&name, "/work/repo", &["git", "config", k, v]).await?;
+        }
+        exec_in(&name, "/work/repo", &["git", "checkout", &spec.base_branch]).await?;
+        exec_in(&name, "/work/repo", &["git", "checkout", "-b", &spec.branch]).await?;
+
         Ok(Handle { id: name })
     }
 
-    async fn exec(&self, handle: &Handle, argv: &[String]) -> Result<ExecOutput, RunnerError> {
-        let mut args = vec!["exec".to_string(), handle.id.clone()];
+    async fn exec(
+        &self,
+        handle: &Handle,
+        workdir: &str,
+        argv: &[String],
+    ) -> Result<ExecOutput, RunnerError> {
+        let mut args = vec!["exec".to_string(), "-w".to_string(), workdir.to_string(), handle.id.clone()];
         args.extend(argv.iter().cloned());
         let (code, out, _err) = docker(args).await?;
         Ok(ExecOutput {

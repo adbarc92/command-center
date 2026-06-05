@@ -19,6 +19,12 @@ fn spec(unit_id: &str) -> UnitSpec {
         task: "integration".into(),
         usd_cap: 1.0,
         gate: GateConfig::default(),
+        // provision clones this; the public sandbox repo exists.
+        repo_url: "https://github.com/adbarc92/command-center-agent-sandbox".into(),
+        repo_slug: "adbarc92/command-center-agent-sandbox".into(),
+        base_branch: "main".into(),
+        branch: "agent/it".into(),
+        test_cmd: "node --test".into(),
     }
 }
 
@@ -36,7 +42,7 @@ async fn provision_commit_export_roundtrip() {
          git commit -q -m base; git checkout -q -b agent/it; \
          printf 'x\\ny\\n' > f.txt; git add f.txt; git commit -q -m feat; \
          git rev-parse agent/it";
-    let exec = runner.exec(&handle, &["sh".into(), "-c".into(), script.into()]).await;
+    let exec = runner.exec(&handle, "/work", &["sh".into(), "-c".into(), script.into()]).await;
     let bundle = match &exec {
         Ok(o) if o.exit_code == 0 => runner.export_bundle(&handle, "agent/it").await.ok(),
         _ => None,

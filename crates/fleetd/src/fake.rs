@@ -44,7 +44,12 @@ impl Runner for FakeRunner {
         Ok(Handle { id: "fake-container".into() })
     }
 
-    async fn exec(&self, _handle: &Handle, _argv: &[String]) -> Result<ExecOutput, RunnerError> {
+    async fn exec(
+        &self,
+        _handle: &Handle,
+        _workdir: &str,
+        _argv: &[String],
+    ) -> Result<ExecOutput, RunnerError> {
         self.scripted
             .lock()
             .unwrap()

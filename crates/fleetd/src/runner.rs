@@ -12,9 +12,19 @@ pub struct UnitSpec {
     pub tier: Tier,
     pub task: String,
     /// Hard USD ceiling for the whole unit (daemon-enforced; the in-container
-    /// `--max-budget-usd` backstop is set from the remaining amount in Phase 2).
+    /// `--max-budget-usd` backstop is set from the remaining amount).
     pub usd_cap: f64,
     pub gate: GateConfig,
+    /// Clone URL the container fetches the project from (network is open).
+    pub repo_url: String,
+    /// `owner/name` slug for `gh` operations.
+    pub repo_slug: String,
+    /// Base branch the agent branches from and the PR targets.
+    pub base_branch: String,
+    /// The agent's working branch (e.g. `agent/<unit_id>`).
+    pub branch: String,
+    /// The project's test command, e.g. `npm test` (the objective check).
+    pub test_cmd: String,
 }
 
 /// Opaque handle to a provisioned container.
@@ -54,9 +64,14 @@ pub enum RunnerError {
 #[async_trait]
 pub trait Runner: Send + Sync {
     async fn provision(&self, spec: &UnitSpec) -> Result<Handle, RunnerError>;
-    /// Run one bounded command in the container. Phase 2 streams stdout live;
-    /// Phase 1 returns the collected output.
-    async fn exec(&self, handle: &Handle, argv: &[String]) -> Result<ExecOutput, RunnerError>;
+    /// Run one bounded command in the container at `workdir`. Returns the
+    /// collected output (live streaming is a later refinement).
+    async fn exec(
+        &self,
+        handle: &Handle,
+        workdir: &str,
+        argv: &[String],
+    ) -> Result<ExecOutput, RunnerError>;
     async fn health(&self, handle: &Handle) -> Result<Liveness, RunnerError>;
     /// `git bundle` the branch and `docker cp` it to a host path (Spike 1).
     async fn export_bundle(
