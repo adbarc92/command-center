@@ -5,4 +5,5 @@
 pub mod driver;
 pub mod fake;
 pub mod forge;
+pub mod local_docker;
 pub mod runner;
