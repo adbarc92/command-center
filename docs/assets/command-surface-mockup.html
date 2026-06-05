@@ -1,0 +1,65 @@
+<h2>How literal should the RTS "command surface" be?</h2>
+<p class="subtitle">Same engine underneath (a fleet of containerized agents). This is purely how you SEE and COMMAND them. Pick the one closest to your gut — we can blend in the terminal.</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="rts-map" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:0">
+      <div style="position:relative;height:170px;background:#0d1117;border-bottom:1px solid #30363d;overflow:hidden">
+        <!-- spatial blips -->
+        <div style="position:absolute;left:18%;top:25%;width:34px;height:34px;border-radius:50%;background:#2ea043;display:flex;align-items:center;justify-content:center;font-size:11px">A1</div>
+        <div style="position:absolute;left:55%;top:18%;width:34px;height:34px;border-radius:50%;background:#d29922;display:flex;align-items:center;justify-content:center;font-size:11px">A2</div>
+        <div style="position:absolute;left:38%;top:58%;width:34px;height:34px;border-radius:50%;background:#1f6feb;display:flex;align-items:center;justify-content:center;font-size:11px">A3</div>
+        <div style="position:absolute;left:72%;top:62%;width:34px;height:34px;border-radius:50%;background:#da3633;display:flex;align-items:center;justify-content:center;font-size:11px">A4</div>
+        <!-- minimap -->
+        <div style="position:absolute;right:8px;bottom:8px;width:60px;height:42px;border:1px solid #30363d;background:#161b22"></div>
+        <!-- HUD command bar -->
+        <div style="position:absolute;left:0;right:0;bottom:0;height:30px;background:#161b22;border-top:1px solid #30363d;display:flex;align-items:center;gap:6px;padding:0 8px;font-size:10px">
+          <span style="background:#21262d;padding:2px 6px;border-radius:3px">Dispatch</span>
+          <span style="background:#21262d;padding:2px 6px;border-radius:3px">Halt</span>
+          <span style="background:#21262d;padding:2px 6px;border-radius:3px">Take over</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A · Literal RTS map</h3>
+      <p>Units are blips on a spatial canvas with a minimap + StarCraft-style HUD. Most game-like and "fun." Spatial position is decorative (agents aren't really anywhere), so it's eye-candy that can get noisy at scale.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="ops-grid" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:0">
+      <div style="height:170px;background:#0d1117;border-bottom:1px solid #30363d;display:flex;flex-direction:column">
+        <div style="height:22px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:10px;padding:0 8px;font-size:9px;color:#8b949e">
+          <span>FLEET 4 active</span><span>$2.14</span><span>12.3k tok/min</span>
+        </div>
+        <div style="flex:1;display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:8px">
+          <div style="background:#161b22;border:1px solid #30363d;border-radius:5px;padding:6px;font-size:9px">A1 · build<div style="height:4px;background:#21262d;border-radius:2px;margin-top:6px"><div style="height:4px;width:70%;background:#2ea043;border-radius:2px"></div></div></div>
+          <div style="background:#161b22;border:1px solid #d29922;border-radius:5px;padding:6px;font-size:9px">A2 · review<div style="height:4px;background:#21262d;border-radius:2px;margin-top:6px"><div style="height:4px;width:40%;background:#d29922;border-radius:2px"></div></div></div>
+          <div style="background:#161b22;border:1px solid #30363d;border-radius:5px;padding:6px;font-size:9px">A3 · build<div style="height:4px;background:#21262d;border-radius:2px;margin-top:6px"><div style="height:4px;width:85%;background:#2ea043;border-radius:2px"></div></div></div>
+          <div style="background:#161b22;border:1px solid #da3633;border-radius:5px;padding:6px;font-size:9px">A4 · stuck<div style="height:4px;background:#21262d;border-radius:2px;margin-top:6px"><div style="height:4px;width:15%;background:#da3633;border-radius:2px"></div></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B · Ops dashboard (fleet grid)</h3>
+      <p>Units are live tiles in a grid: status, progress, token/$ burn, current action. A right rail opens the selected unit's log. RTS-<em>inspired</em> (resource meters, at-a-glance command) but information-dense and scales cleanly. My lean.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="pipeline" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:0">
+      <div style="height:170px;background:#0d1117;border-bottom:1px solid #30363d;display:flex;gap:5px;padding:8px;font-size:8px">
+        <div style="flex:1;background:#161b22;border:1px solid #30363d;border-radius:4px;padding:5px">QUEUED<div style="background:#21262d;border-radius:3px;padding:4px;margin-top:5px">A5</div></div>
+        <div style="flex:1;background:#161b22;border:1px solid #30363d;border-radius:4px;padding:5px">BUILD<div style="background:#21262d;border-radius:3px;padding:4px;margin-top:5px">A1</div><div style="background:#21262d;border-radius:3px;padding:4px;margin-top:4px">A3</div></div>
+        <div style="flex:1;background:#161b22;border:1px solid #30363d;border-radius:4px;padding:5px">REVIEW<div style="background:#21262d;border-radius:3px;padding:4px;margin-top:5px">A2</div></div>
+        <div style="flex:1;background:#161b22;border:1px solid #30363d;border-radius:4px;padding:5px">PR OPEN<div style="background:#21262d;border-radius:3px;padding:4px;margin-top:5px">A0</div></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C · Pipeline lanes (Kanban)</h3>
+      <p>Units flow left→right across lifecycle lanes: Queued → Building → Reviewing → PR Open → Merged. Least "RTS," but the clearest mental model of <em>where work is</em> and what needs you. Great for the tracking pillar later.</p>
+    </div>
+  </div>
+
+</div>
