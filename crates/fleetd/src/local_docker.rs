@@ -29,6 +29,15 @@ impl LocalDockerRunner {
     }
 }
 
+/// A conservative git-branch-name allowlist: non-empty, no leading `-` (option
+/// injection), no `..` (ref traversal), only ref-safe characters.
+fn valid_git_branch(b: &str) -> bool {
+    !b.is_empty()
+        && !b.starts_with('-')
+        && !b.contains("..")
+        && b.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'))
+}
+
 /// Keep only docker-name-safe characters.
 fn sanitize(s: &str) -> String {
     s.chars()
@@ -112,13 +121,23 @@ impl Runner for LocalDockerRunner {
     }
 
     async fn export_bundle(&self, handle: &Handle, branch: &str) -> Result<PathBuf, RunnerError> {
+        // The branch flows into a container command, so validate it strictly and
+        // pass it as its own argv element (no `sh -c` interpolation) to avoid
+        // command/option injection once `branch` becomes unit-derived.
+        if !valid_git_branch(branch) {
+            return Err(RunnerError::Failed(format!("unsafe branch name: {branch:?}")));
+        }
         // Complete, self-contained bundle (Spike 1: no prerequisites).
         docker_ok(vec![
             "exec".into(),
+            "-w".into(),
+            "/work/repo".into(),
             handle.id.clone(),
-            "sh".into(),
-            "-c".into(),
-            format!("cd /work/repo && git bundle create /work/out.bundle {branch}"),
+            "git".into(),
+            "bundle".into(),
+            "create".into(),
+            "/work/out.bundle".into(),
+            branch.into(),
         ])
         .await?;
 
@@ -149,5 +168,17 @@ mod tests {
     fn names_are_sanitized_and_prefixed() {
         assert_eq!(LocalDockerRunner::container_name("a/b 1"), "cc_a_b_1");
         assert_eq!(LocalDockerRunner::volume_name("a/b 1"), "ccvol_a_b_1");
+    }
+
+    #[test]
+    fn branch_validator_rejects_injection_and_options() {
+        assert!(valid_git_branch("agent/spike"));
+        assert!(valid_git_branch("agent/unit-123.4"));
+        // command/option injection attempts must be rejected
+        assert!(!valid_git_branch("agent/x; rm -rf /"));
+        assert!(!valid_git_branch("$(whoami)"));
+        assert!(!valid_git_branch("--upload-pack=evil"));
+        assert!(!valid_git_branch("a..b"));
+        assert!(!valid_git_branch(""));
     }
 }
