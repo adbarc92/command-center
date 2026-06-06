@@ -12,7 +12,7 @@ use fleet_core::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 /// An event with its ordering metadata. `ts` is added at the server layer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EventEnvelope {
     pub unit_id: String,
     pub seq: u64,
