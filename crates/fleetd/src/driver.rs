@@ -30,6 +30,9 @@ pub struct RunCtx {
     pub start_cost: f64,
     /// True when this is a resumed run (skips the already-frozen oracle).
     pub resume: bool,
+    /// Phase the driver starts at. `Queued` for a fresh run; `Halted` when
+    /// rehydrating a restart-stranded unit so it parks until a `Resume` command.
+    pub start_phase: Phase,
     /// Fleet concurrency permits.
     pub permits: Arc<Semaphore>,
 }
@@ -38,7 +41,13 @@ impl RunCtx {
     /// A standalone context for `run_once` and tests: a fresh run with its own
     /// single permit.
     pub fn standalone() -> Self {
-        Self { start_seq: 0, start_cost: 0.0, resume: false, permits: Arc::new(Semaphore::new(1)) }
+        Self {
+            start_seq: 0,
+            start_cost: 0.0,
+            resume: false,
+            start_phase: Phase::Queued,
+            permits: Arc::new(Semaphore::new(1)),
+        }
     }
 }
 
@@ -55,7 +64,7 @@ pub async fn run<R: Runner, F: Forge>(
     Run {
         runner,
         forge,
-        phase: Phase::Queued,
+        phase: ctx.start_phase,
         seq: ctx.start_seq,
         handle: None,
         cost_usd: ctx.start_cost,
@@ -747,7 +756,13 @@ mod tests {
             FakeRunner::new(script),
             FakeForge::default(),
             s,
-            RunCtx { start_seq: 5, start_cost: 0.5, resume: true, permits: permits.clone() },
+            RunCtx {
+                start_seq: 5,
+                start_cost: 0.5,
+                resume: true,
+                start_phase: Phase::Queued,
+                permits: permits.clone(),
+            },
             crx,
             etx,
         )
