@@ -78,6 +78,7 @@ mod tests {
             base_branch: "main".into(),
             branch: "agent/u".into(),
             test_cmd: "npm test".into(),
+            oracle_frozen: false,
         }
     }
 

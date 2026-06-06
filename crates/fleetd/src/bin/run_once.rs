@@ -68,6 +68,7 @@ async fn main() {
         base_branch: base_branch.clone(),
         branch: branch.clone(),
         test_cmd,
+        oracle_frozen: false,
     };
 
     let runner = LocalDockerRunner::new(env_or("CC_IMAGE", "cc-agent:dev"));

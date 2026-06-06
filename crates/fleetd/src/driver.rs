@@ -225,6 +225,15 @@ impl<R: Runner, F: Forge> Run<R, F> {
 
     async fn drive(mut self) -> Phase {
         loop {
+            // Entry-side cleanup for paused states: stop the container (keeping the
+            // volume for resume) and free the concurrency slot before parking on a
+            // human. Idempotent — runs once per entry since handle/permit are cleared.
+            if matches!(self.phase, Phase::NeedsHuman | Phase::Halted) {
+                if let Some(h) = self.handle.take() {
+                    let _ = self.runner.teardown(&h).await;
+                }
+                self.permit = None;
+            }
             // Wall-clock backstop: an agent that loops/stalls burns time (money)
             // without tripping the per-step USD check. Cap it.
             if self.phase.is_agent_active() && self.over_wall_clock() {
@@ -239,22 +248,42 @@ impl<R: Runner, F: Forge> Run<R, F> {
             match self.phase {
                 Phase::Queued => self.goto(Trigger::Start, None, None),
 
-                Phase::Provisioning => match self.runner.provision(&self.spec).await {
-                    Ok(h) => {
-                        self.handle = Some(h);
-                        self.goto(Trigger::Provisioned, None, None);
-                    }
-                    Err(e) => {
-                        self.emit(Event::Error {
-                            scope: ErrorScope::Docker,
-                            retryable: false,
-                            detail: e.to_string(),
+                Phase::Provisioning => {
+                    // Acquire a concurrency slot before any container/cost exists.
+                    // The wait is visible (Blocked) so the cockpit doesn't show a
+                    // silent hang. Covers both fresh (Queued→) and resume (→) paths.
+                    if self.permit.is_none() {
+                        self.emit(Event::Blocked {
+                            reason: "awaiting concurrency slot".into(),
+                            cap: None,
+                            detail: String::new(),
                         });
-                        self.goto(Trigger::FatalError, Some("provision failed".into()), None);
+                        self.permit =
+                            Some(self.permits.clone().acquire_owned().await.expect("semaphore"));
                     }
-                },
+                    match self.runner.provision(&self.spec).await {
+                        Ok(h) => {
+                            self.handle = Some(h);
+                            self.goto(Trigger::Provisioned, None, None);
+                        }
+                        Err(e) => {
+                            self.emit(Event::Error {
+                                scope: ErrorScope::Docker,
+                                retryable: false,
+                                detail: e.to_string(),
+                            });
+                            self.goto(Trigger::FatalError, Some("provision failed".into()), None);
+                        }
+                    }
+                }
 
                 Phase::Spec => {
+                    // On resume the test set is already frozen in the reused volume;
+                    // don't re-run/re-charge the oracle or re-trigger approval.
+                    if self.resume && self.spec.oracle_frozen {
+                        self.goto(Trigger::OracleFrozen, Some("oracle already frozen".into()), None);
+                        continue;
+                    }
                     if self.check_halt() {
                         continue;
                     }
@@ -276,6 +305,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         self.goto(Trigger::CapBreach, Some("usd cap".into()), None);
                         continue;
                     }
+                    self.spec.oracle_frozen = true; // frozen; resume will skip Spec
                     self.goto(Trigger::OracleFrozen, None, None);
                 }
 
@@ -498,6 +528,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     if let Some(h) = self.handle.clone() {
                         let _ = self.runner.teardown(&h).await;
                     }
+                    self.permit = None; // free the concurrency slot (Phase 3 refines volume handling)
                     let result = match self.phase {
                         Phase::Done => "done",
                         Phase::NoChange => "no_change",
@@ -589,6 +620,7 @@ mod tests {
             base_branch: "main".into(),
             branch: "agent/u1".into(),
             test_cmd: "npm test".into(),
+            oracle_frozen: false,
         }
     }
 
@@ -655,6 +687,50 @@ mod tests {
             .filter(|e| matches!(e.event, Event::Iteration { kind: IterationKind::Review, n } if n >= 1))
             .count();
         assert_eq!(reviews, 3);
+    }
+
+    #[tokio::test]
+    async fn resume_skips_oracle_and_continues_cost_and_seq() {
+        // A resumed unit: the oracle is already frozen, so the script has NO
+        // oracle call — just one build/check/review cycle (floor 1 opens the gate).
+        let script = cycle(0);
+        let (ctx_tx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        drop(ctx_tx);
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let mut s = spec(Tier::T1, 100.0, 1);
+        s.oracle_frozen = true;
+
+        let final_phase = run(
+            FakeRunner::new(script),
+            FakeForge::default(),
+            s,
+            RunCtx { start_seq: 5, start_cost: 0.5, resume: true, permits: permits.clone() },
+            crx,
+            etx,
+        )
+        .await;
+
+        assert_eq!(final_phase, Phase::Done);
+        let evs = drain(&mut erx);
+        // (a) the oracle was NOT re-run on resume
+        assert!(
+            !evs.iter().any(|e| matches!(e.event, Event::OracleProposed { .. })),
+            "resume must not re-run the oracle"
+        );
+        // (b) seq continues from start_seq (first emitted event has seq > 5)
+        assert!(evs.first().unwrap().seq > 5, "seq must continue from start_seq");
+        // (c) cost continues from start_cost (a metric reflects >= 0.5)
+        let max_cost = evs
+            .iter()
+            .filter_map(|e| match e.event {
+                Event::Metric { cost_usd, .. } => Some(cost_usd),
+                _ => None,
+            })
+            .fold(0.0, f64::max);
+        assert!(max_cost >= 0.5, "cost must continue from start_cost, got {max_cost}");
+        // (d) the permit is released once the unit finishes
+        assert_eq!(permits.available_permits(), 1, "permit released at terminal");
     }
 
     #[tokio::test]

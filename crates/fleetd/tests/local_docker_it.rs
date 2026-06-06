@@ -26,6 +26,7 @@ fn spec(unit_id: &str) -> UnitSpec {
         base_branch: "main".into(),
         branch: "agent/it".into(),
         test_cmd: "node --test".into(),
+        oracle_frozen: false,
     }
 }
 

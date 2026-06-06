@@ -122,6 +122,7 @@ async fn create_mission(
         base_branch: "main".into(),
         branch: format!("agent/{unit_id}"),
         test_cmd: "node --test".into(),
+        oracle_frozen: false,
     };
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
@@ -291,6 +292,7 @@ mod tests {
             base_branch: "main".into(),
             branch: "agent/u".into(),
             test_cmd: "node --test".into(),
+        oracle_frozen: false,
         };
         // 1 oracle + 2 rounds * 3 calls = 7
         assert_eq!(demo_script(&spec).len(), 7);

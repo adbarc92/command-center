@@ -29,6 +29,9 @@ pub struct UnitSpec {
     pub branch: String,
     /// The project's test command, e.g. `npm test` (the objective check).
     pub test_cmd: String,
+    /// Set once the oracle has frozen the test set; on resume the Spec phase is
+    /// skipped so the oracle isn't re-run/re-charged.
+    pub oracle_frozen: bool,
 }
 
 /// Opaque handle to a provisioned container.
