@@ -226,16 +226,23 @@ async fn create_mission(
     // Persist the initial row.
     st.store.lock().unwrap().upsert_unit(&row_from_spec(&spec), now_ms()).ok();
 
+    // Validate the mode BEFORE registering a handle, so a bad request never
+    // leaves a driverless unit in the map.
     let runner_mode = req.mode.clone();
-    if runner_mode == "real" && std::env::var("ANTHROPIC_API_KEY").is_err() {
-        return Err((StatusCode::BAD_REQUEST, "ANTHROPIC_API_KEY not set".into()));
+    match runner_mode.as_str() {
+        "demo" => {}
+        "real" => {
+            if std::env::var("ANTHROPIC_API_KEY").is_err() {
+                return Err((StatusCode::BAD_REQUEST, "ANTHROPIC_API_KEY not set".into()));
+            }
+        }
+        other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
     }
 
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
-    let (evt_tx, evt_rx) = mpsc::unbounded_channel::<EventEnvelope>();
-    let (bcast, _) = broadcast::channel::<EventEnvelope>(1024);
-
-    spawn_forwarder(st.store.clone(), bcast.clone(), evt_rx, unit_id.clone());
+    // Register the per-unit handle atomically, then spawn its driver. A fresh
+    // unit_id is always unique, so this returns Some.
+    let (cmd_rx, evt_tx) =
+        register_unit_if_absent(&st, &unit_id).expect("freshly-allocated unit_id is unique");
 
     match runner_mode.as_str() {
         "demo" => {
@@ -256,11 +263,97 @@ async fn create_mission(
             let runner = LocalDockerRunner::new("cc-agent:dev");
             tokio::spawn(run(runner, forge, spec, fresh_ctx(&st), cmd_rx, evt_tx));
         }
-        other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
+        _ => unreachable!("mode validated above"),
     }
 
-    st.units.lock().unwrap().insert(unit_id.clone(), UnitHandle { cmd_tx, bcast });
     Ok(Json(CreateResp { unit_id }))
+}
+
+/// Atomically register a per-unit handle (command channel + event forwarder +
+/// broadcast) in the units map, returning the driver-side channels **iff** this
+/// call created it. `None` means a concurrent caller already registered the unit,
+/// so the caller must NOT spawn a second driver. The check-and-insert runs under
+/// the units-map lock, so two simultaneous Resume clicks yield exactly one driver.
+fn register_unit_if_absent(
+    st: &AppState,
+    unit_id: &str,
+) -> Option<(mpsc::UnboundedReceiver<Command>, mpsc::UnboundedSender<EventEnvelope>)> {
+    let mut units = st.units.lock().unwrap();
+    if units.contains_key(unit_id) {
+        return None;
+    }
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
+    let (evt_tx, evt_rx) = mpsc::unbounded_channel::<EventEnvelope>();
+    let (bcast, _) = broadcast::channel::<EventEnvelope>(1024);
+    spawn_forwarder(st.store.clone(), bcast.clone(), evt_rx, unit_id.to_string());
+    units.insert(unit_id.to_string(), UnitHandle { cmd_tx, bcast });
+    Some((cmd_rx, evt_tx))
+}
+
+/// Bring a store-only unit (e.g. one left `Halted` by startup reconciliation
+/// after a daemon restart) back into memory so an inbound `Resume`/`Abandon`
+/// command has a live driver. Atomic: a concurrent rehydration is a no-op.
+/// Rehydrated units run in REAL mode (`LocalDockerRunner` + `GhForge`) — demo
+/// units are throwaway and aren't meant to survive a restart.
+fn rehydrate(st: &AppState, unit_id: &str) {
+    // Only rehydrate units we actually have persisted.
+    let Some(row) = st.store.lock().unwrap().get_unit(unit_id).ok().flatten() else {
+        return;
+    };
+    // Atomic check-and-insert: if a concurrent caller won, don't spawn a 2nd driver.
+    let Some((cmd_rx, evt_tx)) = register_unit_if_absent(st, unit_id) else {
+        return;
+    };
+    let spec = spec_from_row(&row);
+    let ctx = RunCtx {
+        start_seq: row.last_seq,
+        start_cost: row.cost,
+        resume: true,
+        // Park at Halted; the inbound Resume command drives it on to Provisioning
+        // (which reuses the kept volume and skips the already-frozen oracle).
+        start_phase: Phase::Halted,
+        permits: st.permits.clone(),
+    };
+    use crate::gh_forge::GhForge;
+    use crate::local_docker::LocalDockerRunner;
+    let host_clone = std::env::temp_dir().join(format!("cc-host-{unit_id}"));
+    let forge = GhForge::new(
+        spec.repo_url.clone(),
+        spec.repo_slug.clone(),
+        spec.base_branch.clone(),
+        host_clone,
+        format!("command-center SP1: {unit_id}"),
+    );
+    let runner = LocalDockerRunner::new("cc-agent:dev");
+    tokio::spawn(run(runner, forge, spec, ctx, cmd_rx, evt_tx));
+}
+
+/// Reconstruct a `UnitSpec` from its persisted row for rehydration. NOTE: the
+/// review-gate floor isn't persisted in `units`, so resumed units default to 2
+/// rounds (conservative — never ships earlier than the original run would).
+fn spec_from_row(r: &UnitRow) -> UnitSpec {
+    UnitSpec {
+        unit_id: r.unit_id.clone(),
+        tier: parse_tier(&r.tier),
+        task: r.task.clone(),
+        usd_cap: r.usd_cap,
+        wall_clock_secs: r.wall_clock_secs,
+        gate: GateConfig { min_review_rounds: 2 },
+        repo_url: r.repo_url.clone(),
+        repo_slug: r.repo_slug.clone(),
+        base_branch: r.base_branch.clone(),
+        branch: r.branch.clone(),
+        test_cmd: r.test_cmd.clone(),
+        oracle_frozen: r.oracle_frozen,
+    }
+}
+
+fn parse_tier(s: &str) -> Tier {
+    match s {
+        "t2" => Tier::T2,
+        "t3" => Tier::T3,
+        _ => Tier::T1,
+    }
 }
 
 /// Fan each driver event into the store (persist + projection), the in-memory
@@ -379,6 +472,12 @@ async fn post_command(
     Path(id): Path<String>,
     Json(cmd): Json<Command>,
 ) -> StatusCode {
+    // If the unit isn't live in memory (e.g. restart-stranded), rehydrate it from
+    // the store first — an atomic check-and-insert, so concurrent commands still
+    // yield one driver. No-op if it's already present or absent from the store.
+    if !st.units.lock().unwrap().contains_key(&id) {
+        rehydrate(&st, &id);
+    }
     let units = st.units.lock().unwrap();
     match units.get(&id) {
         Some(h) => match h.cmd_tx.send(cmd) {
@@ -611,6 +710,28 @@ mod tests {
             Err((code, _)) => assert_eq!(code, StatusCode::TOO_MANY_REQUESTS),
             Ok(_) => panic!("expected 429 over the global cap"),
         }
+    }
+
+    #[tokio::test]
+    async fn register_unit_if_absent_yields_one_handle() {
+        // The atomic check-and-insert: a second registration for the same id finds
+        // the handle present and returns None, so only one driver is ever spawned.
+        // (Tested directly, without a Docker driver — per the rehydration design.)
+        let state = AppState::default();
+        let first = register_unit_if_absent(&state, "u1");
+        assert!(first.is_some(), "first registration creates the handle");
+        let second = register_unit_if_absent(&state, "u1");
+        assert!(second.is_none(), "second registration must not duplicate the driver");
+        assert_eq!(state.units.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rehydrate_skips_units_absent_from_the_store() {
+        // A command for a unit that was never persisted must not fabricate a handle.
+        let state = AppState::default();
+        rehydrate(&state, "ghost");
+        assert!(!state.units.lock().unwrap().contains_key("ghost"));
+        assert_eq!(state.units.lock().unwrap().len(), 0);
     }
 
     #[test]
