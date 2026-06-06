@@ -791,6 +791,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn driver_waits_for_a_concurrency_slot() {
+        // One slot, already taken: the driver must announce the wait (Blocked) and
+        // must NOT provision until the slot frees — the concurrency guarantee.
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let held = permits.clone().acquire_owned().await.unwrap();
+
+        let mut s = spec(Tier::T1, 100.0, 1);
+        s.oracle_frozen = true; // resumed unit → script has no oracle call
+        let (ctx_tx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        drop(ctx_tx);
+        let h = tokio::spawn(run(
+            FakeRunner::new(cycle(0)),
+            FakeForge::default(),
+            s,
+            RunCtx {
+                start_seq: 0,
+                start_cost: 0.0,
+                resume: true,
+                start_phase: Phase::Queued,
+                permits: permits.clone(),
+            },
+            crx,
+            etx,
+        ));
+
+        // Drain to the "awaiting concurrency slot" signal; it must not have left
+        // Provisioning (no container/cost) while the only slot is held.
+        loop {
+            let e = erx.recv().await.unwrap();
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == "awaiting concurrency slot") {
+                break;
+            }
+            assert!(
+                !matches!(e.event, Event::PhaseChanged { from: Phase::Provisioning, .. }),
+                "must not leave Provisioning before acquiring a slot"
+            );
+        }
+        assert_eq!(permits.available_permits(), 0, "the only slot is held");
+
+        // Free the slot → the driver acquires it and runs to completion.
+        drop(held);
+        assert_eq!(h.await.unwrap(), Phase::Done);
+        assert_eq!(permits.available_permits(), 1, "permit released at terminal");
+    }
+
+    #[tokio::test]
     async fn empty_diff_routes_to_no_change() {
         // oracle + build + green check, but the branch has no diff vs base.
         let script = vec![

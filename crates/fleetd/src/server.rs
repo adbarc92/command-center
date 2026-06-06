@@ -39,7 +39,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Semaphore};
 
 fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
@@ -62,16 +62,34 @@ pub struct AppState {
     next_id: Arc<AtomicU64>,
     store: Arc<Mutex<Store>>,
     docker: Arc<Mutex<(Instant, bool)>>,
+    /// Fleet-wide concurrency slots, shared by every driver (CC_MAX_CONCURRENT).
+    permits: Arc<Semaphore>,
+    /// Rolling-24h spend ceiling that admits/refuses new missions (CC_GLOBAL_USD_CAP).
+    global_cap: f64,
+}
+
+/// Default concurrency / global-cap knobs, overridable via env.
+const DEFAULT_MAX_CONCURRENT: usize = 3;
+const DEFAULT_GLOBAL_USD_CAP: f64 = 20.0;
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(default)
+}
+fn env_f64(key: &str, default: f64) -> f64 {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
 impl AppState {
     pub fn new(store: Arc<Mutex<Store>>) -> Self {
+        let max_concurrent = env_usize("CC_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
         Self {
             units: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
             store,
             // Start "stale" so the first /health does a real probe.
             docker: Arc::new(Mutex::new((Instant::now() - Duration::from_secs(60), false))),
+            permits: Arc::new(Semaphore::new(max_concurrent)),
+            global_cap: env_f64("CC_GLOBAL_USD_CAP", DEFAULT_GLOBAL_USD_CAP),
         }
     }
 }
@@ -135,6 +153,18 @@ struct CreateResp {
     unit_id: String,
 }
 
+/// A `RunCtx` for a freshly-created unit: starts at `Queued`, no prior seq/cost,
+/// sharing the fleet-wide concurrency permits.
+fn fresh_ctx(st: &AppState) -> RunCtx {
+    RunCtx {
+        start_seq: 0,
+        start_cost: 0.0,
+        resume: false,
+        start_phase: Phase::Queued,
+        permits: st.permits.clone(),
+    }
+}
+
 /// Build the initial persisted row for a fresh unit.
 fn row_from_spec(spec: &UnitSpec) -> UnitRow {
     UnitRow {
@@ -168,6 +198,14 @@ async fn create_mission(
     State(st): State<AppState>,
     Json(req): Json<CreateReq>,
 ) -> Result<Json<CreateResp>, (StatusCode, String)> {
+    // Admission-only global cap: refuse a new mission once rolling-24h spend has
+    // hit the ceiling. Read fresh each admission (low frequency; no shared atomic).
+    let since = now_ms() - 24 * 3600 * 1000;
+    let spent = st.store.lock().unwrap().spend_since(since).unwrap_or(0.0);
+    if spent >= st.global_cap {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "global daily cost cap reached".into()));
+    }
+
     let n = st.next_id.fetch_add(1, Ordering::Relaxed);
     let unit_id = format!("u{n}");
     let spec = UnitSpec {
@@ -202,7 +240,7 @@ async fn create_mission(
     match runner_mode.as_str() {
         "demo" => {
             let runner = FakeRunner::new(demo_script(&spec));
-            tokio::spawn(run(runner, FakeForge::default(), spec, RunCtx::standalone(), cmd_rx, evt_tx));
+            tokio::spawn(run(runner, FakeForge::default(), spec, fresh_ctx(&st), cmd_rx, evt_tx));
         }
         "real" => {
             use crate::gh_forge::GhForge;
@@ -216,7 +254,7 @@ async fn create_mission(
                 format!("command-center SP1: {unit_id}"),
             );
             let runner = LocalDockerRunner::new("cc-agent:dev");
-            tokio::spawn(run(runner, forge, spec, RunCtx::standalone(), cmd_rx, evt_tx));
+            tokio::spawn(run(runner, forge, spec, fresh_ctx(&st), cmd_rx, evt_tx));
         }
         other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
     }
@@ -545,6 +583,34 @@ mod tests {
         let evs = s.events_since("u1", 7).unwrap();
         assert_eq!(evs.len(), 1);
         assert!(evs[0].contains("halted"));
+    }
+
+    #[tokio::test]
+    async fn create_mission_refused_over_global_cap() {
+        // A pre-existing unit's spend is over the default $20 rolling-24h cap, so
+        // admission of a new mission is refused (429) before any unit is built.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            let mut r = building_row("spent");
+            r.cost = 999.0;
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let state = AppState::new(store);
+        let resp = create_mission(
+            State(state),
+            Json(CreateReq {
+                task: "t".into(),
+                tier: TierReq::T1,
+                mode: "demo".into(),
+                min_review_rounds: 1,
+            }),
+        )
+        .await;
+        match resp {
+            Err((code, _)) => assert_eq!(code, StatusCode::TOO_MANY_REQUESTS),
+            Ok(_) => panic!("expected 429 over the global cap"),
+        }
     }
 
     #[test]
