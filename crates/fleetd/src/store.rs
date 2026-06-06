@@ -71,6 +71,24 @@ impl Store {
         Ok(())
     }
 
+    /// Update the live projection columns of an existing unit (forwarder hot path).
+    pub fn update_unit(
+        &self,
+        unit_id: &str,
+        phase: &str,
+        cost: f64,
+        last_seq: u64,
+        terminal_reason: Option<&str>,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE units SET phase=?2, cost=?3, last_seq=?4, terminal_reason=?5, updated_ts=?6
+             WHERE unit_id=?1",
+            params![unit_id, phase, cost, last_seq, terminal_reason, now],
+        )?;
+        Ok(())
+    }
+
     pub fn append_event(&self, unit_id: &str, seq: u64, ts: i64, json: &str) -> rusqlite::Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO events(unit_id,seq,ts,json) VALUES(?1,?2,?3,?4)",
