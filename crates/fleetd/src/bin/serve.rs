@@ -5,6 +5,9 @@ use fleetd::server::{router, AppState};
 
 #[tokio::main]
 async fn main() {
+    // Load a .env from the cwd (or a parent) if present — see .env.example.
+    let _ = dotenvy::dotenv();
+
     let addr = std::env::var("CC_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".into());
     let app = router(AppState::default());
     let listener = tokio::net::TcpListener::bind(&addr)

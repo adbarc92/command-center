@@ -25,8 +25,11 @@ fn env_or(key: &str, default: &str) -> String {
 
 #[tokio::main]
 async fn main() {
+    // Load a .env from the cwd (or a parent) if present — see .env.example.
+    let _ = dotenvy::dotenv();
+
     if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        eprintln!("error: ANTHROPIC_API_KEY is not set (the container needs it).");
+        eprintln!("error: ANTHROPIC_API_KEY is not set (copy .env.example to .env, or export it).");
         std::process::exit(2);
     }
 
