@@ -18,7 +18,8 @@
 
 use crate::driver::{run, EventEnvelope, RunCtx};
 use crate::fake::{FakeForge, FakeRunner};
-use crate::runner::{ExecOutput, UnitSpec};
+use crate::reconcile::{reconcile, Action};
+use crate::runner::{ExecOutput, Runner, UnitSpec};
 use crate::store::{Store, UnitRow};
 use axum::{
     extract::{
@@ -438,6 +439,56 @@ async fn docker_ok(st: &AppState) -> bool {
     ok
 }
 
+fn parse_phase(s: &str) -> Phase {
+    serde_json::from_str::<Phase>(&format!("\"{s}\"")).unwrap_or(Phase::Queued)
+}
+
+/// Reap orphan containers and mark their units `Halted` with a coherent event,
+/// after a daemon restart. Run BEFORE the server accepts connections (no live
+/// forwarders exist yet, so the synthetic event is written directly to the store).
+pub async fn reconcile_on_startup<R: Runner>(state: &AppState, runner: &R) {
+    let rows = state.store.lock().unwrap().list_units().unwrap_or_default();
+    let nonterminal: Vec<String> = rows
+        .iter()
+        .filter(|r| !matches!(r.phase.as_str(), "done" | "no_change" | "failed"))
+        .map(|r| r.unit_id.clone())
+        .collect();
+    let running = runner.list_unit_containers().await.unwrap_or_default();
+    for action in reconcile(&nonterminal, &running) {
+        match action {
+            Action::HaltWithContainer(id) => {
+                let _ = runner.reap_unit(&id).await;
+                halt_in_store(state, &id);
+            }
+            Action::HaltNoContainer(id) => halt_in_store(state, &id),
+            Action::ReapStray(id) => {
+                let _ = runner.reap_unit(&id).await;
+            }
+        }
+    }
+}
+
+/// Append a synthetic `Halted` event + update the row (one store write, no await).
+fn halt_in_store(state: &AppState, id: &str) {
+    let s = state.store.lock().unwrap();
+    if let Ok(Some(row)) = s.get_unit(id) {
+        let seq = row.last_seq + 1;
+        let env = EventEnvelope {
+            unit_id: id.to_string(),
+            seq,
+            event: Event::PhaseChanged {
+                from: parse_phase(&row.phase),
+                to: Phase::Halted,
+                reason: Some("daemon restarted".into()),
+                cmd_id: None,
+            },
+        };
+        let ts = now_ms();
+        let _ = s.append_event(id, seq, ts, &serde_json::to_string(&env).unwrap_or_default());
+        let _ = s.update_unit(id, "halted", row.cost, seq, Some("daemon restarted"), ts);
+    }
+}
+
 /// A FakeRunner demo script: oracle, then one build/check/review cycle per review
 /// round with blockers trending to zero so the gate opens on the floor.
 fn demo_script(spec: &UnitSpec) -> Vec<ExecOutput> {
@@ -454,6 +505,47 @@ fn demo_script(spec: &UnitSpec) -> Vec<ExecOutput> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn building_row(id: &str) -> UnitRow {
+        UnitRow {
+            unit_id: id.into(),
+            tier: "t1".into(),
+            task: "t".into(),
+            repo_url: "u".into(),
+            repo_slug: "s".into(),
+            base_branch: "main".into(),
+            branch: format!("agent/{id}"),
+            test_cmd: "node --test".into(),
+            usd_cap: 1.0,
+            wall_clock_secs: 600,
+            phase: "building".into(),
+            cost: 0.2,
+            last_seq: 7,
+            oracle_frozen: true,
+            terminal_reason: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn reconcile_halts_stranded_unit_with_coherent_event() {
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        store.lock().unwrap().upsert_unit(&building_row("u1"), 1).unwrap();
+        let state = AppState::new(store.clone());
+        // FakeRunner reports no running containers → unit is a stranded orphan.
+        let runner = FakeRunner::new(vec![]);
+
+        reconcile_on_startup(&state, &runner).await;
+
+        let s = store.lock().unwrap();
+        let row = s.get_unit("u1").unwrap().unwrap();
+        assert_eq!(row.phase, "halted", "stranded unit marked halted");
+        assert_eq!(row.last_seq, 8, "synthetic event bumped last_seq");
+        assert_eq!(row.terminal_reason.as_deref(), Some("daemon restarted"));
+        // The synthetic phase_changed event is in the log (coherent with the row).
+        let evs = s.events_since("u1", 7).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(evs[0].contains("halted"));
+    }
 
     #[test]
     fn demo_script_has_oracle_plus_three_calls_per_round() {

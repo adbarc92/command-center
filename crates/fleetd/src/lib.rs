@@ -8,6 +8,7 @@ pub mod fake;
 pub mod forge;
 pub mod gh_forge;
 pub mod local_docker;
+pub mod reconcile;
 pub mod runner;
 pub mod server;
 pub mod steps;

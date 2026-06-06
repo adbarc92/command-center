@@ -243,6 +243,22 @@ impl Runner for LocalDockerRunner {
         Ok(host_path)
     }
 
+    async fn list_unit_containers(&self) -> Result<Vec<String>, RunnerError> {
+        let (code, out, _) = docker(vec![
+            "ps".into(),
+            "-a".into(),
+            "--filter".into(),
+            "label=cc.unit_id".into(),
+            "--format".into(),
+            "{{.Label \"cc.unit_id\"}}".into(),
+        ])
+        .await?;
+        if code != 0 {
+            return Ok(vec![]);
+        }
+        Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+    }
+
     async fn teardown(&self, handle: &Handle) -> Result<(), RunnerError> {
         // Remove the container; KEEP the volume (for resume/forensics).
         let _ = docker(vec!["rm".into(), "-f".into(), handle.id.clone()]).await;
@@ -254,6 +270,12 @@ impl Runner for LocalDockerRunner {
         let _ = docker(vec!["rm".into(), "-f".into(), handle.id.clone()]).await;
         let vol = handle.id.replacen("cc_", "ccvol_", 1);
         let _ = docker(vec!["volume".into(), "rm".into(), vol]).await;
+        Ok(())
+    }
+
+    async fn reap_unit(&self, unit_id: &str) -> Result<(), RunnerError> {
+        // Reap by unit-id, keeping the volume (resume after restart).
+        let _ = docker(vec!["rm".into(), "-f".into(), Self::container_name(unit_id)]).await;
         Ok(())
     }
 }

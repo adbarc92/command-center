@@ -17,6 +17,8 @@ pub struct FakeRunner {
     /// Shared call counters (clone before moving the runner into `run`).
     pub teardowns: Arc<AtomicUsize>,
     pub discards: Arc<AtomicUsize>,
+    /// Unit-ids returned by `list_unit_containers` (for reconciliation tests).
+    unit_containers: Vec<String>,
 }
 
 impl FakeRunner {
@@ -28,6 +30,7 @@ impl FakeRunner {
             has_diff: true,
             teardowns: Arc::new(AtomicUsize::new(0)),
             discards: Arc::new(AtomicUsize::new(0)),
+            unit_containers: Vec::new(),
         }
     }
 
@@ -75,6 +78,10 @@ impl Runner for FakeRunner {
         Ok(self.health)
     }
 
+    async fn list_unit_containers(&self) -> Result<Vec<String>, RunnerError> {
+        Ok(self.unit_containers.clone())
+    }
+
     async fn commit_all(&self, _handle: &Handle, _message: &str) -> Result<bool, RunnerError> {
         Ok(true)
     }
@@ -94,6 +101,11 @@ impl Runner for FakeRunner {
 
     async fn discard(&self, _handle: &Handle) -> Result<(), RunnerError> {
         self.discards.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn reap_unit(&self, _unit_id: &str) -> Result<(), RunnerError> {
+        self.teardowns.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }

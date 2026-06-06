@@ -98,8 +98,14 @@ pub trait Runner: Send + Sync {
         handle: &Handle,
         branch: &str,
     ) -> Result<PathBuf, RunnerError>;
+    /// Unit-ids of currently-running containers labeled `cc.unit_id` (for startup
+    /// reconciliation of orphans after a daemon restart).
+    async fn list_unit_containers(&self) -> Result<Vec<String>, RunnerError>;
     /// Remove the container but **keep the named volume** (for resume/forensics).
     async fn teardown(&self, handle: &Handle) -> Result<(), RunnerError>;
     /// Remove the container **and** its named volume (terminal success / abandon).
     async fn discard(&self, handle: &Handle) -> Result<(), RunnerError>;
+    /// Reap an orphan container by unit-id, keeping the volume (startup
+    /// reconciliation; the runner owns the unit-id → container-name mapping).
+    async fn reap_unit(&self, unit_id: &str) -> Result<(), RunnerError>;
 }
