@@ -12,6 +12,10 @@ RUN apt-get update \
 # Claude Code CLI. Pinned loosely for dev; production pins an exact version.
 RUN npm install -g @anthropic-ai/claude-code
 
+# Run as the non-root `node` user: claude --dangerously-skip-permissions refuses
+# to run as root. The named volume at /work inherits this ownership on first use.
+RUN mkdir -p /work && chown -R node:node /work
+USER node
 WORKDIR /work
 
 # Long-lived no-op so the daemon can `docker exec` discrete steps into it.

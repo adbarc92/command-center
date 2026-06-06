@@ -12,6 +12,7 @@ use std::sync::Mutex;
 pub struct FakeRunner {
     scripted: Mutex<VecDeque<ExecOutput>>,
     health: Liveness,
+    has_diff: bool,
 }
 
 impl FakeRunner {
@@ -20,7 +21,14 @@ impl FakeRunner {
         Self {
             scripted: Mutex::new(script.into()),
             health: Liveness::Alive,
+            has_diff: true,
         }
+    }
+
+    /// Make `has_diff` report no changes (to exercise the NO_CHANGE path).
+    pub fn empty_diff(mut self) -> Self {
+        self.has_diff = false;
+        self
     }
 
     /// Convenience: an exec output with exit code 0 and a given cost.
@@ -59,6 +67,14 @@ impl Runner for FakeRunner {
 
     async fn health(&self, _handle: &Handle) -> Result<Liveness, RunnerError> {
         Ok(self.health)
+    }
+
+    async fn commit_all(&self, _handle: &Handle, _message: &str) -> Result<bool, RunnerError> {
+        Ok(true)
+    }
+
+    async fn has_diff(&self, _h: &Handle, _base: &str, _branch: &str) -> Result<bool, RunnerError> {
+        Ok(self.has_diff)
     }
 
     async fn export_bundle(&self, _handle: &Handle, _branch: &str) -> Result<PathBuf, RunnerError> {

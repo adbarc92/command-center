@@ -73,6 +73,18 @@ pub trait Runner: Send + Sync {
         argv: &[String],
     ) -> Result<ExecOutput, RunnerError>;
     async fn health(&self, handle: &Handle) -> Result<Liveness, RunnerError>;
+    /// Stage and commit all working-tree changes on the agent branch. Returns
+    /// true if a commit was actually created (i.e. there were changes). The
+    /// daemon does this — agents (e.g. `claude`) edit files but don't commit.
+    async fn commit_all(&self, handle: &Handle, message: &str) -> Result<bool, RunnerError>;
+    /// Whether `branch` has a non-empty diff against `base` (used to route a
+    /// no-op task to `NO_CHANGE` instead of opening an empty PR).
+    async fn has_diff(
+        &self,
+        handle: &Handle,
+        base: &str,
+        branch: &str,
+    ) -> Result<bool, RunnerError>;
     /// `git bundle` the branch and `docker cp` it to a host path (Spike 1).
     async fn export_bundle(
         &self,

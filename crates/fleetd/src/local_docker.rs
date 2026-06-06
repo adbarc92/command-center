@@ -163,6 +163,43 @@ impl Runner for LocalDockerRunner {
         Ok(if code == 0 && out.trim() == "true" { Liveness::Alive } else { Liveness::Stalled })
     }
 
+    async fn commit_all(&self, handle: &Handle, message: &str) -> Result<bool, RunnerError> {
+        exec_in(&handle.id, "/work/repo", &["git", "add", "-A"]).await?;
+        // `git commit` exits non-zero when there is nothing to commit; that's a
+        // "no changes this round", not an error.
+        let (code, _, _) = docker(vec![
+            "exec".into(),
+            "-w".into(),
+            "/work/repo".into(),
+            handle.id.clone(),
+            "git".into(),
+            "commit".into(),
+            "-m".into(),
+            message.to_string(),
+        ])
+        .await?;
+        Ok(code == 0)
+    }
+
+    async fn has_diff(&self, handle: &Handle, base: &str, branch: &str) -> Result<bool, RunnerError> {
+        if !valid_git_branch(base) || !valid_git_branch(branch) {
+            return Err(RunnerError::Failed("unsafe ref name".into()));
+        }
+        // `git diff --quiet base..branch`: exit 0 = identical, 1 = differs.
+        let (code, _, _) = docker(vec![
+            "exec".into(),
+            "-w".into(),
+            "/work/repo".into(),
+            handle.id.clone(),
+            "git".into(),
+            "diff".into(),
+            "--quiet".into(),
+            format!("{base}..{branch}"),
+        ])
+        .await?;
+        Ok(code != 0)
+    }
+
     async fn export_bundle(&self, handle: &Handle, branch: &str) -> Result<PathBuf, RunnerError> {
         // The branch flows into a container command, so validate it strictly and
         // pass it as its own argv element (no `sh -c` interpolation) to avoid

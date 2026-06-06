@@ -275,6 +275,16 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         self.goto(Trigger::CapBreach, Some("usd cap".into()), None);
                         continue;
                     }
+                    // The daemon commits the agent's work (agents edit but don't commit),
+                    // so the branch carries the change into the bundle/PR.
+                    let handle = self.handle.clone().expect("commit without a handle");
+                    if let Err(e) = self.runner.commit_all(&handle, &format!("wip: build {n}")).await {
+                        self.emit(Event::Error {
+                            scope: ErrorScope::System,
+                            retryable: false,
+                            detail: format!("wip commit: {e}"),
+                        });
+                    }
                     self.goto(Trigger::BuildFinished, None, None);
                 }
 
@@ -294,10 +304,27 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         self.goto(Trigger::CapBreach, Some("usd cap".into()), None);
                         continue;
                     }
-                    if out.exit_code == 0 {
-                        self.goto(Trigger::ChecksPassed, None, None);
-                    } else {
+                    if out.exit_code != 0 {
                         self.goto(Trigger::ChecksFailed, Some("checks red".into()), None);
+                        continue;
+                    }
+                    // Green checks: route a no-op (empty diff vs base) to NO_CHANGE
+                    // rather than opening an empty PR.
+                    let handle = self.handle.clone().expect("diff without a handle");
+                    let base = self.spec.base_branch.clone();
+                    let branch = self.spec.branch.clone();
+                    match self.runner.has_diff(&handle, &base, &branch).await {
+                        Ok(false) => self.goto(Trigger::EmptyDiff, Some("no changes vs base".into()), None),
+                        Ok(true) => self.goto(Trigger::ChecksPassed, None, None),
+                        Err(e) => {
+                            // On a diff-check error, proceed rather than stall.
+                            self.emit(Event::Error {
+                                scope: ErrorScope::System,
+                                retryable: true,
+                                detail: format!("diff check: {e}"),
+                            });
+                            self.goto(Trigger::ChecksPassed, None, None);
+                        }
                     }
                 }
 
@@ -578,6 +605,28 @@ mod tests {
             .filter(|e| matches!(e.event, Event::Iteration { kind: IterationKind::Review, n } if n >= 1))
             .count();
         assert_eq!(reviews, 3);
+    }
+
+    #[tokio::test]
+    async fn empty_diff_routes_to_no_change() {
+        // oracle + build + green check, but the branch has no diff vs base.
+        let script = vec![
+            FakeRunner::ok(0.01, &["test_a.rs"]), // oracle
+            FakeRunner::ok(0.01, &["built"]),     // build
+            FakeRunner::ok(0.01, &["checked"]),   // check passes
+        ];
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, _erx) = mpsc::unbounded_channel();
+        drop(ctx);
+        let final_phase = run(
+            FakeRunner::new(script).empty_diff(),
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 3),
+            crx,
+            etx,
+        )
+        .await;
+        assert_eq!(final_phase, Phase::NoChange);
     }
 
     #[tokio::test]
