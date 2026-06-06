@@ -1,0 +1,134 @@
+/* ── FLEET COMMAND — tactical command-center HUD ───────────────────────────
+   Deep blue-black, phosphor-cyan primary, amber/red status. Oxanium display +
+   IBM Plex Mono data. Scanline + grid atmosphere. */
+
+:root {
+  --bg: #060a0f;
+  --bg-grid: #0a121a;
+  --panel: #0b131c;
+  --panel-2: #0f1924;
+  --elev: #122231;
+  --line: #16273500;
+  --line-1: #1a2c3b;
+  --line-2: #244055;
+  --line-hot: #2f5d77;
+
+  --text: #b9ccd9;
+  --text-dim: #6f8a9e;
+  --text-faint: #445d6f;
+
+  --cyan: #2fe3d6;
+  --cyan-dim: #1aa79e;
+  --cyan-glow: rgba(47, 227, 214, 0.35);
+  --amber: #f0b429;
+  --green: #35d07f;
+  --blue: #4aa8ff;
+  --red: #ff5d6c;
+  --violet: #b08cff;
+
+  --font-display: 'Oxanium', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
+
+  color-scheme: dark;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(1200px 700px at 80% -10%, rgba(47, 227, 214, 0.06), transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, rgba(74, 168, 255, 0.05), transparent 60%),
+    linear-gradient(var(--bg-grid) 1px, transparent 1px) 0 0 / 100% 34px,
+    var(--bg);
+  background-attachment: fixed;
+  overflow: hidden;
+}
+
+/* faint scanline shimmer over everything */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.015) 0,
+    rgba(255, 255, 255, 0.015) 1px,
+    transparent 2px,
+    transparent 3px
+  );
+  z-index: 9999;
+  mix-blend-mode: overlay;
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+::selection {
+  background: var(--cyan-glow);
+  color: #021;
+}
+
+/* thin tactical scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 0;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+.disp {
+  font-family: var(--font-display);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes blip {
+  from {
+    transform: translateY(3px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes sweep {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}

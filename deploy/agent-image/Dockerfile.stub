@@ -1,0 +1,8 @@
+# A stub agent image for $0 driver validation: identical to cc-agent:dev but with
+# `claude` replaced by a deterministic shim (deploy/agent-image/claude-stub.sh).
+# Build:  docker build -f deploy/agent-image/Dockerfile.stub -t cc-agent:stub deploy/agent-image
+FROM cc-agent:dev
+USER root
+COPY claude-stub.sh /usr/local/bin/claude
+RUN sed -i 's/\r$//' /usr/local/bin/claude && chmod +x /usr/local/bin/claude
+USER node

@@ -1,0 +1,6 @@
+
+/spikes/artifacts/
+/target/
+
+# local secrets
+.env
