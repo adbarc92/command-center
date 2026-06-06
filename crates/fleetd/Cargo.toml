@@ -13,3 +13,4 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 dotenvy = { workspace = true }
+rusqlite = { workspace = true }
