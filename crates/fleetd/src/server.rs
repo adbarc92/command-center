@@ -330,7 +330,9 @@ fn rehydrate(st: &AppState, unit_id: &str) {
 
 /// Reconstruct a `UnitSpec` from its persisted row for rehydration. NOTE: the
 /// review-gate floor isn't persisted in `units`, so resumed units default to 2
-/// rounds (conservative — never ships earlier than the original run would).
+/// rounds. A unit originally launched with a higher floor could therefore open
+/// its gate a round earlier after a restart-resume; persisting the floor is a
+/// follow-up.
 fn spec_from_row(r: &UnitRow) -> UnitSpec {
     UnitSpec {
         unit_id: r.unit_id.clone(),
@@ -712,17 +714,21 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn register_unit_if_absent_yields_one_handle() {
-        // The atomic check-and-insert: a second registration for the same id finds
-        // the handle present and returns None, so only one driver is ever spawned.
-        // (Tested directly, without a Docker driver — per the rehydration design.)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn register_unit_if_absent_is_atomic_under_races() {
+        // Two registrations racing on the SAME id must yield exactly one handle:
+        // the check-and-insert is one critical section under the map mutex, so a
+        // concurrent caller sees the inserted handle and gets None. This is the
+        // load-bearing guarantee behind "two simultaneous Resume clicks → one
+        // driver" (tested without a Docker driver — per the rehydration design).
         let state = AppState::default();
-        let first = register_unit_if_absent(&state, "u1");
-        assert!(first.is_some(), "first registration creates the handle");
-        let second = register_unit_if_absent(&state, "u1");
-        assert!(second.is_none(), "second registration must not duplicate the driver");
-        assert_eq!(state.units.lock().unwrap().len(), 1);
+        let a = state.clone();
+        let b = state.clone();
+        let h1 = tokio::spawn(async move { register_unit_if_absent(&a, "u1").is_some() });
+        let h2 = tokio::spawn(async move { register_unit_if_absent(&b, "u1").is_some() });
+        let won = [h1.await.unwrap(), h2.await.unwrap()];
+        assert_eq!(won.iter().filter(|&&w| w).count(), 1, "exactly one registration wins");
+        assert_eq!(state.units.lock().unwrap().len(), 1, "no duplicate handle");
     }
 
     #[tokio::test]
