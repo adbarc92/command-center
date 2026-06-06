@@ -40,6 +40,7 @@ pub async fn run<R: Runner, F: Forge>(
         n_review: 0,
         prev_blockers: None,
         pr_url: None,
+        started: std::time::Instant::now(),
         spec,
         commands,
         events,
@@ -63,6 +64,7 @@ struct Run<R: Runner, F: Forge> {
     n_review: u32,
     prev_blockers: Option<u32>,
     pr_url: Option<String>,
+    started: std::time::Instant,
 }
 
 /// Max mergeability polls before treating the PR as unverifiable.
@@ -152,6 +154,11 @@ impl<R: Runner, F: Forge> Run<R, F> {
         (self.spec.usd_cap - self.cost_usd).max(0.0)
     }
 
+    /// Whether the wall-clock ceiling has been exceeded (0 = disabled).
+    fn over_wall_clock(&self) -> bool {
+        self.spec.wall_clock_secs > 0 && self.started.elapsed().as_secs() > self.spec.wall_clock_secs
+    }
+
     /// Run one step in `steps::WORKDIR`, streaming stdout as `Log` events and
     /// back-filling usage from claude's stream-json if the runner didn't supply
     /// it. On runner failure, fail the unit and return `None`.
@@ -188,6 +195,17 @@ impl<R: Runner, F: Forge> Run<R, F> {
 
     async fn drive(mut self) -> Phase {
         loop {
+            // Wall-clock backstop: an agent that loops/stalls burns time (money)
+            // without tripping the per-step USD check. Cap it.
+            if self.phase.is_agent_active() && self.over_wall_clock() {
+                self.emit(Event::Blocked {
+                    reason: "wall-clock cap".into(),
+                    cap: Some("wall_clock".into()),
+                    detail: format!("exceeded {}s", self.spec.wall_clock_secs),
+                });
+                self.goto(Trigger::CapBreach, Some("wall-clock cap".into()), None);
+                continue;
+            }
             match self.phase {
                 Phase::Queued => self.goto(Trigger::Start, None, None),
 
@@ -534,6 +552,7 @@ mod tests {
             tier,
             task: "do a thing".into(),
             usd_cap,
+            wall_clock_secs: 0,
             gate: GateConfig { min_review_rounds: floor },
             repo_url: "https://github.com/x/y".into(),
             repo_slug: "x/y".into(),

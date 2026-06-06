@@ -14,6 +14,10 @@ pub struct UnitSpec {
     /// Hard USD ceiling for the whole unit (daemon-enforced; the in-container
     /// `--max-budget-usd` backstop is set from the remaining amount).
     pub usd_cap: f64,
+    /// Wall-clock ceiling in seconds (0 = disabled). A backstop against an agent
+    /// that loops/stalls and burns time (hence money) without tripping the USD
+    /// cap between steps.
+    pub wall_clock_secs: u64,
     pub gate: GateConfig,
     /// Clone URL the container fetches the project from (network is open).
     pub repo_url: String,

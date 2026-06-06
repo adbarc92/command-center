@@ -31,6 +31,7 @@ async fn full_pipeline_opens_a_real_mergeable_pr() {
         tier: Tier::T1,
         task: "stub".into(),
         usd_cap: 1.0,
+        wall_clock_secs: 0,
         gate: GateConfig::default(),
         repo_url: URL.into(),
         repo_slug: SLUG.into(),

@@ -50,7 +50,9 @@ async fn main() {
     let repo_slug = env_or("CC_REPO_SLUG", "adbarc92/command-center-agent-sandbox");
     let base_branch = env_or("CC_BASE_BRANCH", "main");
     let test_cmd = env_or("CC_TEST_CMD", "node --test");
-    let usd_cap: f64 = env_or("CC_USD_CAP", "5.0").parse().unwrap_or(5.0);
+    // Conservative defaults for the first live runs.
+    let usd_cap: f64 = env_or("CC_USD_CAP", "3.0").parse().unwrap_or(3.0);
+    let wall_clock_secs: u64 = env_or("CC_WALL_SECS", "1800").parse().unwrap_or(1800);
     // First runs default to a single review round to keep cost down.
     let min_review_rounds: u32 = env_or("CC_MIN_ROUNDS", "1").parse().unwrap_or(1);
 
@@ -59,6 +61,7 @@ async fn main() {
         tier: Tier::T1, // autonomous for the first live run
         task,
         usd_cap,
+        wall_clock_secs,
         gate: GateConfig { min_review_rounds },
         repo_url: repo_url.clone(),
         repo_slug: repo_slug.clone(),

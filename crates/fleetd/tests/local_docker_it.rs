@@ -18,6 +18,7 @@ fn spec(unit_id: &str) -> UnitSpec {
         tier: Tier::T1,
         task: "integration".into(),
         usd_cap: 1.0,
+        wall_clock_secs: 0,
         gate: GateConfig::default(),
         // provision clones this; the public sandbox repo exists.
         repo_url: "https://github.com/adbarc92/command-center-agent-sandbox".into(),

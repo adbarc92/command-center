@@ -71,6 +71,7 @@ mod tests {
             tier: Tier::T1,
             task: "add sum(a,b)".into(),
             usd_cap: 5.0,
+            wall_clock_secs: 0,
             gate: GateConfig::default(),
             repo_url: "https://github.com/x/y".into(),
             repo_slug: "x/y".into(),
