@@ -12,7 +12,7 @@
 //!   CC_REPO_URL, CC_REPO_SLUG, CC_BASE_BRANCH, CC_TEST_CMD, CC_USD_CAP, CC_MIN_ROUNDS
 
 use fleet_core::{Event, GateConfig, Tier};
-use fleetd::driver::{run, EventEnvelope};
+use fleetd::driver::{run, EventEnvelope, RunCtx};
 use fleetd::gh_forge::GhForge;
 use fleetd::local_docker::LocalDockerRunner;
 use fleetd::runner::UnitSpec;
@@ -85,7 +85,7 @@ async fn main() {
     drop(cmd_tx); // T1 run: no interactive commands
 
     println!("== run-once: unit {unit_id} on {branch} (cap ${usd_cap}) ==");
-    let driver = tokio::spawn(run(runner, forge, spec, cmd_rx, evt_tx));
+    let driver = tokio::spawn(run(runner, forge, spec, RunCtx::standalone(), cmd_rx, evt_tx));
 
     while let Some(env) = evt_rx.recv().await {
         print_event(&env);

@@ -8,7 +8,7 @@
 //!   POST /units/:id/commands      -> 202               (Command JSON body)
 //!   GET  /units/:id/stream        -> WebSocket         (snapshot then live)
 
-use crate::driver::{run, EventEnvelope};
+use crate::driver::{run, EventEnvelope, RunCtx};
 use crate::fake::{FakeForge, FakeRunner};
 use crate::runner::{ExecOutput, UnitSpec};
 use axum::{
@@ -150,7 +150,7 @@ async fn create_mission(
     match req.mode.as_str() {
         "demo" => {
             let runner = FakeRunner::new(demo_script(&spec));
-            tokio::spawn(run(runner, FakeForge::default(), spec, cmd_rx, evt_tx));
+            tokio::spawn(run(runner, FakeForge::default(), spec, RunCtx::standalone(), cmd_rx, evt_tx));
         }
         "real" => {
             // Real Docker + GitHub run (requires ANTHROPIC_API_KEY + the image).
@@ -168,7 +168,7 @@ async fn create_mission(
                 format!("command-center SP1: {unit_id}"),
             );
             let runner = LocalDockerRunner::new("cc-agent:dev");
-            tokio::spawn(run(runner, forge, spec, cmd_rx, evt_tx));
+            tokio::spawn(run(runner, forge, spec, RunCtx::standalone(), cmd_rx, evt_tx));
         }
         other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
     }

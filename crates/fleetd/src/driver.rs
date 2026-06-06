@@ -9,7 +9,9 @@ use fleet_core::{
     gate_met, transition, ArtifactKind, Command, ErrorScope, Event, IterationKind, LogStream,
     Phase, ReviewSnapshot, Trigger,
 };
+use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// An event with its ordering metadata. `ts` is added at the server layer.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -19,12 +21,34 @@ pub struct EventEnvelope {
     pub event: Event,
 }
 
+/// Per-run dependencies, kept in one struct to avoid signature sprawl across the
+/// driver's many call sites.
+pub struct RunCtx {
+    /// Seq to continue from (= units.last_seq on resume, else 0).
+    pub start_seq: u64,
+    /// Cost already spent by prior runs of this unit (continues the budget).
+    pub start_cost: f64,
+    /// True when this is a resumed run (skips the already-frozen oracle).
+    pub resume: bool,
+    /// Fleet concurrency permits.
+    pub permits: Arc<Semaphore>,
+}
+
+impl RunCtx {
+    /// A standalone context for `run_once` and tests: a fresh run with its own
+    /// single permit.
+    pub fn standalone() -> Self {
+        Self { start_seq: 0, start_cost: 0.0, resume: false, permits: Arc::new(Semaphore::new(1)) }
+    }
+}
+
 /// Drive a unit to a terminal phase, returning it. `commands` carries inbound
 /// control; `events` receives the outbound stream.
 pub async fn run<R: Runner, F: Forge>(
     runner: R,
     forge: F,
     spec: UnitSpec,
+    ctx: RunCtx,
     commands: UnboundedReceiver<Command>,
     events: UnboundedSender<EventEnvelope>,
 ) -> Phase {
@@ -32,15 +56,18 @@ pub async fn run<R: Runner, F: Forge>(
         runner,
         forge,
         phase: Phase::Queued,
-        seq: 0,
+        seq: ctx.start_seq,
         handle: None,
-        cost_usd: 0.0,
+        cost_usd: ctx.start_cost,
         n_build: 0,
         n_check: 0,
         n_review: 0,
         prev_blockers: None,
         pr_url: None,
         started: std::time::Instant::now(),
+        permits: ctx.permits,
+        permit: None,
+        resume: ctx.resume,
         spec,
         commands,
         events,
@@ -65,6 +92,9 @@ struct Run<R: Runner, F: Forge> {
     prev_blockers: Option<u32>,
     pr_url: Option<String>,
     started: std::time::Instant,
+    permits: Arc<Semaphore>,
+    permit: Option<OwnedSemaphorePermit>,
+    resume: bool,
 }
 
 /// Max mergeability polls before treating the PR as unverifiable.
@@ -605,6 +635,7 @@ mod tests {
             FakeRunner::new(script),
             FakeForge::default(),
             spec(Tier::T1, 100.0, 3),
+            RunCtx::standalone(),
             crx,
             etx,
         )
@@ -641,6 +672,7 @@ mod tests {
             FakeRunner::new(script).empty_diff(),
             FakeForge::default(),
             spec(Tier::T1, 100.0, 3),
+            RunCtx::standalone(),
             crx,
             etx,
         )
@@ -660,6 +692,7 @@ mod tests {
             FakeRunner::new(script),
             FakeForge::default(),
             spec(Tier::T2, 100.0, 1),
+            RunCtx::standalone(),
             crx,
             etx,
         ));
@@ -696,6 +729,7 @@ mod tests {
             FakeRunner::new(script),
             FakeForge::default(),
             spec(Tier::T1, 0.5, 3),
+            RunCtx::standalone(),
             crx,
             etx,
         ));
@@ -726,6 +760,7 @@ mod tests {
             FakeRunner::new(script),
             FakeForge::default(),
             spec(Tier::T1, 100.0, 3),
+            RunCtx::standalone(),
             crx,
             etx,
         ));
