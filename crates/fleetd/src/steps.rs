@@ -12,8 +12,14 @@ use crate::runner::UnitSpec;
 /// All agent/check steps run in the cloned repo inside the volume.
 pub const WORKDIR: &str = "/work/repo";
 
-fn claude_argv(prompt: String, remaining_usd: f64) -> Vec<String> {
-    vec![
+fn claude_argv(prompt: String, remaining_usd: f64, wall_secs: u64) -> Vec<String> {
+    let mut v = Vec::new();
+    // In-container wall-clock bound (daemon-independent): prefix `timeout <secs>`.
+    if wall_secs > 0 {
+        v.push("timeout".into());
+        v.push(wall_secs.to_string());
+    }
+    v.extend([
         "claude".into(),
         "-p".into(),
         prompt,
@@ -24,7 +30,8 @@ fn claude_argv(prompt: String, remaining_usd: f64) -> Vec<String> {
         // Daemon-independent dollar backstop (Spike 2).
         "--max-budget-usd".into(),
         format!("{remaining_usd:.4}"),
-    ]
+    ]);
+    v
 }
 
 pub fn oracle(spec: &UnitSpec, remaining_usd: f64) -> Vec<String> {
@@ -34,7 +41,7 @@ pub fn oracle(spec: &UnitSpec, remaining_usd: f64) -> Vec<String> {
          when this task is done. Do NOT implement the solution itself. Task: {}",
         spec.task
     );
-    claude_argv(prompt, remaining_usd)
+    claude_argv(prompt, remaining_usd, spec.wall_clock_secs)
 }
 
 pub fn build(spec: &UnitSpec, findings: &str, remaining_usd: f64) -> Vec<String> {
@@ -44,15 +51,15 @@ pub fn build(spec: &UnitSpec, findings: &str, remaining_usd: f64) -> Vec<String>
          findings to address: {}",
         spec.task, findings
     );
-    claude_argv(prompt, remaining_usd)
+    claude_argv(prompt, remaining_usd, spec.wall_clock_secs)
 }
 
-pub fn review(remaining_usd: f64) -> Vec<String> {
+pub fn review(remaining_usd: f64, wall_secs: u64) -> Vec<String> {
     let prompt = "Review the current working-tree diff for correctness and quality. \
          Finish your reply with a single line `BLOCKERS=N` where N is the count of \
          must-fix issues (0 if none)."
         .to_string();
-    claude_argv(prompt, remaining_usd)
+    claude_argv(prompt, remaining_usd, wall_secs)
 }
 
 /// The project's test command, split into argv (no shell). e.g. "npm test".
@@ -95,5 +102,15 @@ mod tests {
     #[test]
     fn check_splits_test_command() {
         assert_eq!(check(&spec()), vec!["npm".to_string(), "test".to_string()]);
+    }
+
+    #[test]
+    fn timeout_prefix_when_wall_secs_set() {
+        let mut s = spec();
+        s.wall_clock_secs = 30;
+        let argv = oracle(&s, 1.0);
+        assert_eq!(argv[0], "timeout");
+        assert_eq!(argv[1], "30");
+        assert!(argv.contains(&"claude".to_string()));
     }
 }

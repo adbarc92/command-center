@@ -112,7 +112,6 @@ impl Runner for LocalDockerRunner {
         ])
         .await?;
 
-        // Clone the project into the named volume and create the agent branch.
         // Validate inputs that flow into git as args (no shell is used).
         if !valid_repo_url(&spec.repo_url) {
             return Err(RunnerError::Failed(format!("unsafe repo url: {:?}", spec.repo_url)));
@@ -120,7 +119,13 @@ impl Runner for LocalDockerRunner {
         if !valid_git_branch(&spec.base_branch) || !valid_git_branch(&spec.branch) {
             return Err(RunnerError::Failed("unsafe branch name".into()));
         }
-        exec_in(&name, "/work", &["git", "clone", &spec.repo_url, "repo"]).await?;
+
+        // Reuse detection: a persisted volume already has the repo (true resume).
+        let reused = exec_in(&name, "/work", &["test", "-d", "repo/.git"]).await.is_ok();
+
+        if !reused {
+            exec_in(&name, "/work", &["git", "clone", &spec.repo_url, "repo"]).await?;
+        }
         for (k, v) in [
             ("core.autocrlf", "false"),
             ("core.fileMode", "false"),
@@ -130,8 +135,15 @@ impl Runner for LocalDockerRunner {
         ] {
             exec_in(&name, "/work/repo", &["git", "config", k, v]).await?;
         }
-        exec_in(&name, "/work/repo", &["git", "checkout", &spec.base_branch]).await?;
-        exec_in(&name, "/work/repo", &["git", "checkout", "-b", &spec.branch]).await?;
+        if reused {
+            // Continue the persisted work: clear a crash-left lock and reset the
+            // branch ref over the existing (possibly dirty) tree. `-b` would fail.
+            let _ = exec_in(&name, "/work/repo", &["rm", "-f", ".git/index.lock"]).await;
+            exec_in(&name, "/work/repo", &["git", "checkout", "-B", &spec.branch]).await?;
+        } else {
+            exec_in(&name, "/work/repo", &["git", "checkout", &spec.base_branch]).await?;
+            exec_in(&name, "/work/repo", &["git", "checkout", "-b", &spec.branch]).await?;
+        }
 
         Ok(Handle { id: name })
     }
@@ -232,7 +244,13 @@ impl Runner for LocalDockerRunner {
     }
 
     async fn teardown(&self, handle: &Handle) -> Result<(), RunnerError> {
-        // Best-effort: remove container then its volume; ignore "already gone".
+        // Remove the container; KEEP the volume (for resume/forensics).
+        let _ = docker(vec!["rm".into(), "-f".into(), handle.id.clone()]).await;
+        Ok(())
+    }
+
+    async fn discard(&self, handle: &Handle) -> Result<(), RunnerError> {
+        // Remove the container (if any) AND its named volume.
         let _ = docker(vec!["rm".into(), "-f".into(), handle.id.clone()]).await;
         let vol = handle.id.replacen("cc_", "ccvol_", 1);
         let _ = docker(vec!["volume".into(), "rm".into(), vol]).await;

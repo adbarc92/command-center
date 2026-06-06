@@ -98,5 +98,8 @@ pub trait Runner: Send + Sync {
         handle: &Handle,
         branch: &str,
     ) -> Result<PathBuf, RunnerError>;
+    /// Remove the container but **keep the named volume** (for resume/forensics).
     async fn teardown(&self, handle: &Handle) -> Result<(), RunnerError>;
+    /// Remove the container **and** its named volume (terminal success / abandon).
+    async fn discard(&self, handle: &Handle) -> Result<(), RunnerError>;
 }

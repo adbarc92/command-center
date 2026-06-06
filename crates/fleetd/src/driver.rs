@@ -68,6 +68,7 @@ pub async fn run<R: Runner, F: Forge>(
         permits: ctx.permits,
         permit: None,
         resume: ctx.resume,
+        handle_id: None,
         spec,
         commands,
         events,
@@ -95,6 +96,9 @@ struct Run<R: Runner, F: Forge> {
     permits: Arc<Semaphore>,
     permit: Option<OwnedSemaphorePermit>,
     resume: bool,
+    /// Container id retained across pause (when `handle` is cleared) so `abandon`
+    /// can still discard the volume.
+    handle_id: Option<String>,
 }
 
 /// Max mergeability polls before treating the PR as unverifiable.
@@ -263,6 +267,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     }
                     match self.runner.provision(&self.spec).await {
                         Ok(h) => {
+                            self.handle_id = Some(h.id.clone());
                             self.handle = Some(h);
                             self.goto(Trigger::Provisioned, None, None);
                         }
@@ -412,7 +417,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     }
                     self.n_review += 1;
                     let round = self.n_review;
-                    let argv = steps::review(self.remaining());
+                    let argv = steps::review(self.remaining(), self.spec.wall_clock_secs);
                     let Some(out) =
                         self.agent_exec(IterationKind::Review, round, LogStream::Agent, &argv).await
                     else {
@@ -512,7 +517,14 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         let cid = cmd.cmd_id().to_string();
                         match cmd {
                             Command::Resume { .. } => self.goto(Trigger::Resume, None, Some(cid)),
-                            Command::Abandon { .. } => self.goto(Trigger::Abandon, None, Some(cid)),
+                            Command::Abandon { .. } => {
+                                // Abandon drops the persisted volume (container is
+                                // already torn down from the pause-entry cleanup).
+                                if let Some(id) = self.handle_id.take() {
+                                    let _ = self.runner.discard(&Handle { id }).await;
+                                }
+                                self.goto(Trigger::Abandon, None, Some(cid));
+                            }
                             Command::Ship { .. } => self.goto(Trigger::Ship, None, Some(cid)),
                             other => self.emit(Event::Error {
                                 scope: ErrorScope::System,
@@ -524,17 +536,23 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     None => self.fail_closed(),
                 },
 
-                Phase::Done | Phase::NoChange | Phase::Failed => {
+                Phase::Done | Phase::NoChange => {
+                    // Success: the result is on the host (PR/bundle); drop the volume.
+                    if let Some(h) = self.handle.clone() {
+                        let _ = self.runner.discard(&h).await;
+                    }
+                    self.permit = None;
+                    let result = if self.phase == Phase::Done { "done" } else { "no_change" };
+                    self.emit(Event::Done { result: result.into() });
+                    return self.phase;
+                }
+                Phase::Failed => {
+                    // Keep the volume for forensics (a failure rarely produced a PR).
                     if let Some(h) = self.handle.clone() {
                         let _ = self.runner.teardown(&h).await;
                     }
-                    self.permit = None; // free the concurrency slot (Phase 3 refines volume handling)
-                    let result = match self.phase {
-                        Phase::Done => "done",
-                        Phase::NoChange => "no_change",
-                        _ => "failed",
-                    };
-                    self.emit(Event::Done { result: result.into() });
+                    self.permit = None;
+                    self.emit(Event::Done { result: "failed".into() });
                     return self.phase;
                 }
             }
@@ -687,6 +705,30 @@ mod tests {
             .filter(|e| matches!(e.event, Event::Iteration { kind: IterationKind::Review, n } if n >= 1))
             .count();
         assert_eq!(reviews, 3);
+    }
+
+    #[tokio::test]
+    async fn discard_on_done_not_teardown() {
+        let mut script = vec![FakeRunner::ok(0.01, &["test_a.rs"])]; // oracle
+        script.extend(cycle(0)); // build, check(pass), review(BLOCKERS=0); floor 1
+        let runner = FakeRunner::new(script);
+        let discards = runner.discards.clone();
+        let teardowns = runner.teardowns.clone();
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, _erx) = mpsc::unbounded_channel();
+        drop(ctx);
+        let phase = run(
+            runner,
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        )
+        .await;
+        assert_eq!(phase, Phase::Done);
+        assert_eq!(discards.load(std::sync::atomic::Ordering::Relaxed), 1, "Done discards the volume");
+        assert_eq!(teardowns.load(std::sync::atomic::Ordering::Relaxed), 0, "Done keeps no volume");
     }
 
     #[tokio::test]
