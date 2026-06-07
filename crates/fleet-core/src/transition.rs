@@ -38,6 +38,8 @@ pub enum Trigger {
     CapBreach,
     Stall,
     OracleTampering,
+    /// The rate-limit backoff envelope was exhausted (Anthropic still unavailable).
+    RetriesExhausted,
     FatalError,
     Halt,
     // --- human re-entry ---
@@ -56,7 +58,7 @@ pub fn transition(phase: Phase, tier: Tier, trigger: Trigger) -> Option<Phase> {
     match trigger {
         FatalError if !phase.is_terminal() => return Some(Failed),
         Halt if !phase.is_terminal() => return Some(Halted),
-        CapBreach | Stall if phase.is_agent_active() => return Some(NeedsHuman),
+        CapBreach | Stall | RetriesExhausted if phase.is_agent_active() => return Some(NeedsHuman),
         OracleTampering if phase.is_agent_active() => return Some(NeedsHuman),
         _ => {}
     }
@@ -266,5 +268,14 @@ mod tests {
         assert_eq!(transition(Building, Tier::T1, Trigger::ChecksPassed), None);
         // You cannot open a PR straight from Reviewing.
         assert_eq!(transition(Reviewing, Tier::T1, Trigger::MergeClean), None);
+    }
+
+    #[test]
+    fn retries_exhausted_parks_agent_phases_at_needs_human() {
+        for p in [Spec, Building, Reviewing] {
+            assert_eq!(transition(p, Tier::T1, Trigger::RetriesExhausted), Some(NeedsHuman));
+        }
+        // Not meaningful from a daemon-only phase → invalid.
+        assert_eq!(transition(MergeCheck, Tier::T1, Trigger::RetriesExhausted), None);
     }
 }

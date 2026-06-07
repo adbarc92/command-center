@@ -183,6 +183,7 @@
                 <span class="uid mono">{u.id}</span>
                 <span class="tier disp">{u.tier}</span>
                 {#if u.awaitingSlot}<span class="slot disp" title="waiting for a concurrency slot">◷ SLOT</span>{/if}
+                {#if u.rateLimited}<span class="slot disp" title="backing off through an Anthropic rate limit">⏳ RATE-LIMIT</span>{/if}
                 <span class="badge disp {phaseClass(u.phase)}">{PHASE_LABEL[u.phase] ?? u.phase}</span>
               </div>
               <div class="task">{u.task}</div>

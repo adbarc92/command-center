@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex};
 /// A `Runner` that replays scripted `ExecOutput`s in order, ignoring argv.
 pub struct FakeRunner {
     scripted: Mutex<VecDeque<ExecOutput>>,
+    /// When set, `exec` ignores the script and returns this every time.
+    always: Option<ExecOutput>,
     health: Liveness,
     has_diff: bool,
     /// Shared call counters (clone before moving the runner into `run`).
@@ -26,12 +28,19 @@ impl FakeRunner {
     pub fn new(script: Vec<ExecOutput>) -> Self {
         Self {
             scripted: Mutex::new(script.into()),
+            always: None,
             health: Liveness::Alive,
             has_diff: true,
             teardowns: Arc::new(AtomicUsize::new(0)),
             discards: Arc::new(AtomicUsize::new(0)),
             unit_containers: Vec::new(),
         }
+    }
+
+    /// Make every `exec` return `out` (ignores the script). For retry tests.
+    pub fn always(mut self, out: ExecOutput) -> Self {
+        self.always = Some(out);
+        self
     }
 
     /// Make `has_diff` report no changes (to exercise the NO_CHANGE path).
@@ -45,13 +54,30 @@ impl FakeRunner {
         ExecOutput {
             exit_code: 0,
             stdout: stdout.iter().map(|s| s.to_string()).collect(),
+            stderr: vec![],
             usage: Some(Usage { tokens_in: 100, tokens_out: 10, cost_usd }),
         }
     }
 
     /// Convenience: a failing exec output (non-zero exit).
     pub fn fail(cost_usd: f64) -> ExecOutput {
-        ExecOutput { exit_code: 1, stdout: vec![], usage: Some(Usage { cost_usd, ..Default::default() }) }
+        ExecOutput {
+            exit_code: 1,
+            stdout: vec![],
+            stderr: vec![],
+            usage: Some(Usage { cost_usd, ..Default::default() }),
+        }
+    }
+
+    /// An Anthropic rate-limit: non-zero exit, the signal ONLY on stderr, no usage
+    /// (the hard-cap shape — proves the classifier reads stderr end to end).
+    pub fn rate_limited() -> ExecOutput {
+        ExecOutput {
+            exit_code: 1,
+            stdout: vec![],
+            stderr: vec!["API Error: 429 rate limit exceeded".into()],
+            usage: None,
+        }
     }
 }
 
@@ -67,6 +93,9 @@ impl Runner for FakeRunner {
         _workdir: &str,
         _argv: &[String],
     ) -> Result<ExecOutput, RunnerError> {
+        if let Some(out) = &self.always {
+            return Ok(out.clone());
+        }
         self.scripted
             .lock()
             .unwrap()

@@ -53,6 +53,9 @@ pub struct Usage {
 pub struct ExecOutput {
     pub exit_code: i32,
     pub stdout: Vec<String>,
+    /// Captured stderr lines. Load-bearing for rate-limit detection: a hard
+    /// usage cap surfaces only here, with no structured stdout record.
+    pub stderr: Vec<String>,
     pub usage: Option<Usage>,
 }
 

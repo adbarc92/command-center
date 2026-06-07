@@ -3,6 +3,7 @@
 //! contract and honoring inbound commands. Fully exercisable against the fakes.
 
 use crate::forge::{Forge, MergeResult, Mergeability};
+use crate::retry::{classify, rl_base_secs, rl_cap_secs, rl_max_wait_secs, Backoff, StepOutcome, RL_REASON};
 use crate::runner::{ExecOutput, Handle, Runner, UnitSpec};
 use crate::{claude_meter, steps};
 use fleet_core::{
@@ -74,6 +75,7 @@ pub async fn run<R: Runner, F: Forge>(
         prev_blockers: None,
         pr_url: None,
         started: std::time::Instant::now(),
+        rl_elapsed: std::time::Duration::ZERO,
         permits: ctx.permits,
         permit: None,
         resume: ctx.resume,
@@ -102,6 +104,9 @@ struct Run<R: Runner, F: Forge> {
     prev_blockers: Option<u32>,
     pr_url: Option<String>,
     started: std::time::Instant,
+    /// Accumulated rate-limit time (failed-attempt exec + backoff sleeps); exempt
+    /// from the wall-clock and the basis for the give-up envelope.
+    rl_elapsed: std::time::Duration,
     permits: Arc<Semaphore>,
     permit: Option<OwnedSemaphorePermit>,
     resume: bool,
@@ -199,39 +204,115 @@ impl<R: Runner, F: Forge> Run<R, F> {
 
     /// Whether the wall-clock ceiling has been exceeded (0 = disabled).
     fn over_wall_clock(&self) -> bool {
-        self.spec.wall_clock_secs > 0 && self.started.elapsed().as_secs() > self.spec.wall_clock_secs
+        crate::retry::wall_clock_exceeded(
+            self.started.elapsed(),
+            self.rl_elapsed,
+            self.spec.wall_clock_secs,
+        )
     }
 
-    /// Run one step in `steps::WORKDIR`, streaming stdout as `Log` events and
-    /// back-filling usage from claude's stream-json if the runner didn't supply
-    /// it. On runner failure, fail the unit and return `None`.
+    /// Run one agent step. For claude steps (`claude_step == true`) this wraps the
+    /// exec in a rate-limit backoff loop: on a recognized throttle it accounts the
+    /// attempt, emits a "rate limited" Blocked, waits (holding the slot, exempt from
+    /// the wall-clock), and re-execs; after ~1h of accumulated rate-limit time it
+    /// parks the unit at NeedsHuman. The test command (`claude_step == false`) is
+    /// returned unchanged. Returns `None` if the unit was driven off this phase
+    /// (fatal error, halt, cap breach, or retries exhausted).
     async fn agent_exec(
         &mut self,
         kind: IterationKind,
         n: u32,
         stream: LogStream,
+        claude_step: bool,
         argv: &[String],
     ) -> Option<ExecOutput> {
         self.emit(Event::Iteration { kind, n });
         let handle = self.handle.clone().expect("agent_exec without a handle");
-        match self.runner.exec(&handle, steps::WORKDIR, argv).await {
-            Ok(mut out) => {
-                for line in &out.stdout {
-                    self.emit(Event::Log { stream, line: line.clone() });
+        let mut backoff = Backoff::new(rl_base_secs(), rl_cap_secs());
+        let max_wait = std::time::Duration::from_secs(rl_max_wait_secs());
+        loop {
+            let t0 = std::time::Instant::now();
+            let mut out = match self.runner.exec(&handle, steps::WORKDIR, argv).await {
+                Ok(o) => o,
+                Err(e) => {
+                    self.emit(Event::Error {
+                        scope: ErrorScope::Agent,
+                        retryable: false,
+                        detail: e.to_string(),
+                    });
+                    self.goto(Trigger::FatalError, Some("exec failed".into()), None);
+                    return None;
                 }
-                if out.usage.is_none() {
-                    out.usage = claude_meter::parse_usage(&out.stdout);
-                }
-                Some(out)
+            };
+            for line in &out.stdout {
+                self.emit(Event::Log { stream, line: line.clone() });
             }
-            Err(e) => {
-                self.emit(Event::Error {
-                    scope: ErrorScope::Agent,
-                    retryable: false,
-                    detail: e.to_string(),
-                });
-                self.goto(Trigger::FatalError, Some("exec failed".into()), None);
-                None
+            if out.usage.is_none() {
+                out.usage = claude_meter::parse_usage(&out.stdout);
+            }
+            if !claude_step {
+                return Some(out); // the test command: no rate-limit handling
+            }
+            match classify(&out) {
+                StepOutcome::Ok => return Some(out), // caller's phase arm accounts it
+                StepOutcome::RateLimited => {
+                    // Account this attempt's own cost (no-op if usage didn't parse);
+                    // a trackable cap breach wins over waiting.
+                    if self.account(&out) {
+                        self.goto(Trigger::CapBreach, Some("usd cap".into()), None);
+                        return None;
+                    }
+                    self.rl_elapsed += t0.elapsed();
+                    if self.rl_elapsed >= max_wait {
+                        self.goto(
+                            Trigger::RetriesExhausted,
+                            Some("rate-limit retries exhausted".into()),
+                            None,
+                        );
+                        return None;
+                    }
+                    let delay = backoff.next_delay();
+                    self.emit(Event::Blocked {
+                        reason: RL_REASON.into(),
+                        cap: None,
+                        detail: format!("retrying in {}s", delay.as_secs()),
+                    });
+                    // Interruptible wait on a fixed deadline (a spurious non-Halt
+                    // command consumes only the remaining delay, never restarts it).
+                    // NOTE: `select!` only yields a value here — borrowing `self`
+                    // (goto/emit) inside a `recv()` arm would conflict with the
+                    // `&mut self.commands` the recv future holds, so handle AFTER.
+                    let until = tokio::time::Instant::now() + delay;
+                    loop {
+                        let received = tokio::select! {
+                            _ = tokio::time::sleep_until(until) => None,
+                            cmd = self.commands.recv() => Some(cmd),
+                        };
+                        match received {
+                            None => break, // deadline reached → re-exec the step
+                            Some(Some(Command::Halt { cmd_id })) => {
+                                self.goto(Trigger::Halt, Some("user halt".into()), Some(cmd_id));
+                                return None;
+                            }
+                            Some(Some(other)) => self.emit(Event::Error {
+                                scope: ErrorScope::System,
+                                retryable: false,
+                                detail: format!(
+                                    "command {} not valid in {:?}",
+                                    other.cmd_id(), self.phase
+                                ),
+                            }), // keep waiting on the same `until`
+                            // Channel closed (no interactive commands, e.g. run_once):
+                            // no command can interrupt, so just wait out the backoff.
+                            Some(None) => {
+                                tokio::time::sleep_until(until).await;
+                                break;
+                            }
+                        }
+                    }
+                    self.rl_elapsed += delay;
+                    // loop: re-exec the same step (slot held, container kept).
+                }
             }
         }
     }
@@ -303,7 +384,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     }
                     let argv = steps::oracle(&self.spec, self.remaining());
                     let Some(out) =
-                        self.agent_exec(IterationKind::Review, 0, LogStream::Agent, &argv).await
+                        self.agent_exec(IterationKind::Review, 0, LogStream::Agent, true, &argv).await
                     else {
                         continue;
                     };
@@ -359,7 +440,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     };
                     let argv = steps::build(&self.spec, &findings, self.remaining());
                     let Some(out) =
-                        self.agent_exec(IterationKind::Build, n, LogStream::Agent, &argv).await
+                        self.agent_exec(IterationKind::Build, n, LogStream::Agent, true, &argv).await
                     else {
                         continue;
                     };
@@ -388,7 +469,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     let n = self.n_check;
                     let argv = steps::check(&self.spec);
                     let Some(out) =
-                        self.agent_exec(IterationKind::Check, n, LogStream::Check, &argv).await
+                        self.agent_exec(IterationKind::Check, n, LogStream::Check, false, &argv).await
                     else {
                         continue;
                     };
@@ -428,7 +509,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     let round = self.n_review;
                     let argv = steps::review(self.remaining(), self.spec.wall_clock_secs);
                     let Some(out) =
-                        self.agent_exec(IterationKind::Review, round, LogStream::Agent, &argv).await
+                        self.agent_exec(IterationKind::Review, round, LogStream::Agent, true, &argv).await
                     else {
                         continue;
                     };
@@ -959,5 +1040,171 @@ mod tests {
     fn parse_blockers_reads_the_marker() {
         assert_eq!(parse_blockers(&["noise".into(), "BLOCKERS=3".into()]), 3);
         assert_eq!(parse_blockers(&["nothing here".into()]), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_limited_step_retries_then_succeeds() {
+        // Oracle rate-limits once (signal on stderr), then succeeds; floor-1 cycle.
+        let mut script = vec![FakeRunner::rate_limited(), FakeRunner::ok(0.01, &["test_a.rs"])];
+        script.extend(cycle(0));
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        drop(ctx);
+        let final_phase = run(
+            FakeRunner::new(script),
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        )
+        .await;
+        assert_eq!(final_phase, Phase::Done, "a single rate-limit is retried, not fatal");
+        let evs = drain(&mut erx);
+        // The retry surfaced a "rate limited" Blocked.
+        assert!(
+            evs.iter().any(|e| matches!(&e.event,
+                Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON)),
+            "a rate-limit retry emits a Blocked(\"rate limited\")"
+        );
+        // The oracle Iteration{Review,0} was emitted exactly once (not per retry).
+        let oracle_iters = evs.iter().filter(|e|
+            matches!(e.event, Event::Iteration { kind: IterationKind::Review, n: 0 })).count();
+        assert_eq!(oracle_iters, 1, "Iteration emitted once, before the retry loop");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn persistent_rate_limit_parks_at_needs_human() {
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        let runner = FakeRunner::new(vec![]).always(FakeRunner::rate_limited());
+        let h = tokio::spawn(run(
+            runner,
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx {
+                start_seq: 0,
+                start_cost: 0.0,
+                resume: false,
+                start_phase: Phase::Queued,
+                permits: permits.clone(),
+            },
+            crx,
+            etx,
+        ));
+        // Drive virtual time forward until it parks at NeedsHuman.
+        loop {
+            let e = erx.recv().await.expect("stream closed before NeedsHuman");
+            if matches!(e.event, Event::PhaseChanged { to: Phase::NeedsHuman, .. }) {
+                break;
+            }
+        }
+        // Entry cleanup released the permit when parking.
+        assert_eq!(permits.available_permits(), 1, "permit released at NeedsHuman");
+        ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
+        let _ = h.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_limit_cost_breaching_cap_parks_via_cap_breach() {
+        // A rate-limited attempt that itself bills over the cap must route to
+        // NeedsHuman via CapBreach (checked before backoff) — not loop for an hour.
+        let rl_costly = ExecOutput {
+            exit_code: 1,
+            stdout: vec![],
+            stderr: vec!["API Error: 429 rate limit exceeded".into()],
+            usage: Some(crate::runner::Usage { tokens_in: 0, tokens_out: 0, cost_usd: 1.0 }),
+        };
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        let h = tokio::spawn(run(
+            FakeRunner::new(vec![]).always(rl_costly),
+            FakeForge::default(),
+            spec(Tier::T1, 0.5, 1), // cap $0.5; first attempt bills $1.0
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+        let mut saw_rl_blocked = false;
+        loop {
+            let e = erx.recv().await.expect("stream closed before NeedsHuman");
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON) {
+                saw_rl_blocked = true;
+            }
+            if let Event::PhaseChanged { to: Phase::NeedsHuman, reason, .. } = &e.event {
+                assert_eq!(reason.as_deref(), Some("usd cap"), "parked via CapBreach, not RetriesExhausted");
+                break;
+            }
+        }
+        assert!(!saw_rl_blocked, "cap breach short-circuits before any backoff Blocked");
+        ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
+        let _ = h.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn halt_during_backoff_interrupts_to_halted() {
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        let h = tokio::spawn(run(
+            FakeRunner::new(vec![]).always(FakeRunner::rate_limited()),
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+        // Wait until it's backing off, then halt mid-wait.
+        loop {
+            let e = erx.recv().await.expect("closed before backoff");
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON) {
+                break;
+            }
+        }
+        ctx.send(Command::Halt { cmd_id: "h".into() }).unwrap();
+        loop {
+            let e = erx.recv().await.expect("closed before Halted");
+            if matches!(e.event, Event::PhaseChanged { to: Phase::Halted, .. }) {
+                break;
+            }
+        }
+        ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap(); // Halted -> Failed
+        let _ = h.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn non_halt_command_during_backoff_errors_and_keeps_retrying() {
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        let h = tokio::spawn(run(
+            FakeRunner::new(vec![]).always(FakeRunner::rate_limited()),
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+        // Wait for the first backoff, then send a NON-Halt command into the wait.
+        loop {
+            let e = erx.recv().await.expect("closed before backoff");
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON) {
+                break;
+            }
+        }
+        ctx.send(Command::Resume { cmd_id: "r".into() }).unwrap();
+        // It emits a "not valid" error and keeps retrying until the envelope -> NeedsHuman.
+        let mut saw_invalid = false;
+        loop {
+            let e = erx.recv().await.expect("closed before NeedsHuman");
+            if matches!(&e.event, Event::Error { detail, .. } if detail.contains("not valid")) {
+                saw_invalid = true;
+            }
+            if matches!(e.event, Event::PhaseChanged { to: Phase::NeedsHuman, .. }) {
+                break;
+            }
+        }
+        assert!(saw_invalid, "a non-Halt command during backoff emits a 'not valid' error");
+        ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
+        let _ = h.await;
     }
 }

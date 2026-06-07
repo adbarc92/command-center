@@ -33,6 +33,8 @@ export interface Unit {
   blocked?: string;
   /** True while the unit is parked waiting for a concurrency slot. */
   awaitingSlot: boolean;
+  /** True while the unit is backing off through an Anthropic rate-limit. */
+  rateLimited: boolean;
   error?: string;
   result?: string;
   /** Highest event seq folded in, so reconnects replay only what's missing. */
@@ -55,6 +57,7 @@ export function newUnit(id: string, task: string, tier: string, usdCap = 5): Uni
     findings: [],
     oracleFiles: [],
     awaitingSlot: false,
+    rateLimited: false,
     lastSeq: 0,
   };
 }
@@ -105,7 +108,8 @@ export function fold(u: Unit, ev: FleetEvent): Unit {
     case 'phase_changed':
       u.phase = ev.to;
       u.history = [...u.history, ev.to];
-      u.awaitingSlot = false; // any phase change means we're no longer queued for a slot
+      u.awaitingSlot = false;
+      u.rateLimited = false; // any phase change means the wait resolved
       break;
     case 'oracle_proposed':
       u.oracleFiles = ev.test_files;
@@ -134,6 +138,7 @@ export function fold(u: Unit, ev: FleetEvent): Unit {
     case 'blocked':
       u.blocked = ev.reason;
       if (ev.reason === 'awaiting concurrency slot') u.awaitingSlot = true;
+      if (ev.reason === 'rate limited') u.rateLimited = true; // exact match to RL_REASON
       break;
     case 'error':
       u.error = `${ev.scope}: ${ev.detail}`;

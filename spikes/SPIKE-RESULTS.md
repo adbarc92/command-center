@@ -64,3 +64,37 @@ container can clone the origin URL directly, or the daemon seeds the volume).
 Both load-bearing assumptions hold. One improvement to fold into the spec: the
 daemon-independent cost cap is **`--max-budget-usd`** (a real dollar ceiling), not a token
 proxy — so the "honest cost caveat" in Section 4 is largely resolved.
+
+## Rate-limit signal (2026-06-07)
+
+**Goal:** Pin what `claude -p --output-format stream-json` actually emits on a sustained
+429/529 and on a hard usage-cap breach, so the classifier patterns are not a guess.
+
+**Environment:** Windows 11, Docker 28.3.3, `cc-agent:dev` image present (`eb9794e3eba3`,
+644 MB). `ANTHROPIC_API_KEY` was **not set** in the environment at spike time — live API
+calls were therefore impossible and no real 429/529 or usage-cap response could be
+provoked.
+
+**Findings — UNCONFIRMED**
+
+| Scenario | Exit code | Terminal `result` record? | stderr/stdout text |
+|---|---|---|---|
+| Sustained 429 / 529 | unconfirmed | unconfirmed | unconfirmed |
+| Hard usage cap | unconfirmed | unconfirmed | unconfirmed |
+
+**Proceeding with conservative text patterns (as specified by the design):**
+
+The classifier will match on the following substrings found anywhere in stderr or stdout:
+
+- `rate limit`
+- `rate_limit`
+- `overloaded`
+- `429`
+- `529`
+- `usage limit`
+
+These patterns cover the known Anthropic HTTP status codes (429 = too many requests,
+529 = overloaded) and the human-readable phrases Claude Code has historically emitted for
+rate-limit and overload conditions. The classifier is built and tested against synthetic
+fixtures; this spike only would have refined the patterns — the absence of a confirmed
+signal does not block implementation.
