@@ -27,6 +27,12 @@ pub struct UnitRow {
     pub last_seq: u64,
     pub oracle_frozen: bool,
     pub terminal_reason: Option<String>,
+    /// Runner mode ("demo" | "real"), set once at create so rehydration picks the
+    /// right runner (a demo unit doesn't attempt a real Docker provision).
+    pub mode: String,
+    /// Review-gate floor, set once at create so a rehydrated unit resumes with the
+    /// same `min_review_rounds` it was launched with.
+    pub min_review_rounds: u32,
 }
 
 impl Store {
@@ -45,11 +51,21 @@ impl Store {
                unit_id TEXT PRIMARY KEY, tier TEXT, task TEXT, repo_url TEXT, repo_slug TEXT,
                base_branch TEXT, branch TEXT, test_cmd TEXT, usd_cap REAL, wall_clock_secs INTEGER,
                phase TEXT, cost REAL, last_seq INTEGER, oracle_frozen INTEGER,
-               created_ts INTEGER, updated_ts INTEGER, terminal_reason TEXT);
+               created_ts INTEGER, updated_ts INTEGER, terminal_reason TEXT,
+               mode TEXT NOT NULL DEFAULT 'demo', min_review_rounds INTEGER NOT NULL DEFAULT 2);
              CREATE TABLE IF NOT EXISTS events(
                unit_id TEXT, seq INTEGER, ts INTEGER, json TEXT,
                PRIMARY KEY(unit_id, seq));",
         )?;
+        // Migrate DBs created before these columns existed. Idempotent: on a fresh
+        // DB the columns already exist (from CREATE TABLE) and the ALTER is a no-op
+        // failure we ignore; on an old DB it adds them with the safe defaults.
+        for stmt in [
+            "ALTER TABLE units ADD COLUMN mode TEXT NOT NULL DEFAULT 'demo'",
+            "ALTER TABLE units ADD COLUMN min_review_rounds INTEGER NOT NULL DEFAULT 2",
+        ] {
+            let _ = conn.execute(stmt, []);
+        }
         Ok(Self { conn })
     }
 
@@ -58,14 +74,15 @@ impl Store {
     pub fn upsert_unit(&self, r: &UnitRow, now: i64) -> rusqlite::Result<()> {
         self.conn.execute(
             "INSERT INTO units(unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,
-               usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,created_ts,updated_ts,terminal_reason)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16)
+               usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,created_ts,updated_ts,terminal_reason,
+               mode,min_review_rounds)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17,?18)
              ON CONFLICT(unit_id) DO UPDATE SET
                phase=?11, cost=?12, last_seq=?13, oracle_frozen=?14, updated_ts=?15, terminal_reason=?16",
             params![
                 r.unit_id, r.tier, r.task, r.repo_url, r.repo_slug, r.base_branch, r.branch,
                 r.test_cmd, r.usd_cap, r.wall_clock_secs, r.phase, r.cost, r.last_seq,
-                r.oracle_frozen as i64, now, r.terminal_reason
+                r.oracle_frozen as i64, now, r.terminal_reason, r.mode, r.min_review_rounds
             ],
         )?;
         Ok(())
@@ -147,12 +164,14 @@ impl Store {
             last_seq: r.get::<_, i64>(12)? as u64,
             oracle_frozen: r.get::<_, i64>(13)? != 0,
             terminal_reason: r.get(14)?,
+            mode: r.get(15)?,
+            min_review_rounds: r.get::<_, i64>(16)? as u32,
         })
     }
 }
 
-const SELECT_COLS_ALL: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason FROM units";
-const SELECT_COLS_WHERE_ID: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason FROM units WHERE unit_id=?1";
+const SELECT_COLS_ALL: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds FROM units";
+const SELECT_COLS_WHERE_ID: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds FROM units WHERE unit_id=?1";
 
 #[cfg(test)]
 mod tests {
@@ -175,6 +194,8 @@ mod tests {
             last_seq: 0,
             oracle_frozen: false,
             terminal_reason: None,
+            mode: "demo".into(),
+            min_review_rounds: 2,
         }
     }
 
@@ -196,6 +217,27 @@ mod tests {
         let got = s.get_unit("u1").unwrap().unwrap();
         assert_eq!(got.cost, 0.5);
         assert_eq!(got.phase, "done");
+    }
+
+    #[test]
+    fn persists_mode_and_review_floor() {
+        // mode + gate floor are set-once at create and survive a projection update,
+        // so a rehydrated unit can resume as the right runner with the right gate.
+        let s = Store::open_memory().unwrap();
+        let mut r = row("u1");
+        r.mode = "real".into();
+        r.min_review_rounds = 3;
+        s.upsert_unit(&r, 1000).unwrap();
+        // A later live-projection upsert must NOT clobber mode/floor.
+        let mut upd = row("u1");
+        upd.mode = "demo".into(); // would-be clobber
+        upd.min_review_rounds = 1; // would-be clobber
+        upd.phase = "building".into();
+        s.upsert_unit(&upd, 1001).unwrap();
+        let got = s.get_unit("u1").unwrap().unwrap();
+        assert_eq!(got.mode, "real", "mode is set-once at create");
+        assert_eq!(got.min_review_rounds, 3, "review floor is set-once at create");
+        assert_eq!(got.phase, "building", "projection columns still update");
     }
 
     #[test]
