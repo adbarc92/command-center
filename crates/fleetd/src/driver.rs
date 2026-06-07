@@ -1105,4 +1105,106 @@ mod tests {
         ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
         let _ = h.await;
     }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_limit_cost_breaching_cap_parks_via_cap_breach() {
+        // A rate-limited attempt that itself bills over the cap must route to
+        // NeedsHuman via CapBreach (checked before backoff) — not loop for an hour.
+        let rl_costly = ExecOutput {
+            exit_code: 1,
+            stdout: vec![],
+            stderr: vec!["API Error: 429 rate limit exceeded".into()],
+            usage: Some(crate::runner::Usage { tokens_in: 0, tokens_out: 0, cost_usd: 1.0 }),
+        };
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        let h = tokio::spawn(run(
+            FakeRunner::new(vec![]).always(rl_costly),
+            FakeForge::default(),
+            spec(Tier::T1, 0.5, 1), // cap $0.5; first attempt bills $1.0
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+        let mut saw_rl_blocked = false;
+        loop {
+            let e = erx.recv().await.expect("stream closed before NeedsHuman");
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON) {
+                saw_rl_blocked = true;
+            }
+            if let Event::PhaseChanged { to: Phase::NeedsHuman, reason, .. } = &e.event {
+                assert_eq!(reason.as_deref(), Some("usd cap"), "parked via CapBreach, not RetriesExhausted");
+                break;
+            }
+        }
+        assert!(!saw_rl_blocked, "cap breach short-circuits before any backoff Blocked");
+        ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
+        let _ = h.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn halt_during_backoff_interrupts_to_halted() {
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        let h = tokio::spawn(run(
+            FakeRunner::new(vec![]).always(FakeRunner::rate_limited()),
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+        // Wait until it's backing off, then halt mid-wait.
+        loop {
+            let e = erx.recv().await.expect("closed before backoff");
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON) {
+                break;
+            }
+        }
+        ctx.send(Command::Halt { cmd_id: "h".into() }).unwrap();
+        loop {
+            let e = erx.recv().await.expect("closed before Halted");
+            if matches!(e.event, Event::PhaseChanged { to: Phase::Halted, .. }) {
+                break;
+            }
+        }
+        ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap(); // Halted -> Failed
+        let _ = h.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn non_halt_command_during_backoff_errors_and_keeps_retrying() {
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        let h = tokio::spawn(run(
+            FakeRunner::new(vec![]).always(FakeRunner::rate_limited()),
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+        // Wait for the first backoff, then send a NON-Halt command into the wait.
+        loop {
+            let e = erx.recv().await.expect("closed before backoff");
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON) {
+                break;
+            }
+        }
+        ctx.send(Command::Resume { cmd_id: "r".into() }).unwrap();
+        // It emits a "not valid" error and keeps retrying until the envelope -> NeedsHuman.
+        let mut saw_invalid = false;
+        loop {
+            let e = erx.recv().await.expect("closed before NeedsHuman");
+            if matches!(&e.event, Event::Error { detail, .. } if detail.contains("not valid")) {
+                saw_invalid = true;
+            }
+            if matches!(e.event, Event::PhaseChanged { to: Phase::NeedsHuman, .. }) {
+                break;
+            }
+        }
+        assert!(saw_invalid, "a non-Halt command during backoff emits a 'not valid' error");
+        ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
+        let _ = h.await;
+    }
 }
