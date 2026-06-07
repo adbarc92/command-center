@@ -66,6 +66,12 @@ impl Backoff {
     }
 }
 
+/// Whether the agent-active wall-clock cap is exceeded, with rate-limit time
+/// (`rl_elapsed`) exempt. `cap_secs == 0` disables the check.
+pub fn wall_clock_exceeded(elapsed: Duration, rl_elapsed: Duration, cap_secs: u64) -> bool {
+    cap_secs > 0 && elapsed.saturating_sub(rl_elapsed).as_secs() > cap_secs
+}
+
 fn env_secs(key: &str, default: u64) -> u64 {
     std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
@@ -111,6 +117,17 @@ mod tests {
     fn unrelated_nonzero_exit_is_ok() {
         // e.g. a timeout-kill (124) or a normal agent failure — preserved as today.
         assert_eq!(classify(&out(124, &["compilation failed"], &[])), StepOutcome::Ok);
+    }
+
+    #[test]
+    fn wall_clock_exempts_rate_limit_time() {
+        let cap = 30; // 30s cap
+        // 100s elapsed but 80s of it was rate-limit waiting => 20s effective <= 30s.
+        assert!(!wall_clock_exceeded(Duration::from_secs(100), Duration::from_secs(80), cap));
+        // Same elapsed, no exemption => 100s > 30s => exceeded.
+        assert!(wall_clock_exceeded(Duration::from_secs(100), Duration::ZERO, cap));
+        // cap 0 disables the check entirely.
+        assert!(!wall_clock_exceeded(Duration::from_secs(9999), Duration::ZERO, 0));
     }
 
     #[test]

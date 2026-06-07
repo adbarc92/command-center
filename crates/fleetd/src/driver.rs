@@ -74,6 +74,7 @@ pub async fn run<R: Runner, F: Forge>(
         prev_blockers: None,
         pr_url: None,
         started: std::time::Instant::now(),
+        rl_elapsed: std::time::Duration::ZERO,
         permits: ctx.permits,
         permit: None,
         resume: ctx.resume,
@@ -102,6 +103,9 @@ struct Run<R: Runner, F: Forge> {
     prev_blockers: Option<u32>,
     pr_url: Option<String>,
     started: std::time::Instant,
+    /// Accumulated rate-limit time (failed-attempt exec + backoff sleeps); exempt
+    /// from the wall-clock and the basis for the give-up envelope.
+    rl_elapsed: std::time::Duration,
     permits: Arc<Semaphore>,
     permit: Option<OwnedSemaphorePermit>,
     resume: bool,
@@ -199,7 +203,11 @@ impl<R: Runner, F: Forge> Run<R, F> {
 
     /// Whether the wall-clock ceiling has been exceeded (0 = disabled).
     fn over_wall_clock(&self) -> bool {
-        self.spec.wall_clock_secs > 0 && self.started.elapsed().as_secs() > self.spec.wall_clock_secs
+        crate::retry::wall_clock_exceeded(
+            self.started.elapsed(),
+            self.rl_elapsed,
+            self.spec.wall_clock_secs,
+        )
     }
 
     /// Run one step in `steps::WORKDIR`, streaming stdout as `Log` events and
