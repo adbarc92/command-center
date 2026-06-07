@@ -165,8 +165,9 @@ fn fresh_ctx(st: &AppState) -> RunCtx {
     }
 }
 
-/// Build the initial persisted row for a fresh unit.
-fn row_from_spec(spec: &UnitSpec) -> UnitRow {
+/// Build the initial persisted row for a fresh unit. `mode` ("demo"|"real") is a
+/// runner choice that isn't part of `UnitSpec`, so it's threaded in explicitly.
+fn row_from_spec(spec: &UnitSpec, mode: &str) -> UnitRow {
     UnitRow {
         unit_id: spec.unit_id.clone(),
         tier: phase_tier(spec.tier),
@@ -183,6 +184,8 @@ fn row_from_spec(spec: &UnitSpec) -> UnitRow {
         last_seq: 0,
         oracle_frozen: spec.oracle_frozen,
         terminal_reason: None,
+        mode: mode.into(),
+        min_review_rounds: spec.gate.min_review_rounds,
     }
 }
 fn phase_tier(t: Tier) -> String {
@@ -223,11 +226,8 @@ async fn create_mission(
         oracle_frozen: false,
     };
 
-    // Persist the initial row.
-    st.store.lock().unwrap().upsert_unit(&row_from_spec(&spec), now_ms()).ok();
-
-    // Validate the mode BEFORE registering a handle, so a bad request never
-    // leaves a driverless unit in the map.
+    // Validate the mode BEFORE persisting/registering, so a bad request never
+    // leaves a driverless unit in the map or a junk row in the store.
     let runner_mode = req.mode.clone();
     match runner_mode.as_str() {
         "demo" => {}
@@ -238,6 +238,9 @@ async fn create_mission(
         }
         other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
     }
+
+    // Persist the initial row (mode + gate floor recorded for faithful rehydration).
+    st.store.lock().unwrap().upsert_unit(&row_from_spec(&spec, &runner_mode), now_ms()).ok();
 
     // Register the per-unit handle atomically, then spawn its driver. A fresh
     // unit_id is always unique, so this returns Some.
@@ -314,25 +317,32 @@ fn rehydrate(st: &AppState, unit_id: &str) {
         start_phase: Phase::Halted,
         permits: st.permits.clone(),
     };
-    use crate::gh_forge::GhForge;
-    use crate::local_docker::LocalDockerRunner;
-    let host_clone = std::env::temp_dir().join(format!("cc-host-{unit_id}"));
-    let forge = GhForge::new(
-        spec.repo_url.clone(),
-        spec.repo_slug.clone(),
-        spec.base_branch.clone(),
-        host_clone,
-        format!("command-center SP1: {unit_id}"),
-    );
-    let runner = LocalDockerRunner::new("cc-agent:dev");
-    tokio::spawn(run(runner, forge, spec, ctx, cmd_rx, evt_tx));
+    // Rehydrate as the SAME runner the unit was launched with (persisted), so a
+    // demo unit resumes as a demo and never attempts a real Docker provision.
+    match row.mode.as_str() {
+        "demo" => {
+            let runner = FakeRunner::new(demo_script(&spec));
+            tokio::spawn(run(runner, FakeForge::default(), spec, ctx, cmd_rx, evt_tx));
+        }
+        _ => {
+            use crate::gh_forge::GhForge;
+            use crate::local_docker::LocalDockerRunner;
+            let host_clone = std::env::temp_dir().join(format!("cc-host-{unit_id}"));
+            let forge = GhForge::new(
+                spec.repo_url.clone(),
+                spec.repo_slug.clone(),
+                spec.base_branch.clone(),
+                host_clone,
+                format!("command-center SP1: {unit_id}"),
+            );
+            let runner = LocalDockerRunner::new("cc-agent:dev");
+            tokio::spawn(run(runner, forge, spec, ctx, cmd_rx, evt_tx));
+        }
+    }
 }
 
-/// Reconstruct a `UnitSpec` from its persisted row for rehydration. NOTE: the
-/// review-gate floor isn't persisted in `units`, so resumed units default to 2
-/// rounds. A unit originally launched with a higher floor could therefore open
-/// its gate a round earlier after a restart-resume; persisting the floor is a
-/// follow-up.
+/// Reconstruct a `UnitSpec` from its persisted row for rehydration, including the
+/// review-gate floor it was launched with, so a resumed unit honors the same gate.
 fn spec_from_row(r: &UnitRow) -> UnitSpec {
     UnitSpec {
         unit_id: r.unit_id.clone(),
@@ -340,7 +350,7 @@ fn spec_from_row(r: &UnitRow) -> UnitSpec {
         task: r.task.clone(),
         usd_cap: r.usd_cap,
         wall_clock_secs: r.wall_clock_secs,
-        gate: GateConfig { min_review_rounds: 2 },
+        gate: GateConfig { min_review_rounds: r.min_review_rounds.max(1) },
         repo_url: r.repo_url.clone(),
         repo_slug: r.repo_slug.clone(),
         base_branch: r.base_branch.clone(),
@@ -632,7 +642,13 @@ fn halt_in_store(state: &AppState, id: &str) {
 /// round with blockers trending to zero so the gate opens on the floor.
 fn demo_script(spec: &UnitSpec) -> Vec<ExecOutput> {
     let floor = spec.gate.min_review_rounds.max(1);
-    let mut s = vec![FakeRunner::ok(0.02, &["sum.test.js"])];
+    let mut s = vec![];
+    // On resume the oracle is already frozen and the Spec phase is skipped, so the
+    // script must start at the first build — otherwise the build would consume the
+    // oracle's scripted output.
+    if !spec.oracle_frozen {
+        s.push(FakeRunner::ok(0.02, &["sum.test.js"])); // oracle
+    }
     for remaining in (0..floor).rev() {
         s.push(FakeRunner::ok(0.03, &["implementing the change"]));
         s.push(FakeRunner::ok(0.0, &["tests: 1 passing"]));
@@ -662,6 +678,8 @@ mod tests {
             last_seq: 7,
             oracle_frozen: true,
             terminal_reason: None,
+            mode: "real".into(),
+            min_review_rounds: 1,
         }
     }
 
@@ -738,6 +756,51 @@ mod tests {
         rehydrate(&state, "ghost");
         assert!(!state.units.lock().unwrap().contains_key("ghost"));
         assert_eq!(state.units.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn rehydrate_demo_unit_resumes_as_demo_to_done() {
+        // A halted DEMO unit, rehydrated, resumes on its persisted FakeRunner (not a
+        // real Docker provision) and drives to Done — proving mode survives a restart.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            let mut r = building_row("u1");
+            r.mode = "demo".into();
+            r.min_review_rounds = 1;
+            r.phase = "halted".into();
+            r.oracle_frozen = true; // frozen → resume skips the oracle
+            r.last_seq = 3;
+            r.cost = 0.1;
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let state = AppState::new(store);
+        rehydrate(&state, "u1");
+
+        // Grab the live handle, subscribe, then drive it on with Resume.
+        let (mut rx, tx) = {
+            let units = state.units.lock().unwrap();
+            let h = units.get("u1").expect("rehydrated handle present");
+            (h.bcast.subscribe(), h.cmd_tx.clone())
+        };
+        tx.send(Command::Resume { cmd_id: "r1".into() }).expect("driver alive");
+
+        let mut saw_oracle = false;
+        let mut done = false;
+        for _ in 0..200 {
+            let env = rx.recv().await.expect("event stream closed before Done");
+            match env.event {
+                Event::OracleProposed { .. } => saw_oracle = true,
+                Event::Done { ref result } => {
+                    assert_eq!(result, "done", "demo unit resumes to a successful Done");
+                    done = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(done, "rehydrated demo unit reached Done");
+        assert!(!saw_oracle, "resume must not re-run the oracle");
     }
 
     #[test]
