@@ -45,13 +45,30 @@ impl FakeRunner {
         ExecOutput {
             exit_code: 0,
             stdout: stdout.iter().map(|s| s.to_string()).collect(),
+            stderr: vec![],
             usage: Some(Usage { tokens_in: 100, tokens_out: 10, cost_usd }),
         }
     }
 
     /// Convenience: a failing exec output (non-zero exit).
     pub fn fail(cost_usd: f64) -> ExecOutput {
-        ExecOutput { exit_code: 1, stdout: vec![], usage: Some(Usage { cost_usd, ..Default::default() }) }
+        ExecOutput {
+            exit_code: 1,
+            stdout: vec![],
+            stderr: vec![],
+            usage: Some(Usage { cost_usd, ..Default::default() }),
+        }
+    }
+
+    /// An Anthropic rate-limit: non-zero exit, the signal ONLY on stderr, no usage
+    /// (the hard-cap shape — proves the classifier reads stderr end to end).
+    pub fn rate_limited() -> ExecOutput {
+        ExecOutput {
+            exit_code: 1,
+            stdout: vec![],
+            stderr: vec!["API Error: 429 rate limit exceeded".into()],
+            usage: None,
+        }
     }
 }
 

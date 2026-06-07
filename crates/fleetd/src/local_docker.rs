@@ -156,11 +156,12 @@ impl Runner for LocalDockerRunner {
     ) -> Result<ExecOutput, RunnerError> {
         let mut args = vec!["exec".to_string(), "-w".to_string(), workdir.to_string(), handle.id.clone()];
         args.extend(argv.iter().cloned());
-        let (code, out, _err) = docker(args).await?;
+        let (code, out, err) = docker(args).await?;
         Ok(ExecOutput {
             exit_code: code,
             stdout: out.lines().map(str::to_string).collect(),
-            usage: None, // claude stream-json usage parsing lands in Phase 2b
+            stderr: err.lines().map(str::to_string).collect(),
+            usage: None, // claude stream-json usage parsing happens in the driver
         })
     }
 
