@@ -302,9 +302,12 @@ impl<R: Runner, F: Forge> Run<R, F> {
                                     other.cmd_id(), self.phase
                                 ),
                             }), // keep waiting on the same `until`
-                            // Channel closed during backoff wait: no halt can arrive,
-                            // so just proceed to re-exec (not a fatal error here).
-                            Some(None) => break,
+                            // Channel closed (no interactive commands, e.g. run_once):
+                            // no command can interrupt, so just wait out the backoff.
+                            Some(None) => {
+                                tokio::time::sleep_until(until).await;
+                                break;
+                            }
                         }
                     }
                     self.rl_elapsed += delay;
