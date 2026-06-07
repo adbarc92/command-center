@@ -1,6 +1,6 @@
 // Folds the daemon event stream into per-unit view state.
 
-import type { FleetEvent, Phase } from './types';
+import type { FleetEvent, Phase, Snapshot } from './types';
 
 export interface LogLine {
   stream: string;
@@ -20,6 +20,8 @@ export interface Unit {
   phase: Phase;
   history: Phase[];
   cost: number;
+  /** Per-unit USD ceiling (from the snapshot); drives the cost bar. */
+  usdCap: number;
   tokensIn: number;
   tokensOut: number;
   iters: { build: number; check: number; review: number };
@@ -29,11 +31,15 @@ export interface Unit {
   branch?: string;
   pr?: string;
   blocked?: string;
+  /** True while the unit is parked waiting for a concurrency slot. */
+  awaitingSlot: boolean;
   error?: string;
   result?: string;
+  /** Highest event seq folded in, so reconnects replay only what's missing. */
+  lastSeq: number;
 }
 
-export function newUnit(id: string, task: string, tier: string): Unit {
+export function newUnit(id: string, task: string, tier: string, usdCap = 5): Unit {
   return {
     id,
     task,
@@ -41,13 +47,29 @@ export function newUnit(id: string, task: string, tier: string): Unit {
     phase: 'queued',
     history: ['queued'],
     cost: 0,
+    usdCap,
     tokensIn: 0,
     tokensOut: 0,
     iters: { build: 0, check: 0, review: 0 },
     log: [],
     findings: [],
     oracleFiles: [],
+    awaitingSlot: false,
+    lastSeq: 0,
   };
+}
+
+/**
+ * Seed a unit from a persisted snapshot (on cockpit load). `lastSeq` stays 0 so
+ * the WS stream replays the full event log to rebuild the detail view; the
+ * snapshot just gives the tile its phase/cost/cap immediately.
+ */
+export function fromSnapshot(s: Snapshot): Unit {
+  const u = newUnit(s.unit_id, s.task, s.tier.toUpperCase(), s.usd_cap);
+  u.phase = s.phase;
+  u.history = [s.phase];
+  u.cost = s.cost;
+  return u;
 }
 
 const ACTIVE: Phase[] = ['provisioning', 'spec', 'building', 'checking', 'reviewing', 'merge_check', 'pr_open'];
@@ -83,6 +105,7 @@ export function fold(u: Unit, ev: FleetEvent): Unit {
     case 'phase_changed':
       u.phase = ev.to;
       u.history = [...u.history, ev.to];
+      u.awaitingSlot = false; // any phase change means we're no longer queued for a slot
       break;
     case 'oracle_proposed':
       u.oracleFiles = ev.test_files;
@@ -110,6 +133,7 @@ export function fold(u: Unit, ev: FleetEvent): Unit {
       break;
     case 'blocked':
       u.blocked = ev.reason;
+      if (ev.reason === 'awaiting concurrency slot') u.awaitingSlot = true;
       break;
     case 'error':
       u.error = `${ev.scope}: ${ev.detail}`;

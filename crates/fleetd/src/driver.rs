@@ -9,7 +9,9 @@ use fleet_core::{
     gate_met, transition, ArtifactKind, Command, ErrorScope, Event, IterationKind, LogStream,
     Phase, ReviewSnapshot, Trigger,
 };
+use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// An event with its ordering metadata. `ts` is added at the server layer.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -19,28 +21,63 @@ pub struct EventEnvelope {
     pub event: Event,
 }
 
+/// Per-run dependencies, kept in one struct to avoid signature sprawl across the
+/// driver's many call sites.
+pub struct RunCtx {
+    /// Seq to continue from (= units.last_seq on resume, else 0).
+    pub start_seq: u64,
+    /// Cost already spent by prior runs of this unit (continues the budget).
+    pub start_cost: f64,
+    /// True when this is a resumed run (skips the already-frozen oracle).
+    pub resume: bool,
+    /// Phase the driver starts at. `Queued` for a fresh run; `Halted` when
+    /// rehydrating a restart-stranded unit so it parks until a `Resume` command.
+    pub start_phase: Phase,
+    /// Fleet concurrency permits.
+    pub permits: Arc<Semaphore>,
+}
+
+impl RunCtx {
+    /// A standalone context for `run_once` and tests: a fresh run with its own
+    /// single permit.
+    pub fn standalone() -> Self {
+        Self {
+            start_seq: 0,
+            start_cost: 0.0,
+            resume: false,
+            start_phase: Phase::Queued,
+            permits: Arc::new(Semaphore::new(1)),
+        }
+    }
+}
+
 /// Drive a unit to a terminal phase, returning it. `commands` carries inbound
 /// control; `events` receives the outbound stream.
 pub async fn run<R: Runner, F: Forge>(
     runner: R,
     forge: F,
     spec: UnitSpec,
+    ctx: RunCtx,
     commands: UnboundedReceiver<Command>,
     events: UnboundedSender<EventEnvelope>,
 ) -> Phase {
     Run {
         runner,
         forge,
-        phase: Phase::Queued,
-        seq: 0,
+        phase: ctx.start_phase,
+        seq: ctx.start_seq,
         handle: None,
-        cost_usd: 0.0,
+        cost_usd: ctx.start_cost,
         n_build: 0,
         n_check: 0,
         n_review: 0,
         prev_blockers: None,
         pr_url: None,
         started: std::time::Instant::now(),
+        permits: ctx.permits,
+        permit: None,
+        resume: ctx.resume,
+        handle_id: None,
         spec,
         commands,
         events,
@@ -65,6 +102,12 @@ struct Run<R: Runner, F: Forge> {
     prev_blockers: Option<u32>,
     pr_url: Option<String>,
     started: std::time::Instant,
+    permits: Arc<Semaphore>,
+    permit: Option<OwnedSemaphorePermit>,
+    resume: bool,
+    /// Container id retained across pause (when `handle` is cleared) so `abandon`
+    /// can still discard the volume.
+    handle_id: Option<String>,
 }
 
 /// Max mergeability polls before treating the PR as unverifiable.
@@ -195,6 +238,15 @@ impl<R: Runner, F: Forge> Run<R, F> {
 
     async fn drive(mut self) -> Phase {
         loop {
+            // Entry-side cleanup for paused states: stop the container (keeping the
+            // volume for resume) and free the concurrency slot before parking on a
+            // human. Idempotent — runs once per entry since handle/permit are cleared.
+            if matches!(self.phase, Phase::NeedsHuman | Phase::Halted) {
+                if let Some(h) = self.handle.take() {
+                    let _ = self.runner.teardown(&h).await;
+                }
+                self.permit = None;
+            }
             // Wall-clock backstop: an agent that loops/stalls burns time (money)
             // without tripping the per-step USD check. Cap it.
             if self.phase.is_agent_active() && self.over_wall_clock() {
@@ -209,22 +261,43 @@ impl<R: Runner, F: Forge> Run<R, F> {
             match self.phase {
                 Phase::Queued => self.goto(Trigger::Start, None, None),
 
-                Phase::Provisioning => match self.runner.provision(&self.spec).await {
-                    Ok(h) => {
-                        self.handle = Some(h);
-                        self.goto(Trigger::Provisioned, None, None);
-                    }
-                    Err(e) => {
-                        self.emit(Event::Error {
-                            scope: ErrorScope::Docker,
-                            retryable: false,
-                            detail: e.to_string(),
+                Phase::Provisioning => {
+                    // Acquire a concurrency slot before any container/cost exists.
+                    // The wait is visible (Blocked) so the cockpit doesn't show a
+                    // silent hang. Covers both fresh (Queued→) and resume (→) paths.
+                    if self.permit.is_none() {
+                        self.emit(Event::Blocked {
+                            reason: "awaiting concurrency slot".into(),
+                            cap: None,
+                            detail: String::new(),
                         });
-                        self.goto(Trigger::FatalError, Some("provision failed".into()), None);
+                        self.permit =
+                            Some(self.permits.clone().acquire_owned().await.expect("semaphore"));
                     }
-                },
+                    match self.runner.provision(&self.spec).await {
+                        Ok(h) => {
+                            self.handle_id = Some(h.id.clone());
+                            self.handle = Some(h);
+                            self.goto(Trigger::Provisioned, None, None);
+                        }
+                        Err(e) => {
+                            self.emit(Event::Error {
+                                scope: ErrorScope::Docker,
+                                retryable: false,
+                                detail: e.to_string(),
+                            });
+                            self.goto(Trigger::FatalError, Some("provision failed".into()), None);
+                        }
+                    }
+                }
 
                 Phase::Spec => {
+                    // On resume the test set is already frozen in the reused volume;
+                    // don't re-run/re-charge the oracle or re-trigger approval.
+                    if self.resume && self.spec.oracle_frozen {
+                        self.goto(Trigger::OracleFrozen, Some("oracle already frozen".into()), None);
+                        continue;
+                    }
                     if self.check_halt() {
                         continue;
                     }
@@ -246,6 +319,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         self.goto(Trigger::CapBreach, Some("usd cap".into()), None);
                         continue;
                     }
+                    self.spec.oracle_frozen = true; // frozen; resume will skip Spec
                     self.goto(Trigger::OracleFrozen, None, None);
                 }
 
@@ -352,7 +426,7 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     }
                     self.n_review += 1;
                     let round = self.n_review;
-                    let argv = steps::review(self.remaining());
+                    let argv = steps::review(self.remaining(), self.spec.wall_clock_secs);
                     let Some(out) =
                         self.agent_exec(IterationKind::Review, round, LogStream::Agent, &argv).await
                     else {
@@ -452,7 +526,14 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         let cid = cmd.cmd_id().to_string();
                         match cmd {
                             Command::Resume { .. } => self.goto(Trigger::Resume, None, Some(cid)),
-                            Command::Abandon { .. } => self.goto(Trigger::Abandon, None, Some(cid)),
+                            Command::Abandon { .. } => {
+                                // Abandon drops the persisted volume (container is
+                                // already torn down from the pause-entry cleanup).
+                                if let Some(id) = self.handle_id.take() {
+                                    let _ = self.runner.discard(&Handle { id }).await;
+                                }
+                                self.goto(Trigger::Abandon, None, Some(cid));
+                            }
                             Command::Ship { .. } => self.goto(Trigger::Ship, None, Some(cid)),
                             other => self.emit(Event::Error {
                                 scope: ErrorScope::System,
@@ -464,16 +545,23 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     None => self.fail_closed(),
                 },
 
-                Phase::Done | Phase::NoChange | Phase::Failed => {
+                Phase::Done | Phase::NoChange => {
+                    // Success: the result is on the host (PR/bundle); drop the volume.
+                    if let Some(h) = self.handle.clone() {
+                        let _ = self.runner.discard(&h).await;
+                    }
+                    self.permit = None;
+                    let result = if self.phase == Phase::Done { "done" } else { "no_change" };
+                    self.emit(Event::Done { result: result.into() });
+                    return self.phase;
+                }
+                Phase::Failed => {
+                    // Keep the volume for forensics (a failure rarely produced a PR).
                     if let Some(h) = self.handle.clone() {
                         let _ = self.runner.teardown(&h).await;
                     }
-                    let result = match self.phase {
-                        Phase::Done => "done",
-                        Phase::NoChange => "no_change",
-                        _ => "failed",
-                    };
-                    self.emit(Event::Done { result: result.into() });
+                    self.permit = None;
+                    self.emit(Event::Done { result: "failed".into() });
                     return self.phase;
                 }
             }
@@ -559,6 +647,7 @@ mod tests {
             base_branch: "main".into(),
             branch: "agent/u1".into(),
             test_cmd: "npm test".into(),
+            oracle_frozen: false,
         }
     }
 
@@ -605,6 +694,7 @@ mod tests {
             FakeRunner::new(script),
             FakeForge::default(),
             spec(Tier::T1, 100.0, 3),
+            RunCtx::standalone(),
             crx,
             etx,
         )
@@ -627,6 +717,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discard_on_done_not_teardown() {
+        let mut script = vec![FakeRunner::ok(0.01, &["test_a.rs"])]; // oracle
+        script.extend(cycle(0)); // build, check(pass), review(BLOCKERS=0); floor 1
+        let runner = FakeRunner::new(script);
+        let discards = runner.discards.clone();
+        let teardowns = runner.teardowns.clone();
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, _erx) = mpsc::unbounded_channel();
+        drop(ctx);
+        let phase = run(
+            runner,
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        )
+        .await;
+        assert_eq!(phase, Phase::Done);
+        assert_eq!(discards.load(std::sync::atomic::Ordering::Relaxed), 1, "Done discards the volume");
+        assert_eq!(teardowns.load(std::sync::atomic::Ordering::Relaxed), 0, "Done keeps no volume");
+    }
+
+    #[tokio::test]
+    async fn resume_skips_oracle_and_continues_cost_and_seq() {
+        // A resumed unit: the oracle is already frozen, so the script has NO
+        // oracle call — just one build/check/review cycle (floor 1 opens the gate).
+        let script = cycle(0);
+        let (ctx_tx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        drop(ctx_tx);
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let mut s = spec(Tier::T1, 100.0, 1);
+        s.oracle_frozen = true;
+
+        let final_phase = run(
+            FakeRunner::new(script),
+            FakeForge::default(),
+            s,
+            RunCtx {
+                start_seq: 5,
+                start_cost: 0.5,
+                resume: true,
+                start_phase: Phase::Queued,
+                permits: permits.clone(),
+            },
+            crx,
+            etx,
+        )
+        .await;
+
+        assert_eq!(final_phase, Phase::Done);
+        let evs = drain(&mut erx);
+        // (a) the oracle was NOT re-run on resume
+        assert!(
+            !evs.iter().any(|e| matches!(e.event, Event::OracleProposed { .. })),
+            "resume must not re-run the oracle"
+        );
+        // (b) seq continues from start_seq (first emitted event has seq > 5)
+        assert!(evs.first().unwrap().seq > 5, "seq must continue from start_seq");
+        // (c) cost continues from start_cost (a metric reflects >= 0.5)
+        let max_cost = evs
+            .iter()
+            .filter_map(|e| match e.event {
+                Event::Metric { cost_usd, .. } => Some(cost_usd),
+                _ => None,
+            })
+            .fold(0.0, f64::max);
+        assert!(max_cost >= 0.5, "cost must continue from start_cost, got {max_cost}");
+        // (d) the permit is released once the unit finishes
+        assert_eq!(permits.available_permits(), 1, "permit released at terminal");
+    }
+
+    #[tokio::test]
+    async fn driver_waits_for_a_concurrency_slot() {
+        // One slot, already taken: the driver must announce the wait (Blocked) and
+        // must NOT provision until the slot frees — the concurrency guarantee.
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let held = permits.clone().acquire_owned().await.unwrap();
+
+        let mut s = spec(Tier::T1, 100.0, 1);
+        s.oracle_frozen = true; // resumed unit → script has no oracle call
+        let (ctx_tx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        drop(ctx_tx);
+        let h = tokio::spawn(run(
+            FakeRunner::new(cycle(0)),
+            FakeForge::default(),
+            s,
+            RunCtx {
+                start_seq: 0,
+                start_cost: 0.0,
+                resume: true,
+                start_phase: Phase::Queued,
+                permits: permits.clone(),
+            },
+            crx,
+            etx,
+        ));
+
+        // Drain to the "awaiting concurrency slot" signal; it must not have left
+        // Provisioning (no container/cost) while the only slot is held.
+        loop {
+            let e = erx.recv().await.unwrap();
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == "awaiting concurrency slot") {
+                break;
+            }
+            assert!(
+                !matches!(e.event, Event::PhaseChanged { from: Phase::Provisioning, .. }),
+                "must not leave Provisioning before acquiring a slot"
+            );
+        }
+        assert_eq!(permits.available_permits(), 0, "the only slot is held");
+
+        // Free the slot → the driver acquires it and runs to completion.
+        drop(held);
+        assert_eq!(h.await.unwrap(), Phase::Done);
+        assert_eq!(permits.available_permits(), 1, "permit released at terminal");
+    }
+
+    #[tokio::test]
     async fn empty_diff_routes_to_no_change() {
         // oracle + build + green check, but the branch has no diff vs base.
         let script = vec![
@@ -641,6 +852,7 @@ mod tests {
             FakeRunner::new(script).empty_diff(),
             FakeForge::default(),
             spec(Tier::T1, 100.0, 3),
+            RunCtx::standalone(),
             crx,
             etx,
         )
@@ -660,6 +872,7 @@ mod tests {
             FakeRunner::new(script),
             FakeForge::default(),
             spec(Tier::T2, 100.0, 1),
+            RunCtx::standalone(),
             crx,
             etx,
         ));
@@ -696,6 +909,7 @@ mod tests {
             FakeRunner::new(script),
             FakeForge::default(),
             spec(Tier::T1, 0.5, 3),
+            RunCtx::standalone(),
             crx,
             etx,
         ));
@@ -726,6 +940,7 @@ mod tests {
             FakeRunner::new(script),
             FakeForge::default(),
             spec(Tier::T1, 100.0, 3),
+            RunCtx::standalone(),
             crx,
             etx,
         ));

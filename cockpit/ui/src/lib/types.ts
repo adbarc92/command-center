@@ -39,6 +39,24 @@ export interface Envelope {
   event: FleetEvent;
 }
 
+/** A unit summary from `GET /units` — used to repopulate the fleet on load. */
+export interface Snapshot {
+  unit_id: string;
+  phase: Phase;
+  cost: number;
+  usd_cap: number;
+  tier: string;
+  task: string;
+  last_seq: number;
+}
+
+/** Daemon liveness from `GET /health` — drives the header badges. */
+export interface Health {
+  docker: boolean;
+  anthropic_key: boolean;
+  version: string;
+}
+
 export type CommandName =
   | 'halt'
   | 'resume'

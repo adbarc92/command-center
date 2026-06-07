@@ -38,6 +38,7 @@ async fn full_pipeline_opens_a_real_mergeable_pr() {
         base_branch: "main".into(),
         branch: branch.clone(),
         test_cmd: "node --test".into(),
+        oracle_frozen: false,
     };
 
     let runner = LocalDockerRunner::new("cc-agent:dev");

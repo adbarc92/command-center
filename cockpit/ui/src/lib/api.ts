@@ -1,6 +1,6 @@
 // Thin client for the fleetd HTTP/WS server.
 
-import type { CommandName, Envelope } from './types';
+import type { CommandName, Envelope, Health, Snapshot } from './types';
 
 const BASE: string =
   (import.meta as any).env?.VITE_FLEET_URL ?? 'http://127.0.0.1:8787';
@@ -38,10 +38,31 @@ export async function sendCommand(
   return res.status;
 }
 
-/** Open the event stream for a unit. Returns the socket so callers can close it. */
-export function openStream(unitId: string, onEvent: (e: Envelope) => void): WebSocket {
+/** All known units (persisted), for repopulating the fleet on cockpit load. */
+export async function listUnits(): Promise<Snapshot[]> {
+  const res = await fetch(`${BASE}/units`);
+  if (!res.ok) throw new Error(`list units failed: ${res.status}`);
+  return (await res.json()) as Snapshot[];
+}
+
+/** Daemon liveness (docker + anthropic key + version). */
+export async function health(): Promise<Health> {
+  const res = await fetch(`${BASE}/health`);
+  if (!res.ok) throw new Error(`health failed: ${res.status}`);
+  return (await res.json()) as Health;
+}
+
+/**
+ * Open the event stream for a unit, replaying everything after `sinceSeq` (use 0
+ * for the full log). Returns the socket so callers can close it.
+ */
+export function openStream(
+  unitId: string,
+  sinceSeq: number,
+  onEvent: (e: Envelope) => void,
+): WebSocket {
   const wsBase = BASE.replace(/^http/, 'ws');
-  const ws = new WebSocket(`${wsBase}/units/${unitId}/stream`);
+  const ws = new WebSocket(`${wsBase}/units/${unitId}/stream?since=${sinceSeq}`);
   ws.onmessage = (msg) => {
     try {
       onEvent(JSON.parse(msg.data) as Envelope);

@@ -96,11 +96,12 @@ pub fn transition(phase: Phase, tier: Tier, trigger: Trigger) -> Option<Phase> {
         (PrOpen, PrMergeable) => Done,
         (PrOpen, PrDirty) => NeedsHuman,
 
-        // Human re-entry.
-        (NeedsHuman, Resume) => Building,
+        // Human re-entry. Resume re-provisions (the paused container was torn
+        // down; provision reuses the persisted volume) before continuing.
+        (NeedsHuman, Resume) => Provisioning,
         (NeedsHuman, Abandon) => Failed,
         (NeedsHuman, Ship) => PrOpen,
-        (Halted, Resume) => Building,
+        (Halted, Resume) => Provisioning,
         (Halted, Abandon) => Failed,
 
         // Anything else is invalid in this phase.
@@ -235,7 +236,14 @@ mod tests {
     #[test]
     fn halt_and_resume_round_trip() {
         assert_eq!(transition(Building, Tier::T1, Trigger::Halt), Some(Halted));
-        assert_eq!(transition(Halted, Tier::T1, Trigger::Resume), Some(Building));
+        // Resume re-provisions (reuses the volume) before re-entering the loop.
+        assert_eq!(transition(Halted, Tier::T1, Trigger::Resume), Some(Provisioning));
+    }
+
+    #[test]
+    fn resume_goes_to_provisioning_not_building() {
+        assert_eq!(transition(NeedsHuman, Tier::T1, Trigger::Resume), Some(Provisioning));
+        assert_eq!(transition(Halted, Tier::T1, Trigger::Resume), Some(Provisioning));
     }
 
     #[test]

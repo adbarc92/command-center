@@ -6,13 +6,19 @@ use crate::runner::{ExecOutput, Handle, Liveness, Runner, RunnerError, UnitSpec,
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// A `Runner` that replays scripted `ExecOutput`s in order, ignoring argv.
 pub struct FakeRunner {
     scripted: Mutex<VecDeque<ExecOutput>>,
     health: Liveness,
     has_diff: bool,
+    /// Shared call counters (clone before moving the runner into `run`).
+    pub teardowns: Arc<AtomicUsize>,
+    pub discards: Arc<AtomicUsize>,
+    /// Unit-ids returned by `list_unit_containers` (for reconciliation tests).
+    unit_containers: Vec<String>,
 }
 
 impl FakeRunner {
@@ -22,6 +28,9 @@ impl FakeRunner {
             scripted: Mutex::new(script.into()),
             health: Liveness::Alive,
             has_diff: true,
+            teardowns: Arc::new(AtomicUsize::new(0)),
+            discards: Arc::new(AtomicUsize::new(0)),
+            unit_containers: Vec::new(),
         }
     }
 
@@ -69,6 +78,10 @@ impl Runner for FakeRunner {
         Ok(self.health)
     }
 
+    async fn list_unit_containers(&self) -> Result<Vec<String>, RunnerError> {
+        Ok(self.unit_containers.clone())
+    }
+
     async fn commit_all(&self, _handle: &Handle, _message: &str) -> Result<bool, RunnerError> {
         Ok(true)
     }
@@ -82,6 +95,17 @@ impl Runner for FakeRunner {
     }
 
     async fn teardown(&self, _handle: &Handle) -> Result<(), RunnerError> {
+        self.teardowns.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn discard(&self, _handle: &Handle) -> Result<(), RunnerError> {
+        self.discards.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn reap_unit(&self, _unit_id: &str) -> Result<(), RunnerError> {
+        self.teardowns.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }

@@ -1,12 +1,42 @@
 <script lang="ts">
-  import { createMission, sendCommand, openStream, FLEET_BASE } from './lib/api';
-  import { fold, newUnit, phaseClass, progress, isTerminal, type Unit } from './lib/fleet';
-  import type { CommandName, Envelope } from './lib/types';
+  import { onMount } from 'svelte';
+  import { createMission, sendCommand, openStream, listUnits, health, FLEET_BASE } from './lib/api';
+  import { fold, fromSnapshot, newUnit, phaseClass, progress, isTerminal, type Unit } from './lib/fleet';
+  import type { CommandName, Envelope, Health } from './lib/types';
 
   let units = $state<Record<string, Unit>>({});
   let order = $state<string[]>([]);
   let selectedId = $state<string | null>(null);
+  let daemon = $state<Health | null>(null);
   const sockets: Record<string, WebSocket> = {};
+
+  // On load, repopulate the fleet from the daemon (units survive reloads/restarts)
+  // and reconnect a stream to each, replaying its full event log.
+  onMount(() => {
+    void reconnect();
+    return () => Object.values(sockets).forEach((s) => s.close());
+  });
+
+  async function reconnect() {
+    try {
+      daemon = await health();
+    } catch {
+      daemon = null;
+    }
+    let snaps;
+    try {
+      snaps = await listUnits();
+    } catch {
+      return; // daemon unreachable; the header badge already reflects it
+    }
+    for (const s of snaps) {
+      if (units[s.unit_id]) continue;
+      units[s.unit_id] = fromSnapshot(s);
+      order = [...order, s.unit_id];
+      sockets[s.unit_id] = openStream(s.unit_id, 0, (e) => onEvt(s.unit_id, e));
+    }
+    if (!selectedId && order.length) selectedId = order[0];
+  }
 
   // ── new-mission form ─────────────────────────────────────────────
   let task = $state('Add a function sum(a, b) in src/index.js (module.exports.sum) returning a + b.');
@@ -24,7 +54,10 @@
   function onEvt(id: string, e: Envelope) {
     const prev = units[id];
     if (!prev) return;
-    units[id] = fold({ ...prev }, e.event);
+    if (e.seq <= prev.lastSeq) return; // dedup replayed/overlapping frames
+    const next = fold({ ...prev }, e.event);
+    next.lastSeq = e.seq;
+    units[id] = next;
   }
 
   async function launch() {
@@ -35,7 +68,7 @@
       units[id] = newUnit(id, task, tier.toUpperCase());
       order = [id, ...order];
       selectedId = id;
-      sockets[id] = openStream(id, (e) => onEvt(id, e));
+      sockets[id] = openStream(id, 0, (e) => onEvt(id, e));
     } catch (err) {
       launchErr = String(err);
     } finally {
@@ -84,6 +117,14 @@
       <div class="stat"><b class="disp">{activeCount}</b><span>ACTIVE</span></div>
       <div class="stat"><b class="disp">{list.length}</b><span>UNITS</span></div>
       <div class="stat"><b class="disp">${totalBurn.toFixed(2)}</b><span>BURN</span></div>
+      <div class="badges mono">
+        <span class="hb" class:ok={daemon?.docker} class:bad={daemon && !daemon.docker} title="Docker daemon">
+          ◉ DOCKER
+        </span>
+        <span class="hb" class:ok={daemon?.anthropic_key} class:bad={daemon && !daemon.anthropic_key} title="ANTHROPIC_API_KEY set">
+          ◉ KEY
+        </span>
+      </div>
       <div class="conn mono" title={FLEET_BASE}>◉ {FLEET_BASE.replace(/^https?:\/\//, '')}</div>
     </div>
   </header>
@@ -141,12 +182,16 @@
               <div class="tile-top">
                 <span class="uid mono">{u.id}</span>
                 <span class="tier disp">{u.tier}</span>
+                {#if u.awaitingSlot}<span class="slot disp" title="waiting for a concurrency slot">◷ SLOT</span>{/if}
                 <span class="badge disp {phaseClass(u.phase)}">{PHASE_LABEL[u.phase] ?? u.phase}</span>
               </div>
               <div class="task">{u.task}</div>
               <div class="rail"><i style="width:{progress(u.phase) * 100}%"></i></div>
+              <div class="cbar" title="${u.cost.toFixed(3)} of ${u.usdCap.toFixed(2)} cap">
+                <i class:hot={u.cost >= u.usdCap} style="width:{Math.min(1, u.usdCap > 0 ? u.cost / u.usdCap : 0) * 100}%"></i>
+              </div>
               <div class="meters mono">
-                <span>${u.cost.toFixed(3)}</span>
+                <span>${u.cost.toFixed(3)} / ${u.usdCap.toFixed(0)}</span>
                 <span>{((u.tokensIn + u.tokensOut) / 1000).toFixed(1)}k tok</span>
                 <span>r{u.iters.review} · b{u.iters.build}</span>
               </div>
@@ -230,6 +275,10 @@
   .stat b { font-size: 18px; color: var(--cyan); font-weight: 700; }
   .stat span { font-size: 9px; letter-spacing: 1.5px; color: var(--text-faint); margin-top: 3px; }
   .conn { font-size: 11px; color: var(--green); letter-spacing: 0.5px; }
+  .badges { display: flex; gap: 8px; }
+  .hb { font-size: 10px; letter-spacing: 1px; color: var(--text-faint); border: 1px solid var(--line-2); padding: 2px 6px; border-radius: 2px; }
+  .hb.ok { color: var(--green); border-color: rgba(53, 208, 127, 0.4); }
+  .hb.bad { color: var(--red); border-color: rgba(255, 93, 108, 0.45); }
 
   .grid { flex: 1; display: grid; grid-template-columns: 300px 1fr 360px; min-height: 0; }
   .panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
@@ -298,6 +347,10 @@
   .task { font-size: 12px; color: var(--text-dim); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .rail { height: 3px; background: var(--bg); border-radius: 2px; overflow: hidden; }
   .rail i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan-dim), var(--cyan)); transition: width 0.4s ease; }
+  .cbar { height: 4px; background: var(--bg); border: 1px solid var(--line-1); border-radius: 2px; overflow: hidden; }
+  .cbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--green), var(--amber)); transition: width 0.4s ease; }
+  .cbar i.hot { background: var(--red); }
+  .slot { font-size: 9.5px; letter-spacing: 1px; color: var(--amber); border: 1px solid rgba(240, 180, 41, 0.4); padding: 1px 5px; border-radius: 2px; }
   .meters { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-faint); }
 
   .dhead { display: flex; align-items: center; gap: 10px; }
