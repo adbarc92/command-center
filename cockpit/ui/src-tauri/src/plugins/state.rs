@@ -81,6 +81,17 @@ pub fn run_start_sequence(
     StartOutcome::Healthy { owned: true }
 }
 
+/// If the owned child has exited, emit `error` and return true. The caller is
+/// responsible for destroying the kept-alive webview on a true return (§4).
+pub fn check_crash(plugin_id: &str, child_id: u64, spawner: &dyn Spawner, sink: &dyn EventSink) -> bool {
+    if spawner.has_exited(child_id) {
+        sink.emit_state(plugin_id, ERROR);
+        true
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +179,24 @@ mod tests {
             &probe, &spawner, &FakeClock::default(), &sink, /*images_present=*/false);
         assert!(matches!(out, StartOutcome::Error(_)));
         assert_eq!(sink.states.lock().unwrap()[0].1, "building");
+    }
+
+    #[test]
+    fn crash_while_healthy_transitions_to_error() {
+        let spawner = FakeSpawner { start_child_id: 7, build_exit: 0, exited: Mutex::new(true) };
+        let sink = RecordingSink::default();
+        // Given an owned, healthy plugin whose child has exited, the watcher flips to error.
+        let flipped = check_crash(&"audience".to_string(), 7, &spawner, &sink);
+        assert!(flipped);
+        assert_eq!(sink.states.lock().unwrap().last().unwrap().1, "error");
+    }
+
+    #[test]
+    fn no_crash_when_child_alive() {
+        let spawner = FakeSpawner { start_child_id: 7, build_exit: 0, exited: Mutex::new(false) };
+        let sink = RecordingSink::default();
+        let flipped = check_crash(&"audience".to_string(), 7, &spawner, &sink);
+        assert!(!flipped);
+        assert!(sink.states.lock().unwrap().is_empty());
     }
 }
