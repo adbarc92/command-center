@@ -12,7 +12,7 @@ pub const ERROR: &str = "error";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum StartOutcome {
-    Healthy { owned: bool },
+    Healthy { owned: bool, child_id: Option<u64> },
     Error(String),
 }
 
@@ -59,12 +59,12 @@ pub fn run_start_sequence(
     // Step 1: adopt check — both probes already up → adopt (not owned)
     if both_probes_pass(m, probe) {
         sink.emit_state(&m.id, HEALTHY);
-        return StartOutcome::Healthy { owned: false };
+        return StartOutcome::Healthy { owned: false, child_id: None };
     }
 
     // Step 2: spawn start (owned)
     sink.emit_state(&m.id, STARTING);
-    let _child = spawner.spawn(&m.lifecycle.start, &cwd, &m.lifecycle.env);
+    let child_id = spawner.spawn(&m.lifecycle.start, &cwd, &m.lifecycle.env);
 
     // Step 3: health then ready
     sink.emit_state(&m.id, HEALTH_PROBING);
@@ -78,7 +78,7 @@ pub fn run_start_sequence(
 
     // Step 4: healthy
     sink.emit_state(&m.id, HEALTHY);
-    StartOutcome::Healthy { owned: true }
+    StartOutcome::Healthy { owned: true, child_id: Some(child_id) }
 }
 
 /// If the owned child has exited, emit `error` and return true. The caller is
@@ -123,7 +123,7 @@ mod tests {
         let outcome = run_start_sequence(&manifest(), std::path::Path::new("/x"),
             &probe, &spawner, &clock, &sink, /*images_present=*/false);
 
-        assert_eq!(outcome, StartOutcome::Healthy { owned: true });
+        assert_eq!(outcome, StartOutcome::Healthy { owned: true, child_id: Some(7) });
         let states: Vec<String> = sink.states.lock().unwrap().iter().map(|(_, s)| s.clone()).collect();
         assert_eq!(states, vec!["building","starting","health-probing","ready-probing","healthy"]);
     }
@@ -137,7 +137,7 @@ mod tests {
         let spawner = FakeSpawner { start_child_id: 7, build_exit: 0, exited: Mutex::new(false) };
         let out = run_start_sequence(&manifest(), std::path::Path::new("/x"),
             &probe, &spawner, &FakeClock::default(), &RecordingSink::default(), /*images_present=*/true);
-        assert_eq!(out, StartOutcome::Healthy { owned: false });
+        assert_eq!(out, StartOutcome::Healthy { owned: false, child_id: None });
     }
 
     #[test]
@@ -151,7 +151,7 @@ mod tests {
         let sink = RecordingSink::default();
         let out = run_start_sequence(&manifest(), std::path::Path::new("/x"),
             &probe, &spawner, &FakeClock::default(), &sink, true);
-        assert_eq!(out, StartOutcome::Healthy { owned: true }); // spawned → owned
+        assert_eq!(out, StartOutcome::Healthy { owned: true, child_id: Some(7) }); // spawned → owned
         let states: Vec<String> = sink.states.lock().unwrap().iter().map(|(_, s)| s.clone()).collect();
         assert!(states.contains(&"starting".to_string()));
     }
