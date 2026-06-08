@@ -113,6 +113,7 @@ impl Manifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     const AUDIENCE_JSON: &str = r#"{
       "id": "audience",
@@ -162,7 +163,6 @@ mod tests {
 
     #[test]
     fn resolves_relative_cwd_against_manifest_dir() {
-        use std::path::Path;
         let mut m = Manifest::from_json(AUDIENCE_JSON).unwrap();
         m.lifecycle.cwd = Some("backend".into());
         let resolved = m.resolved_cwd(Path::new("/plugins/audience"));
@@ -171,9 +171,15 @@ mod tests {
 
     #[test]
     fn keeps_absolute_cwd_as_is() {
-        use std::path::Path;
         let m = Manifest::from_json(AUDIENCE_JSON).unwrap(); // cwd is absolute D:/...
         let resolved = m.resolved_cwd(Path::new("/plugins/audience"));
         assert_eq!(resolved, Path::new("D:/MajorProjects/CURRENT/audience"));
+    }
+
+    #[test]
+    fn uses_manifest_dir_when_cwd_is_absent() {
+        let mut m = Manifest::from_json(AUDIENCE_JSON).unwrap();
+        m.lifecycle.cwd = None;
+        assert_eq!(m.resolved_cwd(Path::new("/plugins/audience")), Path::new("/plugins/audience"));
     }
 }
