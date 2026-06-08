@@ -55,4 +55,25 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].manifest.name, "User"); // later root wins on id collision
     }
+
+    #[test]
+    fn skips_unparseable_and_version_refused_manifests() {
+        let tmp = std::env::temp_dir().join("appplugins_disc_skip_test");
+        let _ = fs::remove_dir_all(&tmp);
+        let root = tmp.join("root");
+        for sub in ["good", "garbage", "badversion", "nomanifest"] {
+            fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        let valid = r#"{"id":"good","name":"Good","apiVersion":1,"url":"http://localhost:3000",
+            "lifecycle":{"start":"x","health":{"url":"h"},"ready":{"url":"r"}}}"#;
+        fs::write(root.join("good/app-plugin.json"), valid).unwrap();
+        fs::write(root.join("garbage/app-plugin.json"), "{ not json").unwrap();
+        // parses fine but validate() refuses the unsupported apiVersion → skipped
+        fs::write(root.join("badversion/app-plugin.json"), valid.replace("\"apiVersion\":1", "\"apiVersion\":99").replace("\"id\":\"good\"", "\"id\":\"bad\"")).unwrap();
+        // "nomanifest" dir has no app-plugin.json at all → skipped
+
+        let found = discover(&[root.as_path()]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].manifest.id, "good");
+    }
 }

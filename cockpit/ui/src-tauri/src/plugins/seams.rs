@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 /// One HTTP probe attempt. Returns the status code, or None on connection error.
 pub trait Probe: Send + Sync {
@@ -10,9 +10,12 @@ pub trait Probe: Send + Sync {
 /// the state machine polls and whose exit drives crash→error.
 pub trait Spawner: Send + Sync {
     /// Run a command to completion (build/stop). Ok(code).
-    fn run_to_completion(&self, cmd: &str, cwd: &PathBuf, env: &BTreeMap<String, String>, timeout_ms: u64) -> i32;
+    /// `vars` are interpreted by the impl: for `start`/`stop` they are process
+    /// env; for the build step they are the manifest's `build.args` (which the
+    /// real impl must surface as Docker `--build-arg`, not env — see Phase 4).
+    fn run_to_completion(&self, cmd: &str, cwd: &Path, vars: &BTreeMap<String, String>, timeout_ms: u64) -> i32;
     /// Spawn a long-running command (start). Returns a child id.
-    fn spawn(&self, cmd: &str, cwd: &PathBuf, env: &BTreeMap<String, String>) -> u64;
+    fn spawn(&self, cmd: &str, cwd: &Path, env: &BTreeMap<String, String>) -> u64;
     /// Has the spawned child exited? (drives crash→error)
     fn has_exited(&self, child_id: u64) -> bool;
     /// Force-kill a child (teardown fallback).
@@ -64,8 +67,8 @@ pub mod fakes {
         pub exited: Mutex<bool>,
     }
     impl Spawner for FakeSpawner {
-        fn run_to_completion(&self, _c: &str, _w: &PathBuf, _e: &BTreeMap<String, String>, _t: u64) -> i32 { self.build_exit }
-        fn spawn(&self, _c: &str, _w: &PathBuf, _e: &BTreeMap<String, String>) -> u64 { self.start_child_id }
+        fn run_to_completion(&self, _c: &str, _w: &Path, _e: &BTreeMap<String, String>, _t: u64) -> i32 { self.build_exit }
+        fn spawn(&self, _c: &str, _w: &Path, _e: &BTreeMap<String, String>) -> u64 { self.start_child_id }
         fn has_exited(&self, _id: u64) -> bool { *self.exited.lock().unwrap() }
         fn kill(&self, _id: u64) {}
     }

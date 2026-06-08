@@ -171,6 +171,24 @@ mod tests {
     }
 
     #[test]
+    fn ready_timeout_yields_error_after_health_passes() {
+        // health comes up, but ready never does → error on the ready path
+        let probe = ScriptedProbe { responses: Mutex::new(HashMap::from([
+            ("h".to_string(), vec![None, Some(200)]), // adopt(h) down → fall through; health-poll up
+            ("r".to_string(), vec![None]),            // ready never ok → times out
+        ])) };
+        let spawner = FakeSpawner { start_child_id: 7, build_exit: 0, exited: Mutex::new(false) };
+        let sink = RecordingSink::default();
+        let out = run_start_sequence(&manifest(), std::path::Path::new("/x"),
+            &probe, &spawner, &FakeClock::default(), &sink, true);
+        assert!(matches!(out, StartOutcome::Error(_)));
+        let states: Vec<String> = sink.states.lock().unwrap().iter().map(|(_, s)| s.clone()).collect();
+        // it must have gotten past health-probing to ready-probing before erroring
+        assert!(states.contains(&"ready-probing".to_string()));
+        assert_eq!(states.last().unwrap(), "error");
+    }
+
+    #[test]
     fn build_failure_yields_error_before_spawn() {
         let probe = ScriptedProbe { responses: Mutex::new(HashMap::new()) };
         let spawner = FakeSpawner { start_child_id: 7, build_exit: 2, exited: Mutex::new(false) };
