@@ -8,12 +8,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "test": "vitest run",
     "tauri": "tauri",
     "sidecar": "node scripts/build-sidecar.mjs",
     "desktop": "npm run sidecar && tauri dev"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "vitest": "^2.1.0",
     "@tauri-apps/cli": "^2.11.2",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.12.3",
