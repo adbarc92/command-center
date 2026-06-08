@@ -1,3 +1,4 @@
+use tauri::Manager;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
@@ -42,6 +43,14 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                api.prevent_exit();
+                let mgr = app_handle.state::<plugins::manager::PluginManager>();
+                mgr.stop_all_owned(30_000); // total budget; kept under the OS force-kill ceiling
+                app_handle.exit(0);
+            }
+        });
 }
