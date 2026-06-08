@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
@@ -74,6 +75,14 @@ pub enum Popups { #[default] Allow, Block }
 #[serde(rename_all = "kebab-case")]
 pub enum ExternalLinks { #[default] InApp, SystemBrowser }
 
+pub const SUPPORTED_API_VERSIONS: &[u32] = &[1];
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ManifestError {
+    #[error("unsupported apiVersion: {0}")]
+    UnsupportedApiVersion(u32),
+}
+
 impl Manifest {
     pub fn from_json(s: &str) -> Result<Manifest, serde_json::Error> {
         serde_json::from_str(s)
@@ -81,6 +90,23 @@ impl Manifest {
     /// Effective window title (defaults to `name`).
     pub fn window_title(&self) -> String {
         self.webview.title.clone().unwrap_or_else(|| self.name.clone())
+    }
+    pub fn validate(&self) -> Result<(), ManifestError> {
+        if !SUPPORTED_API_VERSIONS.contains(&self.api_version) {
+            return Err(ManifestError::UnsupportedApiVersion(self.api_version));
+        }
+        Ok(())
+    }
+    /// Resolve `lifecycle.cwd` relative to the manifest's own directory;
+    /// absolute paths pass through unchanged. No cwd → manifest dir.
+    pub fn resolved_cwd(&self, manifest_dir: &Path) -> PathBuf {
+        match &self.lifecycle.cwd {
+            None => manifest_dir.to_path_buf(),
+            Some(c) => {
+                let p = Path::new(c);
+                if p.is_absolute() { p.to_path_buf() } else { manifest_dir.join(p) }
+            }
+        }
     }
 }
 
@@ -119,5 +145,35 @@ mod tests {
         assert_eq!(m.webview.popups, Popups::Allow);
         assert_eq!(m.webview.external_links, ExternalLinks::InApp);
         assert_eq!(m.window_title(), "Audience"); // title defaults to name
+    }
+
+    #[test]
+    fn rejects_unknown_api_version() {
+        let json = AUDIENCE_JSON.replace("\"apiVersion\": 1", "\"apiVersion\": 99");
+        let m = Manifest::from_json(&json).unwrap();
+        assert!(matches!(m.validate(), Err(ManifestError::UnsupportedApiVersion(99))));
+    }
+
+    #[test]
+    fn accepts_supported_api_version() {
+        let m = Manifest::from_json(AUDIENCE_JSON).unwrap();
+        assert!(m.validate().is_ok());
+    }
+
+    #[test]
+    fn resolves_relative_cwd_against_manifest_dir() {
+        use std::path::Path;
+        let mut m = Manifest::from_json(AUDIENCE_JSON).unwrap();
+        m.lifecycle.cwd = Some("backend".into());
+        let resolved = m.resolved_cwd(Path::new("/plugins/audience"));
+        assert_eq!(resolved, Path::new("/plugins/audience/backend"));
+    }
+
+    #[test]
+    fn keeps_absolute_cwd_as_is() {
+        use std::path::Path;
+        let m = Manifest::from_json(AUDIENCE_JSON).unwrap(); // cwd is absolute D:/...
+        let resolved = m.resolved_cwd(Path::new("/plugins/audience"));
+        assert_eq!(resolved, Path::new("D:/MajorProjects/CURRENT/audience"));
     }
 }
