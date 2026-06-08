@@ -18,6 +18,8 @@ pub enum StartOutcome {
 
 /// Poll one probe until a status in `ok_status` appears or `timeout` elapses.
 /// Returns true on success, false on timeout. Advances the injected clock.
+/// Probe-first: at least one attempt is always made before the timeout is
+/// checked, so even `timeout == 0` fires exactly one probe before giving up.
 fn poll_until_ok(cfg: &ProbeCfg, probe: &dyn Probe, clock: &dyn Clock) -> bool {
     let start = clock.now_ms();
     loop {
