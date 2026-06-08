@@ -116,4 +116,57 @@ mod tests {
         let states: Vec<String> = sink.states.lock().unwrap().iter().map(|(_, s)| s.clone()).collect();
         assert_eq!(states, vec!["building","starting","health-probing","ready-probing","healthy"]);
     }
+
+    #[test]
+    fn adopts_when_both_probes_already_pass_and_marks_not_owned() {
+        let probe = ScriptedProbe { responses: Mutex::new(HashMap::from([
+            ("h".to_string(), vec![Some(200)]),
+            ("r".to_string(), vec![Some(200)]),
+        ])) };
+        let spawner = FakeSpawner { start_child_id: 7, build_exit: 0, exited: Mutex::new(false) };
+        let out = run_start_sequence(&manifest(), std::path::Path::new("/x"),
+            &probe, &spawner, &FakeClock::default(), &RecordingSink::default(), /*images_present=*/true);
+        assert_eq!(out, StartOutcome::Healthy { owned: false });
+    }
+
+    #[test]
+    fn partial_stack_health_only_falls_through_to_spawn() {
+        // health up, ready down at adopt → must NOT adopt; spawn then both come up
+        let probe = ScriptedProbe { responses: Mutex::new(HashMap::from([
+            ("h".to_string(), vec![Some(200), Some(200)]),       // adopt(h) ok, later health-poll ok
+            ("r".to_string(), vec![None, Some(200)]),            // adopt(r) down → fall through; ready-poll ok
+        ])) };
+        let spawner = FakeSpawner { start_child_id: 7, build_exit: 0, exited: Mutex::new(false) };
+        let sink = RecordingSink::default();
+        let out = run_start_sequence(&manifest(), std::path::Path::new("/x"),
+            &probe, &spawner, &FakeClock::default(), &sink, true);
+        assert_eq!(out, StartOutcome::Healthy { owned: true }); // spawned → owned
+        let states: Vec<String> = sink.states.lock().unwrap().iter().map(|(_, s)| s.clone()).collect();
+        assert!(states.contains(&"starting".to_string()));
+    }
+
+    #[test]
+    fn health_timeout_yields_error() {
+        let probe = ScriptedProbe { responses: Mutex::new(HashMap::from([
+            ("h".to_string(), vec![None]),  // never comes up
+            ("r".to_string(), vec![None]),
+        ])) };
+        let spawner = FakeSpawner { start_child_id: 7, build_exit: 0, exited: Mutex::new(false) };
+        let sink = RecordingSink::default();
+        let out = run_start_sequence(&manifest(), std::path::Path::new("/x"),
+            &probe, &spawner, &FakeClock::default(), &sink, true);
+        assert!(matches!(out, StartOutcome::Error(_)));
+        assert_eq!(sink.states.lock().unwrap().last().unwrap().1, "error");
+    }
+
+    #[test]
+    fn build_failure_yields_error_before_spawn() {
+        let probe = ScriptedProbe { responses: Mutex::new(HashMap::new()) };
+        let spawner = FakeSpawner { start_child_id: 7, build_exit: 2, exited: Mutex::new(false) };
+        let sink = RecordingSink::default();
+        let out = run_start_sequence(&manifest(), std::path::Path::new("/x"),
+            &probe, &spawner, &FakeClock::default(), &sink, /*images_present=*/false);
+        assert!(matches!(out, StartOutcome::Error(_)));
+        assert_eq!(sink.states.lock().unwrap()[0].1, "building");
+    }
 }
