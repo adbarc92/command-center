@@ -20,9 +20,18 @@ pub fn discover(roots: &[&Path]) -> Vec<DiscoveredPlugin> {
         };
         for entry in entries.flatten() {
             let mani_path = entry.path().join("app-plugin.json");
-            let Ok(text) = std::fs::read_to_string(&mani_path) else { continue };
-            let Ok(manifest) = Manifest::from_json(&text) else { continue };
-            if manifest.validate().is_err() { continue }
+            let text = match std::fs::read_to_string(&mani_path) {
+                Ok(t) => t,
+                Err(e) => { log::warn!("app-plugins: skipping {} — unreadable: {e}", mani_path.display()); continue }
+            };
+            let manifest = match Manifest::from_json(&text) {
+                Ok(m) => m,
+                Err(e) => { log::warn!("app-plugins: skipping {} — parse error: {e}", mani_path.display()); continue }
+            };
+            if let Err(e) = manifest.validate() {
+                log::warn!("app-plugins: skipping {} — validation failed: {e}", mani_path.display());
+                continue;
+            }
             by_id.insert(
                 manifest.id.clone(),
                 DiscoveredPlugin { dir: entry.path(), manifest },

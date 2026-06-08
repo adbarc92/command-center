@@ -7,6 +7,11 @@ mod plugins;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .manage(plugins::manager::PluginManager::default())
+        .invoke_handler(tauri::generate_handler![
+            plugins::manager::plugins_list,
+            plugins::manager::plugin_launch,
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
