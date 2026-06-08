@@ -56,7 +56,7 @@ fn default_ok_status() -> Vec<u16> { vec![200] }
 fn default_probe_timeout() -> u64 { 180_000 }
 fn default_probe_interval() -> u64 { 1_000 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct WebviewCfg {
     #[serde(default)]
     pub popups: Popups,
@@ -64,11 +64,6 @@ pub struct WebviewCfg {
     pub external_links: ExternalLinks,
     #[serde(default)]
     pub title: Option<String>,
-}
-impl Default for WebviewCfg {
-    fn default() -> Self {
-        WebviewCfg { popups: Popups::default(), external_links: ExternalLinks::default(), title: None }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
