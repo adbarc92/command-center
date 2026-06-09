@@ -781,7 +781,7 @@ async fn create_swarm(State(st): State<AppState>, Json(req): Json<CreateSwarmReq
         if committed >= st.global_cap {
             return Err((StatusCode::TOO_MANY_REQUESTS, "global daily cost cap reached".into()));
         }
-        let usd_budget = req.usd_budget.unwrap_or_else(|| (st.global_cap - committed).min(15.0).max(0.0));
+        let usd_budget = req.usd_budget.unwrap_or_else(|| (st.global_cap - committed).clamp(0.0, 15.0));
         let row = crate::store::SwarmRow {
             swarm_id: swarm_id.clone(), repo_url, repo_slug, base_branch,
             doc_path: req.doc_path.clone(), tier: phase_tier(req.tier.into()), mode: req.mode.clone(),

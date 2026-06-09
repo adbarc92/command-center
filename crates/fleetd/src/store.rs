@@ -180,15 +180,6 @@ impl Store {
         Ok(max)
     }
 
-    /// Rolling-window global spend (for the admission cost cap).
-    pub fn spend_since(&self, since_ts: i64) -> rusqlite::Result<f64> {
-        self.conn.query_row(
-            "SELECT COALESCE(SUM(cost),0) FROM units WHERE created_ts>=?1",
-            params![since_ts],
-            |r| r.get(0),
-        )
-    }
-
     /// Worst-case committed spend in the rolling window: terminal units count their
     /// final `cost`; non-terminal units count `MAX(usd_cap, cost)` (the driver can
     /// bill a step past the cap before parking, so cost may exceed usd_cap); swarms
@@ -423,7 +414,6 @@ mod tests {
         r.cost = 0.5;
         r.phase = "done".into();
         s.upsert_unit(&r, 1002).unwrap();
-        assert!((s.spend_since(0).unwrap() - 0.5).abs() < 1e-9);
         assert_eq!(s.list_units().unwrap().len(), 1);
         let got = s.get_unit("u1").unwrap().unwrap();
         assert_eq!(got.cost, 0.5);
@@ -458,18 +448,6 @@ mod tests {
         s.append_event("u1", 1, 1, "{}").unwrap();
         s.append_event("u1", 1, 1, "{}").unwrap(); // OR IGNORE → no duplicate
         assert_eq!(s.events_since("u1", 0).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn spend_window_excludes_old_units() {
-        let s = Store::open_memory().unwrap();
-        let mut old = row("old");
-        old.cost = 9.0;
-        s.upsert_unit(&old, 100).unwrap(); // created_ts=100
-        let mut new = row("new");
-        new.cost = 2.0;
-        s.upsert_unit(&new, 1000).unwrap(); // created_ts=1000
-        assert!((s.spend_since(500).unwrap() - 2.0).abs() < 1e-9, "only the new unit counts");
     }
 
     #[test]
