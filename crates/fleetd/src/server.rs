@@ -63,6 +63,9 @@ struct UnitHandle {
 pub struct AppState {
     units: Arc<Mutex<HashMap<String, UnitHandle>>>,
     next_id: Arc<AtomicU64>,
+    /// Monotonic swarm-id counter. Seed fixed at 1 on each start (swarm ids
+    /// need not survive restart-collision the way unit ids do).
+    next_swarm: Arc<AtomicU64>,
     store: Arc<Mutex<Store>>,
     docker: Arc<Mutex<(Instant, bool)>>,
     /// Fleet-wide concurrency slots, shared by every driver (CC_MAX_CONCURRENT).
@@ -89,6 +92,7 @@ impl AppState {
         Self {
             units: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(next)),
+            next_swarm: Arc::new(AtomicU64::new(1)),
             store,
             // Start "stale" so the first /health does a real probe.
             docker: Arc::new(Mutex::new((Instant::now() - Duration::from_secs(60), false))),
@@ -114,6 +118,8 @@ pub fn router(state: AppState) -> Router {
         .route("/units/:id/commands", post(post_command))
         .route("/units/:id/stream", get(ws_stream))
         .route("/health", get(health))
+        .route("/swarms", post(create_swarm).get(list_swarms))
+        .route("/swarms/:id", get(get_swarm))
         .with_state(state)
 }
 
@@ -683,6 +689,143 @@ fn demo_script(spec: &UnitSpec) -> Vec<ExecOutput> {
     s
 }
 
+// ---------------------------------------------------------------------------
+// Swarm endpoints: POST /swarms, GET /swarms, GET /swarms/:id
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+struct CreateSwarmReq {
+    doc_path: String,
+    #[serde(default)] tier: TierReq,
+    #[serde(default = "default_mode")] mode: String,
+    #[serde(default)] max_lanes: Option<u32>,
+    #[serde(default)] usd_budget: Option<f64>,
+    #[serde(default)] per_lane_cap: Option<f64>,
+    #[serde(default = "default_floor")] min_review_rounds: u32,
+    #[serde(default)] repo_url: Option<String>,
+    #[serde(default)] repo_slug: Option<String>,
+    #[serde(default)] base_branch: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreateSwarmResp { swarm_id: String }
+
+async fn create_swarm(State(st): State<AppState>, Json(req): Json<CreateSwarmReq>)
+    -> Result<Json<CreateSwarmResp>, (StatusCode, String)> {
+    // Step 0 — synchronous validation (no 4xx can occur in the spawned task).
+    match req.mode.as_str() {
+        "demo" => {}
+        "real" => {
+            if std::env::var("ANTHROPIC_API_KEY").is_err() {
+                return Err((StatusCode::BAD_REQUEST, "ANTHROPIC_API_KEY not set".into()));
+            }
+            if !docker_ok(&st).await {
+                return Err((StatusCode::SERVICE_UNAVAILABLE, "docker not available".into()));
+            }
+        }
+        other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
+    }
+
+    // Step 1 — committed-spend admission + persist 'planning'.
+    let since = now_ms() - 24 * 3600 * 1000;
+    let lane_cap = req.max_lanes.unwrap_or_else(|| env_usize("CC_MAX_LANES", 8) as u32).max(1);
+    let per_lane_cap = req.per_lane_cap.unwrap_or(5.0);
+    let n = st.next_swarm.fetch_add(1, Ordering::Relaxed);
+    let swarm_id = format!("sw{n}");
+    let repo_url = req.repo_url.unwrap_or_else(|| "https://github.com/adbarc92/command-center-agent-sandbox".into());
+    let repo_slug = req.repo_slug.unwrap_or_else(|| "adbarc92/command-center-agent-sandbox".into());
+    let base_branch = req.base_branch.unwrap_or_else(|| "main".into());
+    let row = {
+        let s = st.store.lock().unwrap();
+        let committed = s.committed_spend(since).unwrap_or(0.0);
+        if committed >= st.global_cap {
+            return Err((StatusCode::TOO_MANY_REQUESTS, "global daily cost cap reached".into()));
+        }
+        let usd_budget = req.usd_budget.unwrap_or_else(|| (st.global_cap - committed).min(15.0).max(0.0));
+        let row = crate::store::SwarmRow {
+            swarm_id: swarm_id.clone(), repo_url, repo_slug, base_branch,
+            doc_path: req.doc_path.clone(), tier: phase_tier(req.tier.into()), mode: req.mode.clone(),
+            lane_cap, usd_budget, per_lane_cap, status: "planning".into(), planner_cost: 0.0,
+            lanes_launched: 0, lanes_dropped: 0, min_review_rounds: req.min_review_rounds.max(1),
+            terminal_reason: None,
+        };
+        s.upsert_swarm(&row, now_ms()).ok();
+        row
+    };
+
+    // Step 2+ — spawn the slow work with mode-selected seams (demo never pays).
+    let st2 = st.clone();
+    let id2 = swarm_id.clone();
+    tokio::spawn(async move {
+        match row.mode.as_str() {
+            "demo" => {
+                use crate::{docsource::FakeDocSource, planner::FakePlanner, swarm::Lane};
+                let lanes = vec![
+                    Lane { title: "Lane One".into(), task: "demo task 1".into(), rationale: "indep".into() },
+                    Lane { title: "Lane Two".into(), task: "demo task 2".into(), rationale: "indep".into() },
+                ];
+                run_swarm(st2, id2, FakePlanner::ok(lanes, 0.01), FakeDocSource::new("# demo spec")).await;
+            }
+            _ => {
+                // Real seams (ClaudePlanner + GitDocSource) land in Task 17.
+                unreachable!("real swarm mode lands in Task 17");
+            }
+        }
+    });
+
+    Ok(Json(CreateSwarmResp { swarm_id }))
+}
+
+#[derive(Serialize)]
+struct SwarmSummary {
+    swarm_id: String, status: String, lanes_launched: u32, lanes_dropped: u32,
+    planner_cost: f64, doc_path: String,
+}
+
+async fn list_swarms(State(st): State<AppState>) -> Json<Vec<SwarmSummary>> {
+    let rows = st.store.lock().unwrap().list_swarms().unwrap_or_default();
+    Json(rows.into_iter().map(|r| SwarmSummary {
+        swarm_id: r.swarm_id, status: r.status, lanes_launched: r.lanes_launched,
+        lanes_dropped: r.lanes_dropped, planner_cost: r.planner_cost, doc_path: r.doc_path,
+    }).collect())
+}
+
+#[derive(Serialize)]
+struct SwarmDetail {
+    swarm_id: String, status: String, planner_cost: f64,
+    lanes_launched: u32, lanes_dropped: u32, awaiting_human: u64,
+    spent_so_far: f64, lanes: Vec<LaneView>, units: Vec<String>,
+}
+#[derive(Serialize)]
+struct LaneView { idx: u32, title: String, decision: String, unit_id: Option<String> }
+
+async fn get_swarm(State(st): State<AppState>, Path(id): Path<String>)
+    -> Result<Json<SwarmDetail>, StatusCode> {
+    let s = st.store.lock().unwrap();
+    let sw = s.get_swarm(&id).ok().flatten().ok_or(StatusCode::NOT_FOUND)?;
+    let lanes = s.lanes_for_swarm(&id).unwrap_or_default();
+    let (total, terminal, awaiting) = s.swarm_rollup(&id).unwrap_or((0, 0, 0));
+    // Computed status: running→done only when every child unit is terminal.
+    let status = if sw.status == "running" && total > 0 && terminal == total {
+        "done".to_string()
+    } else { sw.status.clone() };
+    // "spent so far" = actual child cost + planner cost (NOT reservations).
+    let unit_ids: Vec<String> = lanes.iter().filter_map(|l| l.unit_id.clone()).collect();
+    let mut spent = sw.planner_cost;
+    for uid in &unit_ids {
+        if let Ok(Some(u)) = s.get_unit(uid) { spent += u.cost; }
+    }
+    Ok(Json(SwarmDetail {
+        swarm_id: id, status, planner_cost: sw.planner_cost,
+        lanes_launched: sw.lanes_launched, lanes_dropped: sw.lanes_dropped, awaiting_human: awaiting,
+        spent_so_far: spent,
+        lanes: lanes.iter().map(|l| LaneView {
+            idx: l.idx, title: l.title.clone(), decision: l.decision.clone(), unit_id: l.unit_id.clone(),
+        }).collect(),
+        units: unit_ids,
+    }))
+}
+
 /// Plan → admit → fan out, for an already-persisted `planning` swarm row.
 /// Generic over the seams so tests inject fakes. Each store mutation is a short
 /// sync critical section; the per-lane committed-spend re-check + commit_lane_unit
@@ -1085,6 +1228,21 @@ mod tests {
         state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
         run_swarm(state.clone(), "sw3".into(), FakePlanner::err("boom"), FakeDocSource::new("x")).await;
         assert_eq!(state.store.lock().unwrap().get_swarm("sw3").unwrap().unwrap().status, "failed");
+    }
+
+    #[tokio::test]
+    async fn post_swarms_validates_then_returns_id() {
+        let state = AppState::default();
+        // unknown mode → error, no row created
+        let bad = create_swarm(State(state.clone()), Json(CreateSwarmReq {
+            doc_path: "spec.md".into(), mode: "weird".into(), ..Default::default()
+        })).await;
+        assert!(bad.is_err());
+        // demo → ok, returns an id
+        let ok = create_swarm(State(state.clone()), Json(CreateSwarmReq {
+            doc_path: "spec.md".into(), mode: "demo".into(), ..Default::default()
+        })).await.expect("ok");
+        assert!(ok.0.swarm_id.starts_with("sw"));
     }
 
     #[tokio::test]
