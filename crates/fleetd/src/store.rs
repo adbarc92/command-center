@@ -219,6 +219,99 @@ impl Store {
 
 const SELECT_COLS_ALL: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds,swarm_id FROM units";
 const SELECT_COLS_WHERE_ID: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds,swarm_id FROM units WHERE unit_id=?1";
+const SELECT_SWARM_ALL: &str = "SELECT swarm_id,repo_url,repo_slug,base_branch,doc_path,tier,mode,lane_cap,usd_budget,per_lane_cap,status,planner_cost,lanes_launched,lanes_dropped,min_review_rounds,terminal_reason FROM swarms";
+const SELECT_SWARM_WHERE_ID: &str = "SELECT swarm_id,repo_url,repo_slug,base_branch,doc_path,tier,mode,lane_cap,usd_budget,per_lane_cap,status,planner_cost,lanes_launched,lanes_dropped,min_review_rounds,terminal_reason FROM swarms WHERE swarm_id=?1";
+
+/// Persisted swarm config + mutable projection. `created_ts` set once at insert.
+#[derive(Debug, Clone)]
+pub struct SwarmRow {
+    pub swarm_id: String,
+    pub repo_url: String,
+    pub repo_slug: String,
+    pub base_branch: String,
+    pub doc_path: String,
+    pub tier: String,
+    pub mode: String,
+    pub lane_cap: u32,
+    pub usd_budget: f64,
+    pub per_lane_cap: f64,
+    pub status: String,
+    pub planner_cost: f64,
+    pub lanes_launched: u32,
+    pub lanes_dropped: u32,
+    pub min_review_rounds: u32,
+    pub terminal_reason: Option<String>,
+}
+
+impl Store {
+    pub fn upsert_swarm(&self, r: &SwarmRow, now: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO swarms(swarm_id,repo_url,repo_slug,base_branch,doc_path,tier,mode,
+               lane_cap,usd_budget,per_lane_cap,status,planner_cost,lanes_launched,lanes_dropped,
+               min_review_rounds,terminal_reason,created_ts,updated_ts)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?17)
+             ON CONFLICT(swarm_id) DO UPDATE SET
+               status=?11, planner_cost=?12, lanes_launched=?13, lanes_dropped=?14,
+               terminal_reason=?16, updated_ts=?17",
+            params![r.swarm_id, r.repo_url, r.repo_slug, r.base_branch, r.doc_path, r.tier, r.mode,
+                r.lane_cap, r.usd_budget, r.per_lane_cap, r.status, r.planner_cost,
+                r.lanes_launched, r.lanes_dropped, r.min_review_rounds, r.terminal_reason, now],
+        )?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_swarm(&self, id: &str, status: &str, planner_cost: f64, lanes_launched: u32,
+        lanes_dropped: u32, terminal_reason: Option<&str>, now: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE swarms SET status=?2, planner_cost=?3, lanes_launched=?4, lanes_dropped=?5,
+               terminal_reason=?6, updated_ts=?7 WHERE swarm_id=?1",
+            params![id, status, planner_cost, lanes_launched, lanes_dropped, terminal_reason, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_swarm(&self, id: &str) -> rusqlite::Result<Option<SwarmRow>> {
+        self.conn.query_row(SELECT_SWARM_WHERE_ID, params![id], Self::map_swarm)
+            .map(Some).or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None), other => Err(other),
+            })
+    }
+
+    pub fn list_swarms(&self) -> rusqlite::Result<Vec<SwarmRow>> {
+        let mut s = self.conn.prepare(SELECT_SWARM_ALL)?;
+        let rows = s.query_map([], Self::map_swarm)?;
+        rows.collect()
+    }
+
+    /// (total, terminal, awaiting_human) over a swarm's child units. `awaiting_human`
+    /// = non-terminal parked phases (`needs_human`/`halted`).
+    pub fn swarm_rollup(&self, swarm_id: &str) -> rusqlite::Result<(u64, u64, u64)> {
+        let terminal = fleet_core::TERMINAL_PHASE_STRS
+            .iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT
+               COUNT(*),
+               COALESCE(SUM(CASE WHEN phase IN ({terminal}) THEN 1 ELSE 0 END),0),
+               COALESCE(SUM(CASE WHEN phase IN ('needs_human','halted') THEN 1 ELSE 0 END),0)
+             FROM units WHERE swarm_id=?1"
+        );
+        self.conn.query_row(&sql, params![swarm_id], |r| {
+            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64))
+        })
+    }
+
+    fn map_swarm(r: &rusqlite::Row) -> rusqlite::Result<SwarmRow> {
+        Ok(SwarmRow {
+            swarm_id: r.get(0)?, repo_url: r.get(1)?, repo_slug: r.get(2)?, base_branch: r.get(3)?,
+            doc_path: r.get(4)?, tier: r.get(5)?, mode: r.get(6)?,
+            lane_cap: r.get::<_, i64>(7)? as u32, usd_budget: r.get(8)?, per_lane_cap: r.get(9)?,
+            status: r.get(10)?, planner_cost: r.get(11)?,
+            lanes_launched: r.get::<_, i64>(12)? as u32, lanes_dropped: r.get::<_, i64>(13)? as u32,
+            min_review_rounds: r.get::<_, i64>(14)? as u32, terminal_reason: r.get(15)?,
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -375,5 +468,42 @@ mod tests {
             [],
         ).unwrap();
         assert_eq!(s.committed_spend(500).unwrap(), 0.0, "created before the window is excluded");
+    }
+
+    fn swarm_row(id: &str, status: &str) -> SwarmRow {
+        SwarmRow {
+            swarm_id: id.into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
+            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(),
+            lane_cap: 8, usd_budget: 15.0, per_lane_cap: 5.0, status: status.into(),
+            planner_cost: 0.0, lanes_launched: 0, lanes_dropped: 0, min_review_rounds: 2,
+            terminal_reason: None,
+        }
+    }
+
+    #[test]
+    fn swarm_row_crud_and_list() {
+        let s = Store::open_memory().unwrap();
+        let sw = swarm_row("sw1", "planning");
+        s.upsert_swarm(&sw, 1000).unwrap();
+        assert_eq!(s.get_swarm("sw1").unwrap().unwrap().status, "planning");
+        s.update_swarm("sw1", "running", 0.4, 3, 0, None, 1001).unwrap();
+        let got = s.get_swarm("sw1").unwrap().unwrap();
+        assert_eq!(got.status, "running");
+        assert_eq!(got.planner_cost, 0.4);
+        assert_eq!(got.lanes_launched, 3);
+        assert_eq!(s.list_swarms().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn swarm_rollup_counts_terminal_and_awaiting_human() {
+        let s = Store::open_memory().unwrap();
+        for (id, phase) in [("u1","done"), ("u2","failed"), ("u3","building"), ("u4","needs_human")] {
+            let mut r = row(id); r.phase = phase.into(); r.swarm_id = Some("sw1".into());
+            s.upsert_unit(&r, 1000).unwrap();
+        }
+        let (total, terminal, awaiting) = s.swarm_rollup("sw1").unwrap();
+        assert_eq!(total, 4);
+        assert_eq!(terminal, 2);          // done + failed
+        assert_eq!(awaiting, 1);          // needs_human (halted would also count)
     }
 }
