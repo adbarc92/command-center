@@ -16,10 +16,13 @@
 //! is a future optimization; at single-user scale a brief sync lock per event is
 //! fine (the lock is never held across `.await`).
 
+use crate::docsource::DocSource;
 use crate::driver::{run, EventEnvelope, RunCtx};
 use crate::fake::{FakeForge, FakeRunner};
+use crate::planner::Planner;
 use crate::reconcile::{reconcile, Action};
 use crate::runner::{ExecOutput, Runner, UnitSpec};
+use crate::swarm::{admit_lanes, slug, AdmissionConfig, LaneDecision};
 use crate::store::{Store, UnitRow};
 use axum::{
     extract::{
@@ -200,6 +203,7 @@ fn phase_tier(t: Tier) -> String {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SpawnError {
     /// A driver already exists for this id (register lost the race / id reuse).
     AlreadyRegistered,
@@ -215,8 +219,16 @@ pub fn spawn_unit(st: &AppState, spec: UnitSpec, mode: &str, swarm_id: Option<&s
     let mut row = row_from_spec(&spec, mode);
     row.swarm_id = swarm_id.map(|s| s.to_string());
     st.store.lock().unwrap().upsert_unit(&row, now_ms()).ok();
+    spawn_driver_for(st, spec, mode, &unit_id)?;
+    Ok(unit_id)
+}
 
-    let (cmd_rx, evt_tx) = match register_unit_if_absent(st, &unit_id) {
+/// Register the per-unit handle and spawn its driver. The row must already be
+/// persisted by the caller (create_mission via spawn_unit, or fan-out via
+/// commit_lane_unit). Returns Err if a driver already exists (no double-spawn).
+fn spawn_driver_for(st: &AppState, spec: UnitSpec, mode: &str, unit_id: &str)
+    -> Result<(), SpawnError> {
+    let (cmd_rx, evt_tx) = match register_unit_if_absent(st, unit_id) {
         Some(ch) => ch,
         None => return Err(SpawnError::AlreadyRegistered),
     };
@@ -231,11 +243,10 @@ pub fn spawn_unit(st: &AppState, spec: UnitSpec, mode: &str, swarm_id: Option<&s
             let host_clone = std::env::temp_dir().join(format!("cc-host-{unit_id}"));
             let forge = GhForge::new(spec.repo_url.clone(), spec.repo_slug.clone(),
                 spec.base_branch.clone(), host_clone, format!("command-center SP1: {unit_id}"));
-            let runner = LocalDockerRunner::new("cc-agent:dev");
-            tokio::spawn(run(runner, forge, spec, fresh_ctx(st), cmd_rx, evt_tx));
+            tokio::spawn(run(LocalDockerRunner::new("cc-agent:dev"), forge, spec, fresh_ctx(st), cmd_rx, evt_tx));
         }
     }
-    Ok(unit_id)
+    Ok(())
 }
 
 async fn create_mission(
@@ -280,9 +291,8 @@ async fn create_mission(
         other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
     }
 
-    match spawn_unit(&st, spec, &runner_mode, None) {
-        Ok(_) => {}
-        Err(_) => return Err((StatusCode::CONFLICT, "unit already exists".into())),
+    if spawn_unit(&st, spec, &runner_mode, None).is_err() {
+        return Err((StatusCode::CONFLICT, "unit already exists".into()));
     }
 
     Ok(Json(CreateResp { unit_id }))
@@ -673,6 +683,111 @@ fn demo_script(spec: &UnitSpec) -> Vec<ExecOutput> {
     s
 }
 
+/// Plan → admit → fan out, for an already-persisted `planning` swarm row.
+/// Generic over the seams so tests inject fakes. Each store mutation is a short
+/// sync critical section; the per-lane committed-spend re-check + commit_lane_unit
+/// is the admission critical section (P2).
+pub async fn run_swarm<P: Planner, D: DocSource>(st: AppState, swarm_id: String, planner: P, doc: D) {
+    let Some(sw) = st.store.lock().unwrap().get_swarm(&swarm_id).ok().flatten() else { return };
+
+    // 2. Plan (read doc, then decompose).
+    let doc_text = match doc.read(&sw.repo_url, &sw.base_branch, &sw.doc_path).await {
+        Ok(t) => t,
+        Err(e) => return fail_swarm(&st, &swarm_id, sw.planner_cost, &format!("doc: {e}")),
+    };
+    let outcome = match planner.plan(&doc_text, sw.lane_cap as usize).await {
+        Ok(o) => o,
+        Err(e) => return fail_swarm(&st, &swarm_id, 0.0, &format!("planner: {e}")),
+    };
+    st.store.lock().unwrap()
+        .update_swarm(&swarm_id, "planning", outcome.cost_usd, 0, 0, None, now_ms()).ok();
+    if outcome.lanes.is_empty() {
+        return fail_swarm(&st, &swarm_id, outcome.cost_usd, "planner returned zero lanes");
+    }
+
+    // 3. Admit (pure) + persist every lane's decision.
+    let cfg = AdmissionConfig {
+        lane_cap: sw.lane_cap as usize, usd_budget: sw.usd_budget,
+        per_lane_cap: sw.per_lane_cap, planner_cost: outcome.cost_usd,
+    };
+    let decisions = admit_lanes(&outcome.lanes, &cfg);
+    let mut dropped = 0u32;
+    for (i, d) in &decisions {
+        let lane = &outcome.lanes[*i];
+        let dstr = match d {
+            LaneDecision::Admit => "admit",
+            LaneDecision::DropOverLaneCap => "drop_lane_cap",
+            LaneDecision::DropOverBudget => "drop_budget",
+        };
+        if !matches!(d, LaneDecision::Admit) { dropped += 1; }
+        st.store.lock().unwrap()
+            .upsert_lane(&swarm_id, *i as u32, &lane.title, &lane.task, &lane.rationale, dstr, None).ok();
+    }
+    let admitted_idxs: Vec<usize> = decisions.iter()
+        .filter(|(_, d)| matches!(d, LaneDecision::Admit)).map(|(i, _)| *i).collect();
+    if admitted_idxs.is_empty() {
+        st.store.lock().unwrap()
+            .update_swarm(&swarm_id, "empty", outcome.cost_usd, 0, dropped, Some("no lanes admitted"), now_ms()).ok();
+        return;
+    }
+
+    // 4. Fan out (idempotent per-lane).
+    st.store.lock().unwrap()
+        .update_swarm(&swarm_id, "fanning_out", outcome.cost_usd, 0, dropped, None, now_ms()).ok();
+    let since = now_ms() - 24 * 3600 * 1000;
+    let mut launched = 0u32;
+    for idx in admitted_idxs {
+        let lane = &outcome.lanes[idx];
+        let unit_id = {
+            // Admission critical section: re-check committed spend, mint id, commit row+link.
+            let s = st.store.lock().unwrap();
+            if s.committed_spend(since).unwrap_or(0.0) >= st.global_cap {
+                s.upsert_lane(&swarm_id, idx as u32, &lane.title, &lane.task, &lane.rationale,
+                    "drop_global_cap", None).ok();
+                dropped += 1;
+                break;
+            }
+            let n = st.next_id.fetch_add(1, Ordering::Relaxed);
+            let unit_id = format!("u{n}");
+            let spec = lane_spec(&sw, &unit_id, idx, lane);
+            let mut row = row_from_spec(&spec, &sw.mode);
+            row.swarm_id = Some(swarm_id.clone());
+            s.commit_lane_unit(&swarm_id, idx as u32, &row, now_ms()).ok();
+            unit_id
+        };
+        // Spawn the driver outside the lock; the row already exists.
+        let spec = lane_spec(&sw, &unit_id, idx, lane);
+        if spawn_driver_for(&st, spec, &sw.mode, &unit_id).is_ok() {
+            launched += 1;
+        }
+    }
+    st.store.lock().unwrap()
+        .update_swarm(&swarm_id, "running", outcome.cost_usd, launched, dropped, None, now_ms()).ok();
+}
+
+fn fail_swarm(st: &AppState, swarm_id: &str, planner_cost: f64, reason: &str) {
+    st.store.lock().unwrap()
+        .update_swarm(swarm_id, "failed", planner_cost, 0, 0, Some(reason), now_ms()).ok();
+}
+
+/// Build a lane's UnitSpec from the swarm config.
+fn lane_spec(sw: &crate::store::SwarmRow, unit_id: &str, idx: usize, lane: &crate::swarm::Lane) -> UnitSpec {
+    UnitSpec {
+        unit_id: unit_id.into(),
+        tier: parse_tier(&sw.tier),
+        task: lane.task.clone(),
+        usd_cap: sw.per_lane_cap,
+        wall_clock_secs: 1800,
+        gate: GateConfig { min_review_rounds: sw.min_review_rounds.max(1) },
+        repo_url: sw.repo_url.clone(),
+        repo_slug: sw.repo_slug.clone(),
+        base_branch: sw.base_branch.clone(),
+        branch: format!("agent/{}/{}-{}", sw.swarm_id, idx, slug(&lane.title)),
+        test_cmd: "node --test".into(),
+        oracle_frozen: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,5 +1002,84 @@ mod tests {
             oracle_frozen: false,
         };
         assert_eq!(demo_script(&spec).len(), 7);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn run_swarm_fans_out_admitted_lanes_to_done() {
+        use crate::docsource::FakeDocSource;
+        use crate::planner::FakePlanner;
+        use crate::swarm::Lane;
+
+        let state = AppState::default();
+        let sw = crate::store::SwarmRow {
+            swarm_id: "sw1".into(), repo_url: "https://github.com/x/y".into(), repo_slug: "x/y".into(),
+            base_branch: "main".into(), doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(),
+            lane_cap: 8, usd_budget: 100.0, per_lane_cap: 5.0, status: "planning".into(),
+            planner_cost: 0.0, lanes_launched: 0, lanes_dropped: 0, min_review_rounds: 1,
+            terminal_reason: None,
+        };
+        state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
+
+        let lanes = vec![
+            Lane { title: "Add A".into(), task: "do A".into(), rationale: "indep".into() },
+            Lane { title: "Add B".into(), task: "do B".into(), rationale: "indep".into() },
+        ];
+        let planner = FakePlanner::ok(lanes, 0.2);
+        let doc = FakeDocSource::new("# spec");
+
+        run_swarm(state.clone(), "sw1".into(), planner, doc).await;
+
+        let units = state.store.lock().unwrap().list_units().unwrap();
+        let mine: Vec<_> = units.iter().filter(|u| u.swarm_id.as_deref() == Some("sw1")).cloned().collect();
+        assert_eq!(mine.len(), 2);
+        assert!(mine.iter().all(|u| (u.usd_cap - 5.0).abs() < 1e-9));
+        let branches: std::collections::HashSet<_> = mine.iter().map(|u| u.branch.clone()).collect();
+        assert_eq!(branches.len(), 2, "unique branches");
+        assert!(branches.iter().all(|b| b.starts_with("agent/sw1/")));
+
+        let mut done = false;
+        for _ in 0..200 {
+            let (total, term, _) = state.store.lock().unwrap().swarm_rollup("sw1").unwrap();
+            if total == 2 && term == 2 { done = true; break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(done, "all lanes reached terminal");
+        assert_eq!(state.store.lock().unwrap().get_swarm("sw1").unwrap().unwrap().status, "running");
+    }
+
+    #[tokio::test]
+    async fn run_swarm_zero_admitted_is_empty_not_done() {
+        use crate::docsource::FakeDocSource;
+        use crate::planner::FakePlanner;
+        use crate::swarm::Lane;
+        let state = AppState::default();
+        let sw = crate::store::SwarmRow {
+            swarm_id: "sw2".into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
+            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(),
+            lane_cap: 8, usd_budget: 1.0, per_lane_cap: 5.0, status: "planning".into(),
+            planner_cost: 0.0, lanes_launched: 0, lanes_dropped: 0, min_review_rounds: 1,
+            terminal_reason: None,
+        };
+        state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
+        let planner = FakePlanner::ok(vec![Lane { title: "A".into(), task: "a".into(), rationale: "r".into() }], 0.0);
+        run_swarm(state.clone(), "sw2".into(), planner, FakeDocSource::new("# spec")).await;
+        let got = state.store.lock().unwrap().get_swarm("sw2").unwrap().unwrap();
+        assert_eq!(got.status, "empty", "lanes produced but none admitted ⇒ empty, never done");
+    }
+
+    #[tokio::test]
+    async fn run_swarm_planner_error_is_failed() {
+        use crate::docsource::FakeDocSource;
+        use crate::planner::FakePlanner;
+        let state = AppState::default();
+        let sw = crate::store::SwarmRow {
+            swarm_id: "sw3".into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
+            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(), lane_cap: 8, usd_budget: 15.0,
+            per_lane_cap: 5.0, status: "planning".into(), planner_cost: 0.0, lanes_launched: 0,
+            lanes_dropped: 0, min_review_rounds: 1, terminal_reason: None,
+        };
+        state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
+        run_swarm(state.clone(), "sw3".into(), FakePlanner::err("boom"), FakeDocSource::new("x")).await;
+        assert_eq!(state.store.lock().unwrap().get_swarm("sw3").unwrap().unwrap().status, "failed");
     }
 }
