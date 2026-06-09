@@ -206,7 +206,7 @@ async fn create_mission(
     // Admission-only global cap: refuse a new mission once rolling-24h spend has
     // hit the ceiling. Read fresh each admission (low frequency; no shared atomic).
     let since = now_ms() - 24 * 3600 * 1000;
-    let spent = st.store.lock().unwrap().spend_since(since).unwrap_or(0.0);
+    let spent = st.store.lock().unwrap().committed_spend(since).unwrap_or(0.0);
     if spent >= st.global_cap {
         return Err((StatusCode::TOO_MANY_REQUESTS, "global daily cost cap reached".into()));
     }
@@ -814,6 +814,29 @@ mod tests {
         // Fresh allocation must not collide with u5.
         let n = state.next_id.fetch_add(1, Ordering::Relaxed);
         assert_eq!(n, 6, "next mint is u6, never an existing id");
+    }
+
+    #[tokio::test]
+    async fn create_mission_refused_when_committed_reservations_breach_cap() {
+        // A single NON-TERMINAL unit reserving > $20 must block a new mission, even
+        // though its recorded cost is small — committed_spend counts the reservation.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            let mut r = building_row("rsv");
+            r.phase = "building".into(); // non-terminal
+            r.cost = 0.1;
+            r.usd_cap = 25.0;            // reservation alone exceeds the $20 cap
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let state = AppState::new(store);
+        let resp = create_mission(State(state), Json(CreateReq {
+            task: "t".into(), tier: TierReq::T1, mode: "demo".into(), min_review_rounds: 1,
+        })).await;
+        match resp {
+            Err((code, _)) => assert_eq!(code, StatusCode::TOO_MANY_REQUESTS),
+            Ok(_) => panic!("expected 429 — committed reservation breaches the cap"),
+        }
     }
 
     #[test]
