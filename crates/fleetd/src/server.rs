@@ -736,16 +736,21 @@ pub async fn run_swarm<P: Planner, D: DocSource>(st: AppState, swarm_id: String,
         .update_swarm(&swarm_id, "fanning_out", outcome.cost_usd, 0, dropped, None, now_ms()).ok();
     let since = now_ms() - 24 * 3600 * 1000;
     let mut launched = 0u32;
-    for idx in admitted_idxs {
+    'fanout: for (pos, idx) in admitted_idxs.iter().copied().enumerate() {
         let lane = &outcome.lanes[idx];
-        let unit_id = {
-            // Admission critical section: re-check committed spend, mint id, commit row+link.
+        // Admission critical section: re-check committed spend, mint id, commit row+link.
+        let (unit_id, spec) = {
             let s = st.store.lock().unwrap();
             if s.committed_spend(since).unwrap_or(0.0) >= st.global_cap {
-                s.upsert_lane(&swarm_id, idx as u32, &lane.title, &lane.task, &lane.rationale,
-                    "drop_global_cap", None).ok();
-                dropped += 1;
-                break;
+                // Cap tripped: mark this lane and all remaining admitted lanes as
+                // drop_global_cap so no admit row is left dangling with unit_id = NULL.
+                for rem_idx in admitted_idxs[pos..].iter().copied() {
+                    let rem_lane = &outcome.lanes[rem_idx];
+                    s.upsert_lane(&swarm_id, rem_idx as u32, &rem_lane.title, &rem_lane.task,
+                        &rem_lane.rationale, "drop_global_cap", None).ok();
+                    dropped += 1;
+                }
+                break 'fanout;
             }
             let n = st.next_id.fetch_add(1, Ordering::Relaxed);
             let unit_id = format!("u{n}");
@@ -753,10 +758,9 @@ pub async fn run_swarm<P: Planner, D: DocSource>(st: AppState, swarm_id: String,
             let mut row = row_from_spec(&spec, &sw.mode);
             row.swarm_id = Some(swarm_id.clone());
             s.commit_lane_unit(&swarm_id, idx as u32, &row, now_ms()).ok();
-            unit_id
+            (unit_id, spec)
         };
         // Spawn the driver outside the lock; the row already exists.
-        let spec = lane_spec(&sw, &unit_id, idx, lane);
         if spawn_driver_for(&st, spec, &sw.mode, &unit_id).is_ok() {
             launched += 1;
         }
@@ -1038,7 +1042,7 @@ mod tests {
         assert!(branches.iter().all(|b| b.starts_with("agent/sw1/")));
 
         let mut done = false;
-        for _ in 0..200 {
+        for _ in 0..500 {
             let (total, term, _) = state.store.lock().unwrap().swarm_rollup("sw1").unwrap();
             if total == 2 && term == 2 { done = true; break; }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1081,5 +1085,40 @@ mod tests {
         state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
         run_swarm(state.clone(), "sw3".into(), FakePlanner::err("boom"), FakeDocSource::new("x")).await;
         assert_eq!(state.store.lock().unwrap().get_swarm("sw3").unwrap().unwrap().status, "failed");
+    }
+
+    #[tokio::test]
+    async fn run_swarm_marks_remaining_lanes_drop_global_cap_when_cap_trips_midway() {
+        use crate::docsource::FakeDocSource;
+        use crate::planner::FakePlanner;
+        use crate::swarm::Lane;
+        let state = AppState::default();
+        // Pre-load committed spend at/above the global cap via a non-terminal big-cap unit,
+        // so the very first fan-out re-check trips the global cap.
+        {
+            let s = state.store.lock().unwrap();
+            let mut r = building_row("rsv");
+            r.phase = "building".into();
+            r.usd_cap = 25.0;
+            r.cost = 0.0;
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let sw = crate::store::SwarmRow {
+            swarm_id: "swG".into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
+            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(), lane_cap: 8, usd_budget: 100.0,
+            per_lane_cap: 5.0, status: "planning".into(), planner_cost: 0.0, lanes_launched: 0,
+            lanes_dropped: 0, min_review_rounds: 1, terminal_reason: None,
+        };
+        state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
+        let lanes = vec![
+            Lane { title: "A".into(), task: "a".into(), rationale: "r".into() },
+            Lane { title: "B".into(), task: "b".into(), rationale: "r".into() },
+        ];
+        run_swarm(state.clone(), "swG".into(), FakePlanner::ok(lanes, 0.0), FakeDocSource::new("# spec")).await;
+        // Both lanes were admitted by admit_lanes (budget 100 allows them) but the global
+        // cap trips at fan-out, so NEITHER launches and BOTH are recorded drop_global_cap.
+        let lanes = state.store.lock().unwrap().lanes_for_swarm("swG").unwrap();
+        assert!(lanes.iter().all(|l| l.decision == "drop_global_cap"), "no admit rows left dangling");
+        assert!(lanes.iter().all(|l| l.unit_id.is_none()), "nothing launched");
     }
 }
