@@ -44,3 +44,24 @@ impl Phase {
         !self.is_terminal()
     }
 }
+
+/// The snake_case phase strings that are terminal. Single source of truth shared
+/// by the SQL rollup/admission queries and `reconcile`. MUST stay in sync with
+/// `Phase::is_terminal` (the test `terminal_strs_match_is_terminal` enforces this).
+pub const TERMINAL_PHASE_STRS: &[&str] = &["done", "no_change", "failed"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_strs_match_is_terminal() {
+        // The string list and the enum predicate must never drift apart.
+        for p in [Phase::Done, Phase::NoChange, Phase::Failed,
+                  Phase::Queued, Phase::Building, Phase::NeedsHuman, Phase::Halted] {
+            let s = serde_json::to_value(p).unwrap().as_str().unwrap().to_string();
+            assert_eq!(TERMINAL_PHASE_STRS.contains(&s.as_str()), p.is_terminal(),
+                "{s} membership must equal is_terminal()");
+        }
+    }
+}
