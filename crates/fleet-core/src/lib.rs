@@ -15,6 +15,6 @@ pub use event::{
     ArtifactKind, Command, ErrorScope, Event, IterationKind, LogStream, Severity,
 };
 pub use gate::{gate_met, GateConfig, ReviewSnapshot};
-pub use phase::Phase;
+pub use phase::{Phase, TERMINAL_PHASE_STRS};
 pub use tier::Tier;
 pub use transition::{transition, Trigger};
