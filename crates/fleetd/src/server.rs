@@ -648,6 +648,42 @@ pub async fn reconcile_on_startup<R: Runner>(state: &AppState, runner: &R) {
             }
         }
     }
+
+    // Swarm reconcile: planning → failed; fanning_out → resume missing lanes.
+    let swarms = state.store.lock().unwrap().list_swarms().unwrap_or_default();
+    for sw in swarms {
+        match sw.status.as_str() {
+            "planning" => {
+                state.store.lock().unwrap().update_swarm(&sw.swarm_id, "failed", sw.planner_cost,
+                    sw.lanes_launched, sw.lanes_dropped, Some("daemon restarted during planning"), now_ms()).ok();
+            }
+            "fanning_out" => resume_fan_out(state, &sw),
+            _ => {}
+        }
+    }
+}
+
+/// Re-commit any admitted lane whose unit doesn't yet exist, then mark running.
+/// A lane counts as launched only if its `unit_id` is set AND a unit row actually
+/// exists (defensive against a crash between minting the id and committing the row).
+fn resume_fan_out(st: &AppState, sw: &crate::store::SwarmRow) {
+    let lanes = st.store.lock().unwrap().lanes_for_swarm(&sw.swarm_id).unwrap_or_default();
+    let mut launched = 0u32;
+    for l in lanes.into_iter().filter(|l| l.decision == "admit") {
+        let exists = l.unit_id.as_ref()
+            .and_then(|id| st.store.lock().unwrap().get_unit(id).ok().flatten()).is_some();
+        if exists { launched += 1; continue; }
+        let n = st.next_id.fetch_add(1, Ordering::Relaxed);
+        let unit_id = format!("u{n}");
+        let lane = crate::swarm::Lane { title: l.title.clone(), task: l.task.clone(), rationale: l.rationale.clone() };
+        let spec = lane_spec(sw, &unit_id, l.idx as usize, &lane);
+        let mut row = row_from_spec(&spec, &sw.mode);
+        row.swarm_id = Some(sw.swarm_id.clone());
+        st.store.lock().unwrap().commit_lane_unit(&sw.swarm_id, l.idx, &row, now_ms()).ok();
+        if spawn_driver_for(st, spec, &sw.mode, &unit_id).is_ok() { launched += 1; }
+    }
+    st.store.lock().unwrap().update_swarm(&sw.swarm_id, "running", sw.planner_cost,
+        launched, sw.lanes_dropped, None, now_ms()).ok();
 }
 
 /// Append a synthetic `Halted` event + update the row (one store write, no await).
@@ -1265,6 +1301,33 @@ mod tests {
             doc_path: "spec.md".into(), mode: "demo".into(), ..Default::default()
         })).await.expect("ok");
         assert!(ok.0.swarm_id.starts_with("sw"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_marks_planning_swarm_failed_and_resumes_fanning_out() {
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            // A swarm stuck mid-planning at crash → must become failed.
+            s.upsert_swarm(&swarm_row_srv("swP", "planning"), now_ms()).unwrap();
+            // A swarm mid-fan-out: lane 0 launched (unit exists), lane 1 not.
+            let mut f = swarm_row_srv("swF", "fanning_out"); f.mode = "demo".into(); f.min_review_rounds = 1;
+            s.upsert_swarm(&f, now_ms()).unwrap();
+            s.upsert_lane("swF", 0, "A", "ta", "r", "admit", Some("u1")).unwrap();
+            let mut u = building_row("u1"); u.swarm_id = Some("swF".into()); u.phase = "building".into();
+            s.upsert_unit(&u, now_ms()).unwrap();
+            s.upsert_lane("swF", 1, "B", "tb", "r", "admit", None).unwrap();
+        }
+        let state = AppState::new(store.clone());
+        let runner = FakeRunner::new(vec![]);
+        reconcile_on_startup(&state, &runner).await;
+
+        let s = store.lock().unwrap();
+        assert_eq!(s.get_swarm("swP").unwrap().unwrap().status, "failed");
+        // swF resumed: lane 1 now has a unit_id, status running.
+        let lanes = s.lanes_for_swarm("swF").unwrap();
+        assert!(lanes[1].unit_id.is_some(), "missing lane was committed on resume");
+        assert_eq!(s.get_swarm("swF").unwrap().unwrap().status, "running");
     }
 
     #[tokio::test]
