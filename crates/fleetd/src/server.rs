@@ -82,7 +82,7 @@ fn env_f64(key: &str, default: f64) -> f64 {
 impl AppState {
     pub fn new(store: Arc<Mutex<Store>>) -> Self {
         let max_concurrent = env_usize("CC_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
-        let next = store.lock().unwrap().max_unit_seq().unwrap_or(0) + 1;
+        let next = store.lock().unwrap().max_unit_seq().expect("seed next_id from max_unit_seq") + 1;
         Self {
             units: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(next)),
