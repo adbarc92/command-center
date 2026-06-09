@@ -14,3 +14,4 @@ pub mod runner;
 pub mod server;
 pub mod steps;
 pub mod store;
+pub mod swarm;
