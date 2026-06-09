@@ -354,7 +354,7 @@ mod tests {
         let mut run = row("run"); run.phase = "building".into(); run.cost = 0.5; run.usd_cap = 5.0;
         s.upsert_unit(&run, 1000).unwrap();
         // A non-terminal unit that BILLED PAST its cap contributes cost (MAX), not usd_cap.
-        let mut over = row("over"); over.phase = "needs_human".into(); over.cost = 9.0; over.usd_cap = 5.0;
+        let mut over = row("over"); over.phase = "building".into(); over.cost = 9.0; over.usd_cap = 5.0;
         s.upsert_unit(&over, 1000).unwrap();
         // Planner cost of a swarm counts too.
         s.conn.execute(
@@ -370,6 +370,10 @@ mod tests {
         let s = Store::open_memory().unwrap();
         let mut old = row("old"); old.phase = "building".into(); old.usd_cap = 5.0;
         s.upsert_unit(&old, 100).unwrap();
+        s.conn.execute(
+            "INSERT INTO swarms(swarm_id,status,planner_cost,created_ts,updated_ts) VALUES('oldsw','failed',7.0,100,100)",
+            [],
+        ).unwrap();
         assert_eq!(s.committed_spend(500).unwrap(), 0.0, "created before the window is excluded");
     }
 }
