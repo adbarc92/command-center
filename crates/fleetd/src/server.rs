@@ -63,8 +63,8 @@ struct UnitHandle {
 pub struct AppState {
     units: Arc<Mutex<HashMap<String, UnitHandle>>>,
     next_id: Arc<AtomicU64>,
-    /// Monotonic swarm-id counter. Seed fixed at 1 on each start (swarm ids
-    /// need not survive restart-collision the way unit ids do).
+    /// Monotonic swarm-id counter. Seeded from `max_swarm_seq` on startup so a
+    /// daemon restart never re-mints a live swarm id (mirrors `next_id`).
     next_swarm: Arc<AtomicU64>,
     store: Arc<Mutex<Store>>,
     docker: Arc<Mutex<(Instant, bool)>>,
@@ -89,10 +89,11 @@ impl AppState {
     pub fn new(store: Arc<Mutex<Store>>) -> Self {
         let max_concurrent = env_usize("CC_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
         let next = store.lock().unwrap().max_unit_seq().expect("seed next_id from max_unit_seq") + 1;
+        let next_sw = store.lock().unwrap().max_swarm_seq().expect("seed next_swarm from max_swarm_seq") + 1;
         Self {
             units: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(next)),
-            next_swarm: Arc::new(AtomicU64::new(1)),
+            next_swarm: Arc::new(AtomicU64::new(next_sw)),
             store,
             // Start "stale" so the first /health does a real probe.
             docker: Arc::new(Mutex::new((Instant::now() - Duration::from_secs(60), false))),
@@ -713,6 +714,9 @@ struct CreateSwarmResp { swarm_id: String }
 async fn create_swarm(State(st): State<AppState>, Json(req): Json<CreateSwarmReq>)
     -> Result<Json<CreateSwarmResp>, (StatusCode, String)> {
     // Step 0 — synchronous validation (no 4xx can occur in the spawned task).
+    if req.doc_path.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "doc_path is required".into()));
+    }
     match req.mode.as_str() {
         "demo" => {}
         "real" => {
@@ -1090,6 +1094,24 @@ mod tests {
         // Fresh allocation must not collide with u5.
         let n = state.next_id.fetch_add(1, Ordering::Relaxed);
         assert_eq!(n, 6, "next mint is u6, never an existing id");
+    }
+
+    fn swarm_row_srv(id: &str, status: &str) -> crate::store::SwarmRow {
+        crate::store::SwarmRow {
+            swarm_id: id.into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
+            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(), lane_cap: 8, usd_budget: 15.0,
+            per_lane_cap: 5.0, status: status.into(), planner_cost: 0.0, lanes_launched: 0,
+            lanes_dropped: 0, min_review_rounds: 1, terminal_reason: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn next_swarm_seeds_above_persisted_swarms() {
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        store.lock().unwrap().upsert_swarm(&swarm_row_srv("sw5", "running"), 1).unwrap();
+        let state = AppState::new(store);
+        let n = state.next_swarm.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(n, 6, "next swarm mint is sw6, never an existing id");
     }
 
     #[tokio::test]

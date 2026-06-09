@@ -152,6 +152,20 @@ impl Store {
         rows.collect()
     }
 
+    /// Highest `sw{n}` suffix currently persisted (0 if none). Seeds the swarm-id
+    /// allocator on startup so a restart never re-mints a live swarm id.
+    pub fn max_swarm_seq(&self) -> rusqlite::Result<u64> {
+        let mut s = self.conn.prepare("SELECT swarm_id FROM swarms")?;
+        let ids = s.query_map([], |r| r.get::<_, String>(0))?;
+        let mut max = 0u64;
+        for id in ids {
+            if let Some(n) = id?.strip_prefix("sw").and_then(|n| n.parse::<u64>().ok()) {
+                max = max.max(n);
+            }
+        }
+        Ok(max)
+    }
+
     /// Highest `u{n}` suffix currently persisted (0 if none). Used to seed the
     /// in-memory id allocator on startup so a restart never re-mints a live id.
     pub fn max_unit_seq(&self) -> rusqlite::Result<u64> {
@@ -219,7 +233,7 @@ impl Store {
 
 const SELECT_COLS_ALL: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds,swarm_id FROM units";
 const SELECT_COLS_WHERE_ID: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds,swarm_id FROM units WHERE unit_id=?1";
-const SELECT_SWARM_ALL: &str = "SELECT swarm_id,repo_url,repo_slug,base_branch,doc_path,tier,mode,lane_cap,usd_budget,per_lane_cap,status,planner_cost,lanes_launched,lanes_dropped,min_review_rounds,terminal_reason FROM swarms";
+const SELECT_SWARM_ALL: &str = "SELECT swarm_id,repo_url,repo_slug,base_branch,doc_path,tier,mode,lane_cap,usd_budget,per_lane_cap,status,planner_cost,lanes_launched,lanes_dropped,min_review_rounds,terminal_reason FROM swarms ORDER BY created_ts DESC";
 const SELECT_SWARM_WHERE_ID: &str = "SELECT swarm_id,repo_url,repo_slug,base_branch,doc_path,tier,mode,lane_cap,usd_budget,per_lane_cap,status,planner_cost,lanes_launched,lanes_dropped,min_review_rounds,terminal_reason FROM swarms WHERE swarm_id=?1";
 
 /// Persisted swarm config + mutable projection. `created_ts` set once at insert.
@@ -481,6 +495,15 @@ mod tests {
         r.swarm_id = Some("sw1".into());
         s.upsert_unit(&r, 1000).unwrap();
         assert_eq!(s.get_unit("u1").unwrap().unwrap().swarm_id.as_deref(), Some("sw1"));
+    }
+
+    #[test]
+    fn max_swarm_seq_reads_highest_numeric_suffix() {
+        let s = Store::open_memory().unwrap();
+        assert_eq!(s.max_swarm_seq().unwrap(), 0);
+        s.upsert_swarm(&swarm_row("sw3", "planning"), 1).unwrap();
+        s.upsert_swarm(&swarm_row("sw10", "planning"), 1).unwrap();
+        assert_eq!(s.max_swarm_seq().unwrap(), 10);
     }
 
     #[test]
