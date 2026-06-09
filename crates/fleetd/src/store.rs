@@ -33,6 +33,9 @@ pub struct UnitRow {
     /// Review-gate floor, set once at create so a rehydrated unit resumes with the
     /// same `min_review_rounds` it was launched with.
     pub min_review_rounds: u32,
+    /// Parent swarm id, set once at create for a lane's unit; `None` for a
+    /// standalone mission. Set-once — never updated by the live projection.
+    pub swarm_id: Option<String>,
 }
 
 impl Store {
@@ -85,14 +88,15 @@ impl Store {
         self.conn.execute(
             "INSERT INTO units(unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,
                usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,created_ts,updated_ts,terminal_reason,
-               mode,min_review_rounds)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17,?18)
+               mode,min_review_rounds,swarm_id)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17,?18,?19)
              ON CONFLICT(unit_id) DO UPDATE SET
                phase=?11, cost=?12, last_seq=?13, oracle_frozen=?14, updated_ts=?15, terminal_reason=?16",
             params![
                 r.unit_id, r.tier, r.task, r.repo_url, r.repo_slug, r.base_branch, r.branch,
                 r.test_cmd, r.usd_cap, r.wall_clock_secs, r.phase, r.cost, r.last_seq,
-                r.oracle_frozen as i64, now, r.terminal_reason, r.mode, r.min_review_rounds
+                r.oracle_frozen as i64, now, r.terminal_reason, r.mode, r.min_review_rounds,
+                r.swarm_id
             ],
         )?;
         Ok(())
@@ -176,12 +180,13 @@ impl Store {
             terminal_reason: r.get(14)?,
             mode: r.get(15)?,
             min_review_rounds: r.get::<_, i64>(16)? as u32,
+            swarm_id: r.get(17)?,
         })
     }
 }
 
-const SELECT_COLS_ALL: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds FROM units";
-const SELECT_COLS_WHERE_ID: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds FROM units WHERE unit_id=?1";
+const SELECT_COLS_ALL: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds,swarm_id FROM units";
+const SELECT_COLS_WHERE_ID: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds,swarm_id FROM units WHERE unit_id=?1";
 
 #[cfg(test)]
 mod tests {
@@ -206,6 +211,7 @@ mod tests {
             terminal_reason: None,
             mode: "demo".into(),
             min_review_rounds: 2,
+            swarm_id: None,
         }
     }
 
@@ -285,5 +291,14 @@ mod tests {
         ).unwrap();
         // units.swarm_id column present:
         s.conn.execute("UPDATE units SET swarm_id='s1' WHERE unit_id='nope'", []).unwrap();
+    }
+
+    #[test]
+    fn unit_swarm_id_round_trips() {
+        let s = Store::open_memory().unwrap();
+        let mut r = row("u1");
+        r.swarm_id = Some("sw1".into());
+        s.upsert_unit(&r, 1000).unwrap();
+        assert_eq!(s.get_unit("u1").unwrap().unwrap().swarm_id.as_deref(), Some("sw1"));
     }
 }

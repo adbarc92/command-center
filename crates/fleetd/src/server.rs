@@ -186,6 +186,7 @@ fn row_from_spec(spec: &UnitSpec, mode: &str) -> UnitRow {
         terminal_reason: None,
         mode: mode.into(),
         min_review_rounds: spec.gate.min_review_rounds,
+        swarm_id: None,
     }
 }
 fn phase_tier(t: Tier) -> String {
@@ -680,6 +681,7 @@ mod tests {
             terminal_reason: None,
             mode: "real".into(),
             min_review_rounds: 1,
+            swarm_id: None,
         }
     }
 
