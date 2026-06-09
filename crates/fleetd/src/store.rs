@@ -175,6 +175,24 @@ impl Store {
         )
     }
 
+    /// Worst-case committed spend in the rolling window: terminal units count their
+    /// final `cost`; non-terminal units count `MAX(usd_cap, cost)` (the driver can
+    /// bill a step past the cap before parking, so cost may exceed usd_cap); swarms
+    /// count their `planner_cost`. Partitioned by the authoritative terminal list.
+    pub fn committed_spend(&self, since_ts: i64) -> rusqlite::Result<f64> {
+        let terminal = fleet_core::TERMINAL_PHASE_STRS
+            .iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT
+               COALESCE((SELECT SUM(cost) FROM units
+                           WHERE created_ts>=?1 AND phase IN ({terminal})),0)
+             + COALESCE((SELECT SUM(MAX(usd_cap,cost)) FROM units
+                           WHERE created_ts>=?1 AND phase NOT IN ({terminal})),0)
+             + COALESCE((SELECT SUM(planner_cost) FROM swarms WHERE created_ts>=?1),0)"
+        );
+        self.conn.query_row(&sql, params![since_ts], |r| r.get(0))
+    }
+
     fn map_row(r: &rusqlite::Row) -> rusqlite::Result<UnitRow> {
         Ok(UnitRow {
             unit_id: r.get(0)?,
@@ -324,5 +342,34 @@ mod tests {
         s.upsert_unit(&row("u10"), 1).unwrap();
         s.upsert_unit(&row("u2"), 1).unwrap();
         assert_eq!(s.max_unit_seq().unwrap(), 10, "parses the numeric suffix, not lexical max");
+    }
+
+    #[test]
+    fn committed_spend_counts_reservations_and_overcap_and_planner() {
+        let s = Store::open_memory().unwrap();
+        // A terminal unit contributes its final cost.
+        let mut done = row("done"); done.phase = "done".into(); done.cost = 1.0; done.usd_cap = 5.0;
+        s.upsert_unit(&done, 1000).unwrap();
+        // A non-terminal unit under cap contributes its usd_cap (reservation).
+        let mut run = row("run"); run.phase = "building".into(); run.cost = 0.5; run.usd_cap = 5.0;
+        s.upsert_unit(&run, 1000).unwrap();
+        // A non-terminal unit that BILLED PAST its cap contributes cost (MAX), not usd_cap.
+        let mut over = row("over"); over.phase = "needs_human".into(); over.cost = 9.0; over.usd_cap = 5.0;
+        s.upsert_unit(&over, 1000).unwrap();
+        // Planner cost of a swarm counts too.
+        s.conn.execute(
+            "INSERT INTO swarms(swarm_id,status,planner_cost,created_ts,updated_ts) VALUES('sw',?1,?2,1000,1000)",
+            rusqlite::params!["failed", 2.0],
+        ).unwrap();
+        // 1.0 (done) + 5.0 (run reservation) + 9.0 (over, MAX) + 2.0 (planner) = 17.0
+        assert!((s.committed_spend(0).unwrap() - 17.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn committed_spend_window_excludes_old() {
+        let s = Store::open_memory().unwrap();
+        let mut old = row("old"); old.phase = "building".into(); old.usd_cap = 5.0;
+        s.upsert_unit(&old, 100).unwrap();
+        assert_eq!(s.committed_spend(500).unwrap(), 0.0, "created before the window is excluded");
     }
 }
