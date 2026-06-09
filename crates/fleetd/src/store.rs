@@ -55,7 +55,15 @@ impl Store {
                mode TEXT NOT NULL DEFAULT 'demo', min_review_rounds INTEGER NOT NULL DEFAULT 2);
              CREATE TABLE IF NOT EXISTS events(
                unit_id TEXT, seq INTEGER, ts INTEGER, json TEXT,
-               PRIMARY KEY(unit_id, seq));",
+               PRIMARY KEY(unit_id, seq));
+             CREATE TABLE IF NOT EXISTS swarms(
+               swarm_id TEXT PRIMARY KEY, repo_url TEXT, repo_slug TEXT, base_branch TEXT,
+               doc_path TEXT, tier TEXT, mode TEXT, lane_cap INTEGER, usd_budget REAL, per_lane_cap REAL,
+               status TEXT, planner_cost REAL, lanes_launched INTEGER, lanes_dropped INTEGER,
+               min_review_rounds INTEGER, terminal_reason TEXT, created_ts INTEGER, updated_ts INTEGER);
+             CREATE TABLE IF NOT EXISTS swarm_lanes(
+               swarm_id TEXT, idx INTEGER, title TEXT, task TEXT, rationale TEXT,
+               decision TEXT, unit_id TEXT, PRIMARY KEY(swarm_id, idx));",
         )?;
         // Migrate DBs created before these columns existed. Idempotent: on a fresh
         // DB the columns already exist (from CREATE TABLE) and the ALTER is a no-op
@@ -63,6 +71,8 @@ impl Store {
         for stmt in [
             "ALTER TABLE units ADD COLUMN mode TEXT NOT NULL DEFAULT 'demo'",
             "ALTER TABLE units ADD COLUMN min_review_rounds INTEGER NOT NULL DEFAULT 2",
+            "ALTER TABLE units ADD COLUMN swarm_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_units_swarm ON units(swarm_id)",
         ] {
             let _ = conn.execute(stmt, []);
         }
@@ -259,5 +269,21 @@ mod tests {
         new.cost = 2.0;
         s.upsert_unit(&new, 1000).unwrap(); // created_ts=1000
         assert!((s.spend_since(500).unwrap() - 2.0).abs() < 1e-9, "only the new unit counts");
+    }
+
+    #[test]
+    fn swarm_tables_and_unit_swarm_id_exist_after_init() {
+        let s = Store::open_memory().unwrap();
+        // These inserts only succeed if the schema migrated.
+        s.conn.execute(
+            "INSERT INTO swarms(swarm_id,status,planner_cost,created_ts,updated_ts) VALUES('s1','planning',0.0,1,1)",
+            [],
+        ).unwrap();
+        s.conn.execute(
+            "INSERT INTO swarm_lanes(swarm_id,idx,title,task,rationale,decision) VALUES('s1',0,'t','task','r','admit')",
+            [],
+        ).unwrap();
+        // units.swarm_id column present:
+        s.conn.execute("UPDATE units SET swarm_id='s1' WHERE unit_id='nope'", []).unwrap();
     }
 }
