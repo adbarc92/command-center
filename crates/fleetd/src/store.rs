@@ -152,6 +152,20 @@ impl Store {
         rows.collect()
     }
 
+    /// Highest `u{n}` suffix currently persisted (0 if none). Used to seed the
+    /// in-memory id allocator on startup so a restart never re-mints a live id.
+    pub fn max_unit_seq(&self) -> rusqlite::Result<u64> {
+        let mut s = self.conn.prepare("SELECT unit_id FROM units")?;
+        let ids = s.query_map([], |r| r.get::<_, String>(0))?;
+        let mut max = 0u64;
+        for id in ids {
+            if let Some(n) = id?.strip_prefix('u').and_then(|n| n.parse::<u64>().ok()) {
+                max = max.max(n);
+            }
+        }
+        Ok(max)
+    }
+
     /// Rolling-window global spend (for the admission cost cap).
     pub fn spend_since(&self, since_ts: i64) -> rusqlite::Result<f64> {
         self.conn.query_row(
@@ -300,5 +314,15 @@ mod tests {
         r.swarm_id = Some("sw1".into());
         s.upsert_unit(&r, 1000).unwrap();
         assert_eq!(s.get_unit("u1").unwrap().unwrap().swarm_id.as_deref(), Some("sw1"));
+    }
+
+    #[test]
+    fn max_unit_seq_reads_highest_numeric_suffix() {
+        let s = Store::open_memory().unwrap();
+        assert_eq!(s.max_unit_seq().unwrap(), 0, "empty store → 0");
+        s.upsert_unit(&row("u3"), 1).unwrap();
+        s.upsert_unit(&row("u10"), 1).unwrap();
+        s.upsert_unit(&row("u2"), 1).unwrap();
+        assert_eq!(s.max_unit_seq().unwrap(), 10, "parses the numeric suffix, not lexical max");
     }
 }

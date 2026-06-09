@@ -82,9 +82,10 @@ fn env_f64(key: &str, default: f64) -> f64 {
 impl AppState {
     pub fn new(store: Arc<Mutex<Store>>) -> Self {
         let max_concurrent = env_usize("CC_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
+        let next = store.lock().unwrap().max_unit_seq().unwrap_or(0) + 1;
         Self {
             units: Arc::new(Mutex::new(HashMap::new())),
-            next_id: Arc::new(AtomicU64::new(1)),
+            next_id: Arc::new(AtomicU64::new(next)),
             store,
             // Start "stale" so the first /health does a real probe.
             docker: Arc::new(Mutex::new((Instant::now() - Duration::from_secs(60), false))),
@@ -803,6 +804,16 @@ mod tests {
         }
         assert!(done, "rehydrated demo unit reached Done");
         assert!(!saw_oracle, "resume must not re-run the oracle");
+    }
+
+    #[tokio::test]
+    async fn next_id_seeds_above_persisted_units() {
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        store.lock().unwrap().upsert_unit(&building_row("u5"), 1).unwrap();
+        let state = AppState::new(store);
+        // Fresh allocation must not collide with u5.
+        let n = state.next_id.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(n, 6, "next mint is u6, never an existing id");
     }
 
     #[test]
