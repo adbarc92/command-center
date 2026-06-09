@@ -35,6 +35,36 @@ impl DocSource for FakeDocSource {
     }
 }
 
+/// Shallow-clones the base branch to a temp dir, reads the file, and removes the
+/// dir on drop regardless of outcome (a failed/empty swarm has no driver to clean up).
+pub struct GitDocSource;
+impl GitDocSource { pub fn new() -> Self { Self } }
+impl Default for GitDocSource { fn default() -> Self { Self::new() } }
+
+struct TempClone(std::path::PathBuf);
+impl Drop for TempClone {
+    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+}
+
+#[async_trait]
+impl DocSource for GitDocSource {
+    async fn read(&self, repo_url: &str, base_branch: &str, doc_path: &str) -> Result<String, DocError> {
+        let dir = std::env::temp_dir().join(format!("cc-plan-{}", std::process::id()));
+        let _guard = TempClone(dir.clone());
+        let ok = tokio::process::Command::new("git")
+            .args(["clone", "--depth", "1", "--branch", base_branch, repo_url])
+            .arg(&dir).output().await
+            .map_err(|e| DocError::Failed(e.to_string()))?;
+        if !ok.status.success() {
+            return Err(DocError::Failed(String::from_utf8_lossy(&ok.stderr).into()));
+        }
+        let path = dir.join(doc_path);
+        tokio::fs::read_to_string(&path).await
+            .map_err(|_| DocError::NotFound(doc_path.into()))
+        // _guard drops here → temp dir removed.
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

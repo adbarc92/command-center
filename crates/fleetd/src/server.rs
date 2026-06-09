@@ -807,8 +807,8 @@ async fn create_swarm(State(st): State<AppState>, Json(req): Json<CreateSwarmReq
                 run_swarm(st2, id2, FakePlanner::ok(lanes, 0.01), FakeDocSource::new("# demo spec")).await;
             }
             _ => {
-                // Real seams (ClaudePlanner + GitDocSource) land in Task 17.
-                unreachable!("real swarm mode lands in Task 17");
+                use crate::{docsource::GitDocSource, planner::ClaudePlanner};
+                run_swarm(st2, id2, ClaudePlanner::new(), GitDocSource::new()).await;
             }
         }
     });
