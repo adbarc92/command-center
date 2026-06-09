@@ -65,6 +65,10 @@ pub struct GitDocSource;
 impl GitDocSource { pub fn new() -> Self { Self } }
 impl Default for GitDocSource { fn default() -> Self { Self::new() } }
 
+/// Per-call sequence so two concurrent real swarms never collide on the same temp
+/// clone dir (which would make one's drop-guard delete the other's clone).
+static CLONE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 struct TempClone(std::path::PathBuf);
 impl Drop for TempClone {
     fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
@@ -74,7 +78,8 @@ impl Drop for TempClone {
 impl DocSource for GitDocSource {
     async fn read(&self, repo_url: &str, base_branch: &str, doc_path: &str) -> Result<String, DocError> {
         validate_clone_inputs(repo_url, base_branch, doc_path)?;
-        let dir = std::env::temp_dir().join(format!("cc-plan-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cc-plan-{}-{}", std::process::id(),
+            CLONE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
         let _guard = TempClone(dir.clone());
         let ok = tokio::process::Command::new("git")
             .args(["clone", "--depth", "1", "--branch"])

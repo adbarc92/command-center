@@ -216,22 +216,8 @@ pub enum SpawnError {
     AlreadyRegistered,
 }
 
-/// Persist a fresh unit's row (carrying `swarm_id`) and spawn its driver. Used by
-/// both the standalone mission path and swarm fan-out. Returns `Err` instead of
-/// panicking. NOTE: callers needing committed-spend admission must do that check
-/// under the store lock BEFORE calling this (see create_mission).
-pub fn spawn_unit(st: &AppState, spec: UnitSpec, mode: &str, swarm_id: Option<&str>)
-    -> Result<String, SpawnError> {
-    let unit_id = spec.unit_id.clone();
-    let mut row = row_from_spec(&spec, mode);
-    row.swarm_id = swarm_id.map(|s| s.to_string());
-    st.store.lock().unwrap().upsert_unit(&row, now_ms()).ok();
-    spawn_driver_for(st, spec, mode, &unit_id)?;
-    Ok(unit_id)
-}
-
 /// Register the per-unit handle and spawn its driver. The row must already be
-/// persisted by the caller (create_mission via spawn_unit, or fan-out via
+/// persisted by the caller (create_mission, or fan-out via
 /// commit_lane_unit). Returns Err if a driver already exists (no double-spawn).
 fn spawn_driver_for(st: &AppState, spec: UnitSpec, mode: &str, unit_id: &str)
     -> Result<(), SpawnError> {
@@ -260,14 +246,6 @@ async fn create_mission(
     State(st): State<AppState>,
     Json(req): Json<CreateReq>,
 ) -> Result<Json<CreateResp>, (StatusCode, String)> {
-    // Admission-only global cap: refuse a new mission once rolling-24h spend has
-    // hit the ceiling. Read fresh each admission (low frequency; no shared atomic).
-    let since = now_ms() - 24 * 3600 * 1000;
-    let spent = st.store.lock().unwrap().committed_spend(since).unwrap_or(0.0);
-    if spent >= st.global_cap {
-        return Err((StatusCode::TOO_MANY_REQUESTS, "global daily cost cap reached".into()));
-    }
-
     let n = st.next_id.fetch_add(1, Ordering::Relaxed);
     let unit_id = format!("u{n}");
     let spec = UnitSpec {
@@ -298,7 +276,18 @@ async fn create_mission(
         other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
     }
 
-    if spawn_unit(&st, spec, &runner_mode, None).is_err() {
+    // P2: admission check + row insert in ONE critical section.
+    {
+        let s = st.store.lock().unwrap();
+        let since = now_ms() - 24 * 3600 * 1000;
+        if s.committed_spend(since).unwrap_or(0.0) >= st.global_cap {
+            return Err((StatusCode::TOO_MANY_REQUESTS, "global daily cost cap reached".into()));
+        }
+        let mut row = row_from_spec(&spec, &runner_mode);
+        row.swarm_id = None;
+        s.upsert_unit(&row, now_ms()).ok();
+    }
+    if spawn_driver_for(&st, spec, &runner_mode, &unit_id).is_err() {
         return Err((StatusCode::CONFLICT, "unit already exists".into()));
     }
 
@@ -632,7 +621,7 @@ pub async fn reconcile_on_startup<R: Runner>(state: &AppState, runner: &R) {
     let rows = state.store.lock().unwrap().list_units().unwrap_or_default();
     let nonterminal: Vec<String> = rows
         .iter()
-        .filter(|r| !matches!(r.phase.as_str(), "done" | "no_change" | "failed"))
+        .filter(|r| !fleet_core::TERMINAL_PHASE_STRS.contains(&r.phase.as_str()))
         .map(|r| r.unit_id.clone())
         .collect();
     let running = runner.list_unit_containers().await.unwrap_or_default();
@@ -868,8 +857,9 @@ async fn get_swarm(State(st): State<AppState>, Path(id): Path<String>)
 
 /// Plan → admit → fan out, for an already-persisted `planning` swarm row.
 /// Generic over the seams so tests inject fakes. Each store mutation is a short
-/// sync critical section; the per-lane committed-spend re-check + commit_lane_unit
-/// is the admission critical section (P2).
+/// sync critical section. Admission here mirrors the mission path: the
+/// committed-spend check and the unit-row insert happen under ONE store-lock span
+/// (per-lane re-check + commit_lane_unit), so the cap binds atomically (P2).
 pub async fn run_swarm<P: Planner, D: DocSource>(st: AppState, swarm_id: String, planner: P, doc: D) {
     let Some(sw) = st.store.lock().unwrap().get_swarm(&swarm_id).ok().flatten() else { return };
 
@@ -1173,21 +1163,29 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn spawn_unit_creates_demo_unit_with_swarm_id_and_cap() {
-        let state = AppState::default();
-        let spec = UnitSpec {
-            unit_id: "u1".into(), tier: Tier::T1, task: "t".into(), usd_cap: 3.0,
-            wall_clock_secs: 0, gate: GateConfig { min_review_rounds: 1 },
-            repo_url: "https://github.com/x/y".into(), repo_slug: "x/y".into(),
-            base_branch: "main".into(), branch: "agent/sw1/0-l".into(),
-            test_cmd: "node --test".into(), oracle_frozen: false,
-        };
-        let id = spawn_unit(&state, spec, "demo", Some("sw1")).expect("spawn ok");
-        assert_eq!(id, "u1");
-        let row = state.store.lock().unwrap().get_unit("u1").unwrap().unwrap();
-        assert_eq!(row.swarm_id.as_deref(), Some("sw1"));
-        assert_eq!(row.usd_cap, 3.0);
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_missions_cannot_both_breach_the_cap() {
+        // Global cap is $20. Pre-load committed spend so exactly ONE more default
+        // $5-cap unit crosses the ceiling: seed reserves 16, first admit pushes
+        // committed to 21 (>=20) so the second is refused — but ONLY if check+insert
+        // are atomic. An open race would let both observe 16<20 and both admit.
+        let store = std::sync::Arc::new(std::sync::Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            let mut r = building_row("seed"); r.phase = "building".into(); r.usd_cap = 16.0; r.cost = 0.0;
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let state = AppState::new(store.clone());
+        let a = state.clone();
+        let b = state.clone();
+        let h1 = tokio::spawn(async move {
+            create_mission(State(a), Json(CreateReq { task: "t".into(), tier: TierReq::T1, mode: "demo".into(), min_review_rounds: 1 })).await.is_ok()
+        });
+        let h2 = tokio::spawn(async move {
+            create_mission(State(b), Json(CreateReq { task: "t".into(), tier: TierReq::T1, mode: "demo".into(), min_review_rounds: 1 })).await.is_ok()
+        });
+        let wins = [h1.await.unwrap(), h2.await.unwrap()].iter().filter(|&&w| w).count();
+        assert_eq!(wins, 1, "exactly one mission admitted; the cap binds atomically");
     }
 
     #[test]
