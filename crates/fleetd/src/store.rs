@@ -313,6 +313,62 @@ impl Store {
     }
 }
 
+/// Persisted lane record (admission decision + optional back-link to the unit).
+#[derive(Debug, Clone)]
+pub struct LaneRow {
+    pub swarm_id: String,
+    pub idx: u32,
+    pub title: String,
+    pub task: String,
+    pub rationale: String,
+    pub decision: String,
+    pub unit_id: Option<String>,
+}
+
+impl Store {
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_lane(&self, swarm_id: &str, idx: u32, title: &str, task: &str,
+        rationale: &str, decision: &str, unit_id: Option<&str>) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO swarm_lanes(swarm_id,idx,title,task,rationale,decision,unit_id)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)
+             ON CONFLICT(swarm_id,idx) DO UPDATE SET decision=?6, unit_id=?7",
+            params![swarm_id, idx, title, task, rationale, decision, unit_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn lanes_for_swarm(&self, swarm_id: &str) -> rusqlite::Result<Vec<LaneRow>> {
+        let mut s = self.conn.prepare(
+            "SELECT swarm_id,idx,title,task,rationale,decision,unit_id
+             FROM swarm_lanes WHERE swarm_id=?1 ORDER BY idx")?;
+        let rows = s.query_map(params![swarm_id], |r| Ok(LaneRow {
+            swarm_id: r.get(0)?, idx: r.get::<_, i64>(1)? as u32, title: r.get(2)?,
+            task: r.get(3)?, rationale: r.get(4)?, decision: r.get(5)?, unit_id: r.get(6)?,
+        }))?;
+        rows.collect()
+    }
+
+    /// Insert the lane's unit row AND set `swarm_lanes.unit_id` in ONE transaction,
+    /// so a crash never leaves a dangling back-link or an orphan row (spec R2 #5).
+    pub fn commit_lane_unit(&self, swarm_id: &str, idx: u32, u: &UnitRow, now: i64)
+        -> rusqlite::Result<()> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let r: rusqlite::Result<()> = (|| {
+            self.upsert_unit(u, now)?;
+            self.conn.execute(
+                "UPDATE swarm_lanes SET unit_id=?3 WHERE swarm_id=?1 AND idx=?2",
+                params![swarm_id, idx, u.unit_id],
+            )?;
+            Ok(())
+        })();
+        match r {
+            Ok(()) => { self.conn.execute_batch("COMMIT")?; Ok(()) }
+            Err(e) => { let _ = self.conn.execute_batch("ROLLBACK"); Err(e) }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +548,24 @@ mod tests {
         assert_eq!(got.planner_cost, 0.4);
         assert_eq!(got.lanes_launched, 3);
         assert_eq!(s.list_swarms().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn lane_crud_and_commit_is_atomic() {
+        let s = Store::open_memory().unwrap();
+        s.upsert_swarm(&swarm_row("sw1", "fanning_out"), 1000).unwrap();
+        // Persist a lane with no unit yet.
+        s.upsert_lane("sw1", 0, "Add auth", "do auth", "indep", "admit", None).unwrap();
+        let lanes = s.lanes_for_swarm("sw1").unwrap();
+        assert_eq!(lanes.len(), 1);
+        assert_eq!(lanes[0].decision, "admit");
+        assert!(lanes[0].unit_id.is_none());
+
+        // commit_lane_unit inserts the unit row AND sets the back-link in one txn.
+        let mut u = row("u1"); u.swarm_id = Some("sw1".into());
+        s.commit_lane_unit("sw1", 0, &u, 1001).unwrap();
+        assert!(s.get_unit("u1").unwrap().is_some(), "unit row inserted");
+        assert_eq!(s.lanes_for_swarm("sw1").unwrap()[0].unit_id.as_deref(), Some("u1"), "back-link set");
     }
 
     #[test]
