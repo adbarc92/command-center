@@ -199,6 +199,45 @@ fn phase_tier(t: Tier) -> String {
     .into()
 }
 
+#[derive(Debug)]
+pub enum SpawnError {
+    /// A driver already exists for this id (register lost the race / id reuse).
+    AlreadyRegistered,
+}
+
+/// Persist a fresh unit's row (carrying `swarm_id`) and spawn its driver. Used by
+/// both the standalone mission path and swarm fan-out. Returns `Err` instead of
+/// panicking. NOTE: callers needing committed-spend admission must do that check
+/// under the store lock BEFORE calling this (see create_mission).
+pub fn spawn_unit(st: &AppState, spec: UnitSpec, mode: &str, swarm_id: Option<&str>)
+    -> Result<String, SpawnError> {
+    let unit_id = spec.unit_id.clone();
+    let mut row = row_from_spec(&spec, mode);
+    row.swarm_id = swarm_id.map(|s| s.to_string());
+    st.store.lock().unwrap().upsert_unit(&row, now_ms()).ok();
+
+    let (cmd_rx, evt_tx) = match register_unit_if_absent(st, &unit_id) {
+        Some(ch) => ch,
+        None => return Err(SpawnError::AlreadyRegistered),
+    };
+    match mode {
+        "demo" => {
+            let runner = FakeRunner::new(demo_script(&spec));
+            tokio::spawn(run(runner, FakeForge::default(), spec, fresh_ctx(st), cmd_rx, evt_tx));
+        }
+        _ => {
+            use crate::gh_forge::GhForge;
+            use crate::local_docker::LocalDockerRunner;
+            let host_clone = std::env::temp_dir().join(format!("cc-host-{unit_id}"));
+            let forge = GhForge::new(spec.repo_url.clone(), spec.repo_slug.clone(),
+                spec.base_branch.clone(), host_clone, format!("command-center SP1: {unit_id}"));
+            let runner = LocalDockerRunner::new("cc-agent:dev");
+            tokio::spawn(run(runner, forge, spec, fresh_ctx(st), cmd_rx, evt_tx));
+        }
+    }
+    Ok(unit_id)
+}
+
 async fn create_mission(
     State(st): State<AppState>,
     Json(req): Json<CreateReq>,
@@ -241,34 +280,9 @@ async fn create_mission(
         other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
     }
 
-    // Persist the initial row (mode + gate floor recorded for faithful rehydration).
-    st.store.lock().unwrap().upsert_unit(&row_from_spec(&spec, &runner_mode), now_ms()).ok();
-
-    // Register the per-unit handle atomically, then spawn its driver. A fresh
-    // unit_id is always unique, so this returns Some.
-    let (cmd_rx, evt_tx) =
-        register_unit_if_absent(&st, &unit_id).expect("freshly-allocated unit_id is unique");
-
-    match runner_mode.as_str() {
-        "demo" => {
-            let runner = FakeRunner::new(demo_script(&spec));
-            tokio::spawn(run(runner, FakeForge::default(), spec, fresh_ctx(&st), cmd_rx, evt_tx));
-        }
-        "real" => {
-            use crate::gh_forge::GhForge;
-            use crate::local_docker::LocalDockerRunner;
-            let host_clone = std::env::temp_dir().join(format!("cc-host-{unit_id}"));
-            let forge = GhForge::new(
-                spec.repo_url.clone(),
-                spec.repo_slug.clone(),
-                spec.base_branch.clone(),
-                host_clone,
-                format!("command-center SP1: {unit_id}"),
-            );
-            let runner = LocalDockerRunner::new("cc-agent:dev");
-            tokio::spawn(run(runner, forge, spec, fresh_ctx(&st), cmd_rx, evt_tx));
-        }
-        _ => unreachable!("mode validated above"),
+    match spawn_unit(&st, spec, &runner_mode, None) {
+        Ok(_) => {}
+        Err(_) => return Err((StatusCode::CONFLICT, "unit already exists".into())),
     }
 
     Ok(Json(CreateResp { unit_id }))
@@ -837,6 +851,23 @@ mod tests {
             Err((code, _)) => assert_eq!(code, StatusCode::TOO_MANY_REQUESTS),
             Ok(_) => panic!("expected 429 — committed reservation breaches the cap"),
         }
+    }
+
+    #[tokio::test]
+    async fn spawn_unit_creates_demo_unit_with_swarm_id_and_cap() {
+        let state = AppState::default();
+        let spec = UnitSpec {
+            unit_id: "u1".into(), tier: Tier::T1, task: "t".into(), usd_cap: 3.0,
+            wall_clock_secs: 0, gate: GateConfig { min_review_rounds: 1 },
+            repo_url: "https://github.com/x/y".into(), repo_slug: "x/y".into(),
+            base_branch: "main".into(), branch: "agent/sw1/0-l".into(),
+            test_cmd: "node --test".into(), oracle_frozen: false,
+        };
+        let id = spawn_unit(&state, spec, "demo", Some("sw1")).expect("spawn ok");
+        assert_eq!(id, "u1");
+        let row = state.store.lock().unwrap().get_unit("u1").unwrap().unwrap();
+        assert_eq!(row.swarm_id.as_deref(), Some("sw1"));
+        assert_eq!(row.usd_cap, 3.0);
     }
 
     #[test]
