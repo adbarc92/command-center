@@ -3,7 +3,7 @@
 > Cross-cutting roadmap for the Command Center. App-plugins-specific roadmap items live in
 > [`docs/superpowers/specs/2026-06-07-app-plugins-design.md` §5](superpowers/specs/2026-06-07-app-plugins-design.md);
 > this file holds the broader product + workflow backlog.
-> Last updated: 2026-06-08.
+> Last updated: 2026-06-10.
 
 ## North Star
 
@@ -30,6 +30,27 @@ Legend — **Status:** 💡 idea · 🛠️ in progress · 🔗 blocked on a dep
 > phases. See [the spec](superpowers/specs/2026-06-07-app-plugins-design.md) and
 > [plan](superpowers/plans/2026-06-07-app-plugins.md). Its own roadmap items (third-party isolation,
 > production auth, host↔app bridge, secrets, external-nav hardening) live in the spec's §5.
+
+---
+
+## ⚠️ Requires your attention — human-gated (not swarmable)
+
+These are the only blockers on the road to a **shippable + feature-complete** Command Center that an
+agent **cannot** do autonomously: each needs a watched/visual session, a real credential + spend, or
+out-of-repo procurement. Everything downstream of them is already built or dispatch-ready. Source:
+[`docs/handoff/2026-06-11-post-launch-swarm-handoff.md`](handoff/2026-06-11-post-launch-swarm-handoff.md).
+
+| # | Item | Why only you | Unblocks |
+|---|---|---|---|
+| **P3** | **App-plugin webview spike — gates 2–5.** Bring Audience up (`:3000`, dev posture) and walk gates 2–5 on `spike/app-plugins-webview`; record go/no-go + the exact webview API to `spikes/SPIKE-RESULTS-app-plugins.md`. (Gate 1 already PASS.) | Interactive/visual judgment: renders, resize ≤150ms, hide-on-overlay no-flash, lifecycle orphan check. | **App-plugin embedding** feature swarm (`app-plugins-design.md` §6). |
+| **P4** | **View-plugin handshake spike.** Prove sandboxed-iframe + MessagePort handshake — `plugin-hello → init` round-trip across **100 reloads, zero drops**, dev **and** packaged. Record to `spikes/SPIKE-RESULTS.md`. | Needs a watched run across dev + packaged builds. | **View-plugin runtime** swarm (+ the `feat/view-plugins` de-stale pre-step). |
+| **S3** | **One live paid T1 mission.** Set `ANTHROPIC_API_KEY`; dispatch a real T1 mission oracle→build→review→PR on a throwaway repo, human-watched. | Real credential + real token spend + live observation. The last unproven slice of the SP1 spine. | Confidence in the end-to-end spine on real tokens. |
+| **Certs** | **Code-signing certs.** Apple Developer ID ($99/yr + notarization) + Windows Authenticode. Wiring + exact secret names already done — see [`docs/release/signing-and-updates.md`](release/signing-and-updates.md) §4; `release.yml` consumes them by name. | Procurement (CA / Apple Developer Program) — out of repo. | The **signed cross-platform release run** (CI is otherwise ready). |
+
+**Status of the rest:** the human-authority overlays (PR #22) and packaging/release hardening
+(PR #23 — release sidecar + live updater runtime) shipped this session. Once P3/P4 each record a
+"go", the two **blocked feature swarms** (app-plugin embedding, view-plugin runtime) are dispatch-ready
+from their design docs. Remaining to **shippable** = certs + one signed release run.
 
 ---
 

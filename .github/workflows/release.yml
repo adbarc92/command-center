@@ -77,10 +77,12 @@ jobs:
         run: npm ci
 
       # MUST precede the bundle step — externalBin ("binaries/fleetd-serve") is
-      # resolved at compile time.
-      - name: Build fleetd sidecar
+      # resolved at compile time. Release builds ship the OPTIMIZED sidecar
+      # (`sidecar:release` → `--release`); plain `npm run sidecar` is a debug
+      # binary and is for dev only.
+      - name: Build fleetd sidecar (release profile)
         working-directory: cockpit/ui
-        run: npm run sidecar
+        run: npm run sidecar:release
 
       - name: Build, sign, and publish release
         uses: tauri-apps/tauri-action@v0
