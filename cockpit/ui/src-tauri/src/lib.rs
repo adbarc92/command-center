@@ -3,15 +3,24 @@ use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
 mod plugins;
+// LANE-A → SHELL contract: the dashboard's read-seam Tauri commands (§6.1/§6.2).
+mod dashboard;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(plugins::manager::PluginManager::default())
+        // LANE-A → SHELL contract: register the dashboard read-seam commands so the
+        // frontend's `invoke('halyard_status'|'halyard_queue'|'audience_health'|
+        // 'audience_posts')` resolve. Additive only — remove nothing here.
         .invoke_handler(tauri::generate_handler![
             plugins::manager::plugins_list,
             plugins::manager::plugin_launch,
+            dashboard::halyard_status,
+            dashboard::halyard_queue,
+            dashboard::audience_health,
+            dashboard::audience_posts,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

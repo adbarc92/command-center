@@ -16,10 +16,13 @@
 //! is a future optimization; at single-user scale a brief sync lock per event is
 //! fine (the lock is never held across `.await`).
 
+use crate::docsource::DocSource;
 use crate::driver::{run, EventEnvelope, RunCtx};
 use crate::fake::{FakeForge, FakeRunner};
+use crate::planner::Planner;
 use crate::reconcile::{reconcile, Action};
 use crate::runner::{ExecOutput, Runner, UnitSpec};
+use crate::swarm::{admit_lanes, slug, AdmissionConfig, LaneDecision};
 use crate::store::{Store, UnitRow};
 use axum::{
     extract::{
@@ -60,6 +63,9 @@ struct UnitHandle {
 pub struct AppState {
     units: Arc<Mutex<HashMap<String, UnitHandle>>>,
     next_id: Arc<AtomicU64>,
+    /// Monotonic swarm-id counter. Seeded from `max_swarm_seq` on startup so a
+    /// daemon restart never re-mints a live swarm id (mirrors `next_id`).
+    next_swarm: Arc<AtomicU64>,
     store: Arc<Mutex<Store>>,
     docker: Arc<Mutex<(Instant, bool)>>,
     /// Fleet-wide concurrency slots, shared by every driver (CC_MAX_CONCURRENT).
@@ -82,9 +88,12 @@ fn env_f64(key: &str, default: f64) -> f64 {
 impl AppState {
     pub fn new(store: Arc<Mutex<Store>>) -> Self {
         let max_concurrent = env_usize("CC_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
+        let next = store.lock().unwrap().max_unit_seq().expect("seed next_id from max_unit_seq") + 1;
+        let next_sw = store.lock().unwrap().max_swarm_seq().expect("seed next_swarm from max_swarm_seq") + 1;
         Self {
             units: Arc::new(Mutex::new(HashMap::new())),
-            next_id: Arc::new(AtomicU64::new(1)),
+            next_id: Arc::new(AtomicU64::new(next)),
+            next_swarm: Arc::new(AtomicU64::new(next_sw)),
             store,
             // Start "stale" so the first /health does a real probe.
             docker: Arc::new(Mutex::new((Instant::now() - Duration::from_secs(60), false))),
@@ -110,6 +119,8 @@ pub fn router(state: AppState) -> Router {
         .route("/units/:id/commands", post(post_command))
         .route("/units/:id/stream", get(ws_stream))
         .route("/health", get(health))
+        .route("/swarms", post(create_swarm).get(list_swarms))
+        .route("/swarms/:id", get(get_swarm))
         .with_state(state)
 }
 
@@ -186,6 +197,7 @@ fn row_from_spec(spec: &UnitSpec, mode: &str) -> UnitRow {
         terminal_reason: None,
         mode: mode.into(),
         min_review_rounds: spec.gate.min_review_rounds,
+        swarm_id: None,
     }
 }
 fn phase_tier(t: Tier) -> String {
@@ -197,18 +209,43 @@ fn phase_tier(t: Tier) -> String {
     .into()
 }
 
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum SpawnError {
+    /// A driver already exists for this id (register lost the race / id reuse).
+    AlreadyRegistered,
+}
+
+/// Register the per-unit handle and spawn its driver. The row must already be
+/// persisted by the caller (create_mission, or fan-out via
+/// commit_lane_unit). Returns Err if a driver already exists (no double-spawn).
+fn spawn_driver_for(st: &AppState, spec: UnitSpec, mode: &str, unit_id: &str)
+    -> Result<(), SpawnError> {
+    let (cmd_rx, evt_tx) = match register_unit_if_absent(st, unit_id) {
+        Some(ch) => ch,
+        None => return Err(SpawnError::AlreadyRegistered),
+    };
+    match mode {
+        "demo" => {
+            let runner = FakeRunner::new(demo_script(&spec));
+            tokio::spawn(run(runner, FakeForge::default(), spec, fresh_ctx(st), cmd_rx, evt_tx));
+        }
+        _ => {
+            use crate::gh_forge::GhForge;
+            use crate::local_docker::LocalDockerRunner;
+            let host_clone = std::env::temp_dir().join(format!("cc-host-{unit_id}"));
+            let forge = GhForge::new(spec.repo_url.clone(), spec.repo_slug.clone(),
+                spec.base_branch.clone(), host_clone, format!("command-center SP1: {unit_id}"));
+            tokio::spawn(run(LocalDockerRunner::new("cc-agent:dev"), forge, spec, fresh_ctx(st), cmd_rx, evt_tx));
+        }
+    }
+    Ok(())
+}
+
 async fn create_mission(
     State(st): State<AppState>,
     Json(req): Json<CreateReq>,
 ) -> Result<Json<CreateResp>, (StatusCode, String)> {
-    // Admission-only global cap: refuse a new mission once rolling-24h spend has
-    // hit the ceiling. Read fresh each admission (low frequency; no shared atomic).
-    let since = now_ms() - 24 * 3600 * 1000;
-    let spent = st.store.lock().unwrap().spend_since(since).unwrap_or(0.0);
-    if spent >= st.global_cap {
-        return Err((StatusCode::TOO_MANY_REQUESTS, "global daily cost cap reached".into()));
-    }
-
     let n = st.next_id.fetch_add(1, Ordering::Relaxed);
     let unit_id = format!("u{n}");
     let spec = UnitSpec {
@@ -239,34 +276,19 @@ async fn create_mission(
         other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
     }
 
-    // Persist the initial row (mode + gate floor recorded for faithful rehydration).
-    st.store.lock().unwrap().upsert_unit(&row_from_spec(&spec, &runner_mode), now_ms()).ok();
-
-    // Register the per-unit handle atomically, then spawn its driver. A fresh
-    // unit_id is always unique, so this returns Some.
-    let (cmd_rx, evt_tx) =
-        register_unit_if_absent(&st, &unit_id).expect("freshly-allocated unit_id is unique");
-
-    match runner_mode.as_str() {
-        "demo" => {
-            let runner = FakeRunner::new(demo_script(&spec));
-            tokio::spawn(run(runner, FakeForge::default(), spec, fresh_ctx(&st), cmd_rx, evt_tx));
+    // P2: admission check + row insert in ONE critical section.
+    {
+        let s = st.store.lock().unwrap();
+        let since = now_ms() - 24 * 3600 * 1000;
+        if s.committed_spend(since).unwrap_or(0.0) >= st.global_cap {
+            return Err((StatusCode::TOO_MANY_REQUESTS, "global daily cost cap reached".into()));
         }
-        "real" => {
-            use crate::gh_forge::GhForge;
-            use crate::local_docker::LocalDockerRunner;
-            let host_clone = std::env::temp_dir().join(format!("cc-host-{unit_id}"));
-            let forge = GhForge::new(
-                spec.repo_url.clone(),
-                spec.repo_slug.clone(),
-                spec.base_branch.clone(),
-                host_clone,
-                format!("command-center SP1: {unit_id}"),
-            );
-            let runner = LocalDockerRunner::new("cc-agent:dev");
-            tokio::spawn(run(runner, forge, spec, fresh_ctx(&st), cmd_rx, evt_tx));
-        }
-        _ => unreachable!("mode validated above"),
+        let mut row = row_from_spec(&spec, &runner_mode);
+        row.swarm_id = None;
+        s.upsert_unit(&row, now_ms()).ok();
+    }
+    if spawn_driver_for(&st, spec, &runner_mode, &unit_id).is_err() {
+        return Err((StatusCode::CONFLICT, "unit already exists".into()));
     }
 
     Ok(Json(CreateResp { unit_id }))
@@ -599,7 +621,7 @@ pub async fn reconcile_on_startup<R: Runner>(state: &AppState, runner: &R) {
     let rows = state.store.lock().unwrap().list_units().unwrap_or_default();
     let nonterminal: Vec<String> = rows
         .iter()
-        .filter(|r| !matches!(r.phase.as_str(), "done" | "no_change" | "failed"))
+        .filter(|r| !fleet_core::TERMINAL_PHASE_STRS.contains(&r.phase.as_str()))
         .map(|r| r.unit_id.clone())
         .collect();
     let running = runner.list_unit_containers().await.unwrap_or_default();
@@ -615,6 +637,42 @@ pub async fn reconcile_on_startup<R: Runner>(state: &AppState, runner: &R) {
             }
         }
     }
+
+    // Swarm reconcile: planning → failed; fanning_out → resume missing lanes.
+    let swarms = state.store.lock().unwrap().list_swarms().unwrap_or_default();
+    for sw in swarms {
+        match sw.status.as_str() {
+            "planning" => {
+                state.store.lock().unwrap().update_swarm(&sw.swarm_id, "failed", sw.planner_cost,
+                    sw.lanes_launched, sw.lanes_dropped, Some("daemon restarted during planning"), now_ms()).ok();
+            }
+            "fanning_out" => resume_fan_out(state, &sw),
+            _ => {}
+        }
+    }
+}
+
+/// Re-commit any admitted lane whose unit doesn't yet exist, then mark running.
+/// A lane counts as launched only if its `unit_id` is set AND a unit row actually
+/// exists (defensive against a crash between minting the id and committing the row).
+fn resume_fan_out(st: &AppState, sw: &crate::store::SwarmRow) {
+    let lanes = st.store.lock().unwrap().lanes_for_swarm(&sw.swarm_id).unwrap_or_default();
+    let mut launched = 0u32;
+    for l in lanes.into_iter().filter(|l| l.decision == "admit") {
+        let exists = l.unit_id.as_ref()
+            .and_then(|id| st.store.lock().unwrap().get_unit(id).ok().flatten()).is_some();
+        if exists { launched += 1; continue; }
+        let n = st.next_id.fetch_add(1, Ordering::Relaxed);
+        let unit_id = format!("u{n}");
+        let lane = crate::swarm::Lane { title: l.title.clone(), task: l.task.clone(), rationale: l.rationale.clone() };
+        let spec = lane_spec(sw, &unit_id, l.idx as usize, &lane);
+        let mut row = row_from_spec(&spec, &sw.mode);
+        row.swarm_id = Some(sw.swarm_id.clone());
+        st.store.lock().unwrap().commit_lane_unit(&sw.swarm_id, l.idx, &row, now_ms()).ok();
+        if spawn_driver_for(st, spec, &sw.mode, &unit_id).is_ok() { launched += 1; }
+    }
+    st.store.lock().unwrap().update_swarm(&sw.swarm_id, "running", sw.planner_cost,
+        launched, sw.lanes_dropped, None, now_ms()).ok();
 }
 
 /// Append a synthetic `Halted` event + update the row (one store write, no await).
@@ -657,6 +715,256 @@ fn demo_script(spec: &UnitSpec) -> Vec<ExecOutput> {
     s
 }
 
+// ---------------------------------------------------------------------------
+// Swarm endpoints: POST /swarms, GET /swarms, GET /swarms/:id
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+struct CreateSwarmReq {
+    doc_path: String,
+    #[serde(default)] tier: TierReq,
+    #[serde(default = "default_mode")] mode: String,
+    #[serde(default)] max_lanes: Option<u32>,
+    #[serde(default)] usd_budget: Option<f64>,
+    #[serde(default)] per_lane_cap: Option<f64>,
+    #[serde(default = "default_floor")] min_review_rounds: u32,
+    #[serde(default)] repo_url: Option<String>,
+    #[serde(default)] repo_slug: Option<String>,
+    #[serde(default)] base_branch: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreateSwarmResp { swarm_id: String }
+
+async fn create_swarm(State(st): State<AppState>, Json(req): Json<CreateSwarmReq>)
+    -> Result<Json<CreateSwarmResp>, (StatusCode, String)> {
+    // Step 0 — synchronous validation (no 4xx can occur in the spawned task).
+    if req.doc_path.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "doc_path is required".into()));
+    }
+    match req.mode.as_str() {
+        "demo" => {}
+        "real" => {
+            if std::env::var("ANTHROPIC_API_KEY").is_err() {
+                return Err((StatusCode::BAD_REQUEST, "ANTHROPIC_API_KEY not set".into()));
+            }
+            if !docker_ok(&st).await {
+                return Err((StatusCode::SERVICE_UNAVAILABLE, "docker not available".into()));
+            }
+        }
+        other => return Err((StatusCode::BAD_REQUEST, format!("unknown mode: {other}"))),
+    }
+
+    // Step 1 — committed-spend admission + persist 'planning'.
+    let since = now_ms() - 24 * 3600 * 1000;
+    let lane_cap = req.max_lanes.unwrap_or_else(|| env_usize("CC_MAX_LANES", 8) as u32).max(1);
+    let per_lane_cap = req.per_lane_cap.unwrap_or(5.0);
+    let n = st.next_swarm.fetch_add(1, Ordering::Relaxed);
+    let swarm_id = format!("sw{n}");
+    let repo_url = req.repo_url.unwrap_or_else(|| "https://github.com/adbarc92/command-center-agent-sandbox".into());
+    let repo_slug = req.repo_slug.unwrap_or_else(|| "adbarc92/command-center-agent-sandbox".into());
+    let base_branch = req.base_branch.unwrap_or_else(|| "main".into());
+    let row = {
+        let s = st.store.lock().unwrap();
+        let committed = s.committed_spend(since).unwrap_or(0.0);
+        if committed >= st.global_cap {
+            return Err((StatusCode::TOO_MANY_REQUESTS, "global daily cost cap reached".into()));
+        }
+        let usd_budget = req.usd_budget.unwrap_or_else(|| (st.global_cap - committed).clamp(0.0, 15.0));
+        let row = crate::store::SwarmRow {
+            swarm_id: swarm_id.clone(), repo_url, repo_slug, base_branch,
+            doc_path: req.doc_path.clone(), tier: phase_tier(req.tier.into()), mode: req.mode.clone(),
+            lane_cap, usd_budget, per_lane_cap, status: "planning".into(), planner_cost: 0.0,
+            lanes_launched: 0, lanes_dropped: 0, min_review_rounds: req.min_review_rounds.max(1),
+            terminal_reason: None,
+        };
+        s.upsert_swarm(&row, now_ms()).ok();
+        row
+    };
+
+    // Step 2+ — spawn the slow work with mode-selected seams (demo never pays).
+    let st2 = st.clone();
+    let id2 = swarm_id.clone();
+    tokio::spawn(async move {
+        match row.mode.as_str() {
+            "demo" => {
+                use crate::{docsource::FakeDocSource, planner::FakePlanner, swarm::Lane};
+                let lanes = vec![
+                    Lane { title: "Lane One".into(), task: "demo task 1".into(), rationale: "indep".into() },
+                    Lane { title: "Lane Two".into(), task: "demo task 2".into(), rationale: "indep".into() },
+                ];
+                run_swarm(st2, id2, FakePlanner::ok(lanes, 0.01), FakeDocSource::new("# demo spec")).await;
+            }
+            _ => {
+                use crate::{docsource::GitDocSource, planner::ClaudePlanner};
+                run_swarm(st2, id2, ClaudePlanner::new(), GitDocSource::new()).await;
+            }
+        }
+    });
+
+    Ok(Json(CreateSwarmResp { swarm_id }))
+}
+
+#[derive(Serialize)]
+struct SwarmSummary {
+    swarm_id: String, status: String, lanes_launched: u32, lanes_dropped: u32,
+    planner_cost: f64, doc_path: String,
+}
+
+async fn list_swarms(State(st): State<AppState>) -> Json<Vec<SwarmSummary>> {
+    let rows = st.store.lock().unwrap().list_swarms().unwrap_or_default();
+    Json(rows.into_iter().map(|r| SwarmSummary {
+        swarm_id: r.swarm_id, status: r.status, lanes_launched: r.lanes_launched,
+        lanes_dropped: r.lanes_dropped, planner_cost: r.planner_cost, doc_path: r.doc_path,
+    }).collect())
+}
+
+#[derive(Serialize)]
+struct SwarmDetail {
+    swarm_id: String, status: String, planner_cost: f64,
+    lanes_launched: u32, lanes_dropped: u32, awaiting_human: u64,
+    spent_so_far: f64, lanes: Vec<LaneView>, units: Vec<String>,
+}
+#[derive(Serialize)]
+struct LaneView { idx: u32, title: String, decision: String, unit_id: Option<String> }
+
+async fn get_swarm(State(st): State<AppState>, Path(id): Path<String>)
+    -> Result<Json<SwarmDetail>, StatusCode> {
+    let s = st.store.lock().unwrap();
+    let sw = s.get_swarm(&id).ok().flatten().ok_or(StatusCode::NOT_FOUND)?;
+    let lanes = s.lanes_for_swarm(&id).unwrap_or_default();
+    let (total, terminal, awaiting) = s.swarm_rollup(&id).unwrap_or((0, 0, 0));
+    // Computed status: running→done only when every child unit is terminal.
+    let status = if sw.status == "running" && total > 0 && terminal == total {
+        "done".to_string()
+    } else { sw.status.clone() };
+    // "spent so far" = actual child cost + planner cost (NOT reservations).
+    let unit_ids: Vec<String> = lanes.iter().filter_map(|l| l.unit_id.clone()).collect();
+    let mut spent = sw.planner_cost;
+    for uid in &unit_ids {
+        if let Ok(Some(u)) = s.get_unit(uid) { spent += u.cost; }
+    }
+    Ok(Json(SwarmDetail {
+        swarm_id: id, status, planner_cost: sw.planner_cost,
+        lanes_launched: sw.lanes_launched, lanes_dropped: sw.lanes_dropped, awaiting_human: awaiting,
+        spent_so_far: spent,
+        lanes: lanes.iter().map(|l| LaneView {
+            idx: l.idx, title: l.title.clone(), decision: l.decision.clone(), unit_id: l.unit_id.clone(),
+        }).collect(),
+        units: unit_ids,
+    }))
+}
+
+/// Plan → admit → fan out, for an already-persisted `planning` swarm row.
+/// Generic over the seams so tests inject fakes. Each store mutation is a short
+/// sync critical section. Admission here mirrors the mission path: the
+/// committed-spend check and the unit-row insert happen under ONE store-lock span
+/// (per-lane re-check + commit_lane_unit), so the cap binds atomically (P2).
+pub async fn run_swarm<P: Planner, D: DocSource>(st: AppState, swarm_id: String, planner: P, doc: D) {
+    let Some(sw) = st.store.lock().unwrap().get_swarm(&swarm_id).ok().flatten() else { return };
+
+    // 2. Plan (read doc, then decompose).
+    let doc_text = match doc.read(&sw.repo_url, &sw.base_branch, &sw.doc_path).await {
+        Ok(t) => t,
+        Err(e) => return fail_swarm(&st, &swarm_id, sw.planner_cost, &format!("doc: {e}")),
+    };
+    let outcome = match planner.plan(&doc_text, sw.lane_cap as usize).await {
+        Ok(o) => o,
+        Err(e) => return fail_swarm(&st, &swarm_id, 0.0, &format!("planner: {e}")),
+    };
+    st.store.lock().unwrap()
+        .update_swarm(&swarm_id, "planning", outcome.cost_usd, 0, 0, None, now_ms()).ok();
+    if outcome.lanes.is_empty() {
+        return fail_swarm(&st, &swarm_id, outcome.cost_usd, "planner returned zero lanes");
+    }
+
+    // 3. Admit (pure) + persist every lane's decision.
+    let cfg = AdmissionConfig {
+        lane_cap: sw.lane_cap as usize, usd_budget: sw.usd_budget,
+        per_lane_cap: sw.per_lane_cap, planner_cost: outcome.cost_usd,
+    };
+    let decisions = admit_lanes(&outcome.lanes, &cfg);
+    let mut dropped = 0u32;
+    for (i, d) in &decisions {
+        let lane = &outcome.lanes[*i];
+        let dstr = match d {
+            LaneDecision::Admit => "admit",
+            LaneDecision::DropOverLaneCap => "drop_lane_cap",
+            LaneDecision::DropOverBudget => "drop_budget",
+        };
+        if !matches!(d, LaneDecision::Admit) { dropped += 1; }
+        st.store.lock().unwrap()
+            .upsert_lane(&swarm_id, *i as u32, &lane.title, &lane.task, &lane.rationale, dstr, None).ok();
+    }
+    let admitted_idxs: Vec<usize> = decisions.iter()
+        .filter(|(_, d)| matches!(d, LaneDecision::Admit)).map(|(i, _)| *i).collect();
+    if admitted_idxs.is_empty() {
+        st.store.lock().unwrap()
+            .update_swarm(&swarm_id, "empty", outcome.cost_usd, 0, dropped, Some("no lanes admitted"), now_ms()).ok();
+        return;
+    }
+
+    // 4. Fan out (idempotent per-lane).
+    st.store.lock().unwrap()
+        .update_swarm(&swarm_id, "fanning_out", outcome.cost_usd, 0, dropped, None, now_ms()).ok();
+    let since = now_ms() - 24 * 3600 * 1000;
+    let mut launched = 0u32;
+    'fanout: for (pos, idx) in admitted_idxs.iter().copied().enumerate() {
+        let lane = &outcome.lanes[idx];
+        // Admission critical section: re-check committed spend, mint id, commit row+link.
+        let (unit_id, spec) = {
+            let s = st.store.lock().unwrap();
+            if s.committed_spend(since).unwrap_or(0.0) >= st.global_cap {
+                // Cap tripped: mark this lane and all remaining admitted lanes as
+                // drop_global_cap so no admit row is left dangling with unit_id = NULL.
+                for rem_idx in admitted_idxs[pos..].iter().copied() {
+                    let rem_lane = &outcome.lanes[rem_idx];
+                    s.upsert_lane(&swarm_id, rem_idx as u32, &rem_lane.title, &rem_lane.task,
+                        &rem_lane.rationale, "drop_global_cap", None).ok();
+                    dropped += 1;
+                }
+                break 'fanout;
+            }
+            let n = st.next_id.fetch_add(1, Ordering::Relaxed);
+            let unit_id = format!("u{n}");
+            let spec = lane_spec(&sw, &unit_id, idx, lane);
+            let mut row = row_from_spec(&spec, &sw.mode);
+            row.swarm_id = Some(swarm_id.clone());
+            s.commit_lane_unit(&swarm_id, idx as u32, &row, now_ms()).ok();
+            (unit_id, spec)
+        };
+        // Spawn the driver outside the lock; the row already exists.
+        if spawn_driver_for(&st, spec, &sw.mode, &unit_id).is_ok() {
+            launched += 1;
+        }
+    }
+    st.store.lock().unwrap()
+        .update_swarm(&swarm_id, "running", outcome.cost_usd, launched, dropped, None, now_ms()).ok();
+}
+
+fn fail_swarm(st: &AppState, swarm_id: &str, planner_cost: f64, reason: &str) {
+    st.store.lock().unwrap()
+        .update_swarm(swarm_id, "failed", planner_cost, 0, 0, Some(reason), now_ms()).ok();
+}
+
+/// Build a lane's UnitSpec from the swarm config.
+fn lane_spec(sw: &crate::store::SwarmRow, unit_id: &str, idx: usize, lane: &crate::swarm::Lane) -> UnitSpec {
+    UnitSpec {
+        unit_id: unit_id.into(),
+        tier: parse_tier(&sw.tier),
+        task: lane.task.clone(),
+        usd_cap: sw.per_lane_cap,
+        wall_clock_secs: 1800,
+        gate: GateConfig { min_review_rounds: sw.min_review_rounds.max(1) },
+        repo_url: sw.repo_url.clone(),
+        repo_slug: sw.repo_slug.clone(),
+        base_branch: sw.base_branch.clone(),
+        branch: format!("agent/{}/{}-{}", sw.swarm_id, idx, slug(&lane.title)),
+        test_cmd: "node --test".into(),
+        oracle_frozen: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,6 +988,7 @@ mod tests {
             terminal_reason: None,
             mode: "real".into(),
             min_review_rounds: 1,
+            swarm_id: None,
         }
     }
 
@@ -803,6 +1112,82 @@ mod tests {
         assert!(!saw_oracle, "resume must not re-run the oracle");
     }
 
+    #[tokio::test]
+    async fn next_id_seeds_above_persisted_units() {
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        store.lock().unwrap().upsert_unit(&building_row("u5"), 1).unwrap();
+        let state = AppState::new(store);
+        // Fresh allocation must not collide with u5.
+        let n = state.next_id.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(n, 6, "next mint is u6, never an existing id");
+    }
+
+    fn swarm_row_srv(id: &str, status: &str) -> crate::store::SwarmRow {
+        crate::store::SwarmRow {
+            swarm_id: id.into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
+            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(), lane_cap: 8, usd_budget: 15.0,
+            per_lane_cap: 5.0, status: status.into(), planner_cost: 0.0, lanes_launched: 0,
+            lanes_dropped: 0, min_review_rounds: 1, terminal_reason: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn next_swarm_seeds_above_persisted_swarms() {
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        store.lock().unwrap().upsert_swarm(&swarm_row_srv("sw5", "running"), 1).unwrap();
+        let state = AppState::new(store);
+        let n = state.next_swarm.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(n, 6, "next swarm mint is sw6, never an existing id");
+    }
+
+    #[tokio::test]
+    async fn create_mission_refused_when_committed_reservations_breach_cap() {
+        // A single NON-TERMINAL unit reserving > $20 must block a new mission, even
+        // though its recorded cost is small — committed_spend counts the reservation.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            let mut r = building_row("rsv");
+            r.phase = "building".into(); // non-terminal
+            r.cost = 0.1;
+            r.usd_cap = 25.0;            // reservation alone exceeds the $20 cap
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let state = AppState::new(store);
+        let resp = create_mission(State(state), Json(CreateReq {
+            task: "t".into(), tier: TierReq::T1, mode: "demo".into(), min_review_rounds: 1,
+        })).await;
+        match resp {
+            Err((code, _)) => assert_eq!(code, StatusCode::TOO_MANY_REQUESTS),
+            Ok(_) => panic!("expected 429 — committed reservation breaches the cap"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_missions_cannot_both_breach_the_cap() {
+        // Global cap is $20. Pre-load committed spend so exactly ONE more default
+        // $5-cap unit crosses the ceiling: seed reserves 16, first admit pushes
+        // committed to 21 (>=20) so the second is refused — but ONLY if check+insert
+        // are atomic. An open race would let both observe 16<20 and both admit.
+        let store = std::sync::Arc::new(std::sync::Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            let mut r = building_row("seed"); r.phase = "building".into(); r.usd_cap = 16.0; r.cost = 0.0;
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let state = AppState::new(store.clone());
+        let a = state.clone();
+        let b = state.clone();
+        let h1 = tokio::spawn(async move {
+            create_mission(State(a), Json(CreateReq { task: "t".into(), tier: TierReq::T1, mode: "demo".into(), min_review_rounds: 1 })).await.is_ok()
+        });
+        let h2 = tokio::spawn(async move {
+            create_mission(State(b), Json(CreateReq { task: "t".into(), tier: TierReq::T1, mode: "demo".into(), min_review_rounds: 1 })).await.is_ok()
+        });
+        let wins = [h1.await.unwrap(), h2.await.unwrap()].iter().filter(|&&w| w).count();
+        assert_eq!(wins, 1, "exactly one mission admitted; the cap binds atomically");
+    }
+
     #[test]
     fn demo_script_has_oracle_plus_three_calls_per_round() {
         let spec = UnitSpec {
@@ -820,5 +1205,161 @@ mod tests {
             oracle_frozen: false,
         };
         assert_eq!(demo_script(&spec).len(), 7);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn run_swarm_fans_out_admitted_lanes_to_done() {
+        use crate::docsource::FakeDocSource;
+        use crate::planner::FakePlanner;
+        use crate::swarm::Lane;
+
+        let state = AppState::default();
+        let sw = crate::store::SwarmRow {
+            swarm_id: "sw1".into(), repo_url: "https://github.com/x/y".into(), repo_slug: "x/y".into(),
+            base_branch: "main".into(), doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(),
+            lane_cap: 8, usd_budget: 100.0, per_lane_cap: 5.0, status: "planning".into(),
+            planner_cost: 0.0, lanes_launched: 0, lanes_dropped: 0, min_review_rounds: 1,
+            terminal_reason: None,
+        };
+        state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
+
+        let lanes = vec![
+            Lane { title: "Add A".into(), task: "do A".into(), rationale: "indep".into() },
+            Lane { title: "Add B".into(), task: "do B".into(), rationale: "indep".into() },
+        ];
+        let planner = FakePlanner::ok(lanes, 0.2);
+        let doc = FakeDocSource::new("# spec");
+
+        run_swarm(state.clone(), "sw1".into(), planner, doc).await;
+
+        let units = state.store.lock().unwrap().list_units().unwrap();
+        let mine: Vec<_> = units.iter().filter(|u| u.swarm_id.as_deref() == Some("sw1")).cloned().collect();
+        assert_eq!(mine.len(), 2);
+        assert!(mine.iter().all(|u| (u.usd_cap - 5.0).abs() < 1e-9));
+        let branches: std::collections::HashSet<_> = mine.iter().map(|u| u.branch.clone()).collect();
+        assert_eq!(branches.len(), 2, "unique branches");
+        assert!(branches.iter().all(|b| b.starts_with("agent/sw1/")));
+
+        let mut done = false;
+        for _ in 0..500 {
+            let (total, term, _) = state.store.lock().unwrap().swarm_rollup("sw1").unwrap();
+            if total == 2 && term == 2 { done = true; break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(done, "all lanes reached terminal");
+        assert_eq!(state.store.lock().unwrap().get_swarm("sw1").unwrap().unwrap().status, "running");
+    }
+
+    #[tokio::test]
+    async fn run_swarm_zero_admitted_is_empty_not_done() {
+        use crate::docsource::FakeDocSource;
+        use crate::planner::FakePlanner;
+        use crate::swarm::Lane;
+        let state = AppState::default();
+        let sw = crate::store::SwarmRow {
+            swarm_id: "sw2".into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
+            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(),
+            lane_cap: 8, usd_budget: 1.0, per_lane_cap: 5.0, status: "planning".into(),
+            planner_cost: 0.0, lanes_launched: 0, lanes_dropped: 0, min_review_rounds: 1,
+            terminal_reason: None,
+        };
+        state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
+        let planner = FakePlanner::ok(vec![Lane { title: "A".into(), task: "a".into(), rationale: "r".into() }], 0.0);
+        run_swarm(state.clone(), "sw2".into(), planner, FakeDocSource::new("# spec")).await;
+        let got = state.store.lock().unwrap().get_swarm("sw2").unwrap().unwrap();
+        assert_eq!(got.status, "empty", "lanes produced but none admitted ⇒ empty, never done");
+    }
+
+    #[tokio::test]
+    async fn run_swarm_planner_error_is_failed() {
+        use crate::docsource::FakeDocSource;
+        use crate::planner::FakePlanner;
+        let state = AppState::default();
+        let sw = crate::store::SwarmRow {
+            swarm_id: "sw3".into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
+            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(), lane_cap: 8, usd_budget: 15.0,
+            per_lane_cap: 5.0, status: "planning".into(), planner_cost: 0.0, lanes_launched: 0,
+            lanes_dropped: 0, min_review_rounds: 1, terminal_reason: None,
+        };
+        state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
+        run_swarm(state.clone(), "sw3".into(), FakePlanner::err("boom"), FakeDocSource::new("x")).await;
+        assert_eq!(state.store.lock().unwrap().get_swarm("sw3").unwrap().unwrap().status, "failed");
+    }
+
+    #[tokio::test]
+    async fn post_swarms_validates_then_returns_id() {
+        let state = AppState::default();
+        // unknown mode → error, no row created
+        let bad = create_swarm(State(state.clone()), Json(CreateSwarmReq {
+            doc_path: "spec.md".into(), mode: "weird".into(), ..Default::default()
+        })).await;
+        assert!(bad.is_err());
+        // demo → ok, returns an id
+        let ok = create_swarm(State(state.clone()), Json(CreateSwarmReq {
+            doc_path: "spec.md".into(), mode: "demo".into(), ..Default::default()
+        })).await.expect("ok");
+        assert!(ok.0.swarm_id.starts_with("sw"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_marks_planning_swarm_failed_and_resumes_fanning_out() {
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            // A swarm stuck mid-planning at crash → must become failed.
+            s.upsert_swarm(&swarm_row_srv("swP", "planning"), now_ms()).unwrap();
+            // A swarm mid-fan-out: lane 0 launched (unit exists), lane 1 not.
+            let mut f = swarm_row_srv("swF", "fanning_out"); f.mode = "demo".into(); f.min_review_rounds = 1;
+            s.upsert_swarm(&f, now_ms()).unwrap();
+            s.upsert_lane("swF", 0, "A", "ta", "r", "admit", Some("u1")).unwrap();
+            let mut u = building_row("u1"); u.swarm_id = Some("swF".into()); u.phase = "building".into();
+            s.upsert_unit(&u, now_ms()).unwrap();
+            s.upsert_lane("swF", 1, "B", "tb", "r", "admit", None).unwrap();
+        }
+        let state = AppState::new(store.clone());
+        let runner = FakeRunner::new(vec![]);
+        reconcile_on_startup(&state, &runner).await;
+
+        let s = store.lock().unwrap();
+        assert_eq!(s.get_swarm("swP").unwrap().unwrap().status, "failed");
+        // swF resumed: lane 1 now has a unit_id, status running.
+        let lanes = s.lanes_for_swarm("swF").unwrap();
+        assert!(lanes[1].unit_id.is_some(), "missing lane was committed on resume");
+        assert_eq!(s.get_swarm("swF").unwrap().unwrap().status, "running");
+    }
+
+    #[tokio::test]
+    async fn run_swarm_marks_remaining_lanes_drop_global_cap_when_cap_trips_midway() {
+        use crate::docsource::FakeDocSource;
+        use crate::planner::FakePlanner;
+        use crate::swarm::Lane;
+        let state = AppState::default();
+        // Pre-load committed spend at/above the global cap via a non-terminal big-cap unit,
+        // so the very first fan-out re-check trips the global cap.
+        {
+            let s = state.store.lock().unwrap();
+            let mut r = building_row("rsv");
+            r.phase = "building".into();
+            r.usd_cap = 25.0;
+            r.cost = 0.0;
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let sw = crate::store::SwarmRow {
+            swarm_id: "swG".into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
+            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(), lane_cap: 8, usd_budget: 100.0,
+            per_lane_cap: 5.0, status: "planning".into(), planner_cost: 0.0, lanes_launched: 0,
+            lanes_dropped: 0, min_review_rounds: 1, terminal_reason: None,
+        };
+        state.store.lock().unwrap().upsert_swarm(&sw, now_ms()).unwrap();
+        let lanes = vec![
+            Lane { title: "A".into(), task: "a".into(), rationale: "r".into() },
+            Lane { title: "B".into(), task: "b".into(), rationale: "r".into() },
+        ];
+        run_swarm(state.clone(), "swG".into(), FakePlanner::ok(lanes, 0.0), FakeDocSource::new("# spec")).await;
+        // Both lanes were admitted by admit_lanes (budget 100 allows them) but the global
+        // cap trips at fan-out, so NEITHER launches and BOTH are recorded drop_global_cap.
+        let lanes = state.store.lock().unwrap().lanes_for_swarm("swG").unwrap();
+        assert!(lanes.iter().all(|l| l.decision == "drop_global_cap"), "no admit rows left dangling");
+        assert!(lanes.iter().all(|l| l.unit_id.is_none()), "nothing launched");
     }
 }

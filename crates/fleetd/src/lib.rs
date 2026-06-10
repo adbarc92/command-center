@@ -3,14 +3,17 @@
 //! HTTP/WS server and `LocalDockerRunner` land in later Phase 1/2 steps.
 
 pub mod claude_meter;
+pub mod docsource;
 pub mod driver;
 pub mod fake;
 pub mod forge;
 pub mod gh_forge;
 pub mod local_docker;
+pub mod planner;
 pub mod reconcile;
 pub mod retry;
 pub mod runner;
 pub mod server;
 pub mod steps;
 pub mod store;
+pub mod swarm;
