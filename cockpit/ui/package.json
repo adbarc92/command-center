@@ -11,7 +11,9 @@
     "test": "vitest run",
     "tauri": "tauri",
     "sidecar": "node scripts/build-sidecar.mjs",
-    "desktop": "npm run sidecar && tauri dev"
+    "sidecar:release": "node scripts/build-sidecar.mjs --release",
+    "desktop": "npm run sidecar && tauri dev",
+    "bundle": "npm run sidecar:release && tauri build"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
@@ -28,6 +30,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.0"
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-updater": "^2.9.0"
   }
 }

@@ -26,6 +26,16 @@ pub fn run() {
             dashboard::audience_posts,
         ])
         .setup(|app| {
+            // LANE-P → HOST: activate the updater runtime. Lane B already wired
+            // the `plugins.updater` *config* (endpoints + pubkey) in
+            // tauri.conf.json; registering the plugin is what makes the app
+            // actually able to check for / install updates at runtime. Desktop
+            // only (no updater on mobile). Additive — the proven shutdown path
+            // and the rest of the wiring are untouched.
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -56,6 +66,23 @@ pub fn run() {
                 let mgr = app_handle.state::<plugins::manager::PluginManager>();
                 mgr.stop_all_owned(30_000); // total budget; kept under the OS force-kill ceiling
                 app_handle.exit(0);
+                // LANE-P note — the cosmetic "failed to send message to the
+                // webview" line on clean exit is upstream/benign, not ours:
+                //   - it is the Display of `Error::FailedToSendMessage`
+                //     (tauri-runtime/src/lib.rs), logged via `log::error!("{e}")`
+                //     INSIDE wry (tauri-runtime-wry), when a final in-flight
+                //     message reaches a webview whose event loop is already
+                //     closing — i.e. strictly AFTER this handler reaped the
+                //     sidecar above, so the shutdown path is unaffected.
+                //   - it only surfaces in DEV: the log plugin is registered
+                //     under `cfg!(debug_assertions)` only, so release bundles
+                //     have no logger installed and the line never reaches users.
+                //   - it is deliberately NOT suppressed: tauri-plugin-log's
+                //     `.filter` keys on `log::Metadata` (target + level only, no
+                //     message body), so dropping it would mean muting the entire
+                //     `tauri_runtime_wry` error target and hiding real runtime
+                //     errors. Not worth weakening observability for a dev-only
+                //     cosmetic line.
             }
         });
 }
