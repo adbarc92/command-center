@@ -1,6 +1,8 @@
+use tauri::Manager;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
+mod plugins;
 // LANE-A → SHELL contract: the dashboard's read-seam Tauri commands (§6.1/§6.2).
 mod dashboard;
 
@@ -8,10 +10,13 @@ mod dashboard;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .manage(plugins::manager::PluginManager::default())
         // LANE-A → SHELL contract: register the dashboard read-seam commands so the
         // frontend's `invoke('halyard_status'|'halyard_queue'|'audience_health'|
         // 'audience_posts')` resolve. Additive only — remove nothing here.
         .invoke_handler(tauri::generate_handler![
+            plugins::manager::plugins_list,
+            plugins::manager::plugin_launch,
             dashboard::halyard_status,
             dashboard::halyard_queue,
             dashboard::audience_health,
@@ -47,6 +52,14 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                api.prevent_exit();
+                let mgr = app_handle.state::<plugins::manager::PluginManager>();
+                mgr.stop_all_owned(30_000); // total budget; kept under the OS force-kill ceiling
+                app_handle.exit(0);
+            }
+        });
 }
