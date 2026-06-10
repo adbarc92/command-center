@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi", "nsis", "app", "dmg", "appimage", "deb"],
     "externalBin": ["binaries/fleetd-serve"],
     "icon": [
       "icons/32x32.png",
@@ -37,8 +37,25 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com"
+    },
+    "macOS": {
+      "signingIdentity": null,
+      "minimumSystemVersion": "10.15"
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://releases.command-center.example/cockpit/{{target}}/{{arch}}/{{current_version}}"
+      ]
     }
   }
 }

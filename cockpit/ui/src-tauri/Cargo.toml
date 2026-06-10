@@ -18,16 +18,19 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.2" }
+tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2"
 log = "0.4"
-tauri = { version = "2.11.2" }
+tauri = { version = "2.11.2", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
 ureq = "2"
 # LANE-A (dashboard): Audience HTTP poll (§6.2). rustls to avoid an OpenSSL system dep.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# LANE-B (sidecar supervisor): async timers for health-gate polling + restart backoff.
+# Already pulled in transitively by tauri/reqwest; `time` is all the supervisor needs.
+tokio = { version = "1", features = ["time"] }

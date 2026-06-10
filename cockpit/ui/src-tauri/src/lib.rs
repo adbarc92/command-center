@@ -1,16 +1,19 @@
 use tauri::Manager;
-use tauri_plugin_shell::process::CommandEvent;
-use tauri_plugin_shell::ShellExt;
 
 mod plugins;
 // LANE-A → SHELL contract: the dashboard's read-seam Tauri commands (§6.1/§6.2).
 mod dashboard;
+// LANE-B → HOST: fleetd-serve sidecar supervisor (health-gate / restart / kill).
+mod sidecar;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(plugins::manager::PluginManager::default())
+        // LANE-B → HOST: holds the live fleetd-serve child so the shutdown hook
+        // can kill it (no orphaned sidecar) and the supervisor can restart it.
+        .manage(sidecar::SidecarSupervisor::default())
         // LANE-A → SHELL contract: register the dashboard read-seam commands so the
         // frontend's `invoke('halyard_status'|'halyard_queue'|'audience_health'|
         // 'audience_posts')` resolve. Additive only — remove nothing here.
@@ -33,22 +36,9 @@ pub fn run() {
 
             // Babysit the fleetd daemon as a sidecar: the cockpit talks to it on
             // 127.0.0.1:8787. Bundled as binaries/fleetd-serve-<target-triple>.
-            let sidecar = app.shell().sidecar("fleetd-serve")?;
-            let (mut rx, _child) = sidecar.spawn()?;
-            tauri::async_runtime::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        CommandEvent::Stdout(b) => {
-                            log::info!("fleetd: {}", String::from_utf8_lossy(&b).trim_end())
-                        }
-                        CommandEvent::Stderr(b) => {
-                            log::warn!("fleetd: {}", String::from_utf8_lossy(&b).trim_end())
-                        }
-                        CommandEvent::Terminated(t) => log::warn!("fleetd exited: {:?}", t.code),
-                        _ => {}
-                    }
-                }
-            });
+            // The supervisor (Rust, survives webview reloads) health-gates on
+            // /health, restarts on crash, and is killed on window close.
+            sidecar::spawn_supervisor(app.handle());
 
             Ok(())
         })
@@ -57,6 +47,12 @@ pub fn run() {
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 api.prevent_exit();
+                // LANE-B → HOST: stop the fleetd-serve sidecar first so the
+                // supervisor doesn't respawn it as we tear down, and no
+                // orphaned process is left behind.
+                app_handle
+                    .state::<sidecar::SidecarSupervisor>()
+                    .shutdown();
                 let mgr = app_handle.state::<plugins::manager::PluginManager>();
                 mgr.stop_all_owned(30_000); // total budget; kept under the OS force-kill ceiling
                 app_handle.exit(0);
