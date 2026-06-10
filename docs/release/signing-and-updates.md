@@ -122,12 +122,14 @@ Local unsigned builds leave `pubkey` empty and skip all of this.
 with the real update server / static bucket that serves the `latest.json`
 manifest per `{{target}}`/`{{arch}}`/`{{current_version}}`.
 
-> **Activation note:** the `plugins.updater` config block is present, but to
-> actually *check for and install* updates at runtime the app must also depend
-> on and register `tauri-plugin-updater` (Rust + JS). That wiring is **not yet
-> added** (it pulls a new crate + a JS dependency) — see the contract request in
-> the Lane B report. Until then this block is configuration-only and is ignored
-> at runtime; it does not affect unsigned local builds.
+> **Activation note:** the runtime is **wired**. The app depends on
+> `tauri-plugin-updater` (Rust crate + `@tauri-apps/plugin-updater` JS) and
+> registers it in `src-tauri/src/lib.rs` (`.plugin(tauri_plugin_updater::Builder
+> ::new().build())`, with the `updater:default` capability granted), so the
+> `plugins.updater` block above is now backed by a live runtime that can check
+> for and install updates. What remains is **release-time only**: inject the real
+> `pubkey` and provide `TAURI_SIGNING_PRIVATE_KEY` (§4) so signed updater
+> artifacts are produced. Unsigned local builds are unaffected (empty `pubkey`).
 
 ---
 
