@@ -1,0 +1,108 @@
+name: Release
+
+# Tag-triggered release (Lane C / roadmap C8). On a `v*` tag, build SIGNED
+# bundles on each OS and publish a GitHub Release with the artifacts attached.
+#
+# SIGNING CONTRACT (Lane B owns these in tauri.conf.json + docs/release/
+# signing-and-updates.md): this workflow ONLY injects secrets by their
+# canonical names; it does NOT define signing config that belongs in
+# tauri.conf.json. Provide these repo secrets to get signed/notarized output:
+#   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_ID,
+#            APPLE_PASSWORD, APPLE_TEAM_ID
+#   Windows: WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD
+#   Updater: TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# If a secret is unset the build still runs but produces an UNSIGNED bundle for
+# that platform (tauri-action / Tauri degrade gracefully).
+#
+# Same load-bearing build order as CI: `npm run sidecar` BEFORE the Tauri build
+# (tauri-action runs the bundle step; we run the sidecar in a prior step).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the GitHub Release and upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: release (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            cockpit/ui/src-tauri
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cockpit/ui/package-lock.json
+
+      - name: Install Tauri Linux system deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev
+
+      - name: Install frontend dependencies
+        working-directory: cockpit/ui
+        run: npm ci
+
+      # MUST precede the bundle step — externalBin ("binaries/fleetd-serve") is
+      # resolved at compile time.
+      - name: Build fleetd sidecar
+        working-directory: cockpit/ui
+        run: npm run sidecar
+
+      - name: Build, sign, and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # GitHub Release upload.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing (canonical names — Lane B contract).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS code signing + notarization.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows Authenticode signing.
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          projectPath: cockpit/ui
+          tagName: ${{ github.ref_name }}
+          releaseName: "Fleet Command ${{ github.ref_name }}"
+          releaseBody: "See the assets below to download and install this version."
+          releaseDraft: true
+          prerelease: false
