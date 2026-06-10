@@ -1,42 +1,40 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createMission, sendCommand, openStream, listUnits, health, FLEET_BASE } from './lib/api';
-  import { fold, fromSnapshot, newUnit, phaseClass, progress, isTerminal, type Unit } from './lib/fleet';
-  import type { CommandName, Envelope, Health } from './lib/types';
+  import { FLEET_BASE } from './lib/api';
+  import { phaseClass, progress, isTerminal } from './lib/fleet';
+  import type { CommandName } from './lib/types';
+  import { fleet } from './lib/store.svelte';
+  import Switcher, { type ViewEntry } from './lib/Switcher.svelte';
+  import Dashboard from './views/Dashboard.svelte';
+  import { tauriHalyardReader, tauriAudienceReader } from './lib/dashboard/api';
 
-  let units = $state<Record<string, Unit>>({});
-  let order = $state<string[]>([]);
-  let selectedId = $state<string | null>(null);
-  let daemon = $state<Health | null>(null);
-  const sockets: Record<string, WebSocket> = {};
+  // ── top-level view switcher (Lane A) ─────────────────────────────
+  // Fleet = the inline cockpit below; Projects = the read-only Project Dashboard.
+  // Both project the SAME shared `fleet` store, so switching never loses state.
+  type ViewId = 'fleet' | 'projects';
+  let view = $state<ViewId>('fleet');
 
-  // On load, repopulate the fleet from the daemon (units survive reloads/restarts)
-  // and reconnect a stream to each, replaying its full event log.
+  const views: ViewEntry[] = [
+    { id: 'fleet', label: 'FLEET' },
+    { id: 'projects', label: 'PROJECTS' },
+  ];
+
+  // The fleet store is the single source of fleet truth, shared across views. It owns
+  // its own WebSocket streams; we connect once on app mount and tear down on app
+  // unmount (NOT on a view switch — switching keeps units/sockets/selection alive).
   onMount(() => {
-    void reconnect();
-    return () => Object.values(sockets).forEach((s) => s.close());
+    fleet.start();
+    return () => fleet.dispose();
   });
 
-  async function reconnect() {
-    try {
-      daemon = await health();
-    } catch {
-      daemon = null;
-    }
-    let snaps;
-    try {
-      snaps = await listUnits();
-    } catch {
-      return; // daemon unreachable; the header badge already reflects it
-    }
-    for (const s of snaps) {
-      if (units[s.unit_id]) continue;
-      units[s.unit_id] = fromSnapshot(s);
-      order = [...order, s.unit_id];
-      sockets[s.unit_id] = openStream(s.unit_id, 0, (e) => onEvt(s.unit_id, e));
-    }
-    if (!selectedId && order.length) selectedId = order[0];
-  }
+  // Convenience aliases so the Fleet markup below reads like before, but every read
+  // goes through the shared store.
+  const list = $derived(fleet.list);
+  const selected = $derived(fleet.selected);
+  const activeCount = $derived(fleet.activeCount);
+  const totalBurn = $derived(fleet.totalBurn);
+  const daemon = $derived(fleet.daemon);
+  const selectedId = $derived(fleet.selectedId);
 
   // ── new-mission form ─────────────────────────────────────────────
   let task = $state('Add a function sum(a, b) in src/index.js (module.exports.sum) returning a + b.');
@@ -46,29 +44,11 @@
   let launching = $state(false);
   let launchErr = $state<string | null>(null);
 
-  const selected = $derived(selectedId ? units[selectedId] : null);
-  const list = $derived(order.map((id) => units[id]).filter(Boolean));
-  const activeCount = $derived(list.filter((u) => !isTerminal(u.phase)).length);
-  const totalBurn = $derived(list.reduce((s, u) => s + u.cost, 0));
-
-  function onEvt(id: string, e: Envelope) {
-    const prev = units[id];
-    if (!prev) return;
-    if (e.seq <= prev.lastSeq) return; // dedup replayed/overlapping frames
-    const next = fold({ ...prev }, e.event);
-    next.lastSeq = e.seq;
-    units[id] = next;
-  }
-
   async function launch() {
     launching = true;
     launchErr = null;
     try {
-      const id = await createMission({ task, tier, mode, min_review_rounds: rounds });
-      units[id] = newUnit(id, task, tier.toUpperCase());
-      order = [id, ...order];
-      selectedId = id;
-      sockets[id] = openStream(id, 0, (e) => onEvt(id, e));
+      await fleet.launch({ task, tier, mode, min_review_rounds: rounds });
     } catch (err) {
       launchErr = String(err);
     } finally {
@@ -77,8 +57,9 @@
   }
 
   async function cmd(name: CommandName) {
-    if (selected) await sendCommand(selected.id, name);
+    await fleet.cmd(name);
   }
+
 
   const PHASE_LABEL: Record<string, string> = {
     queued: 'QUEUED', provisioning: 'PROVISION', spec: 'ORACLE',
@@ -111,24 +92,38 @@
     <div class="brand">
       <span class="glyph">◢◤</span>
       <span class="wordmark disp">FLEET&nbsp;COMMAND</span>
-      <span class="sub mono">SP1 · cockpit</span>
+      <Switcher {views} active={view} onselect={(id) => (view = id as ViewId)} />
     </div>
-    <div class="stats">
-      <div class="stat"><b class="disp">{activeCount}</b><span>ACTIVE</span></div>
-      <div class="stat"><b class="disp">{list.length}</b><span>UNITS</span></div>
-      <div class="stat"><b class="disp">${totalBurn.toFixed(2)}</b><span>BURN</span></div>
-      <div class="badges mono">
-        <span class="hb" class:ok={daemon?.docker} class:bad={daemon && !daemon.docker} title="Docker daemon">
-          ◉ DOCKER
-        </span>
-        <span class="hb" class:ok={daemon?.anthropic_key} class:bad={daemon && !daemon.anthropic_key} title="ANTHROPIC_API_KEY set">
-          ◉ KEY
-        </span>
+    {#if view === 'fleet'}
+      <div class="stats">
+        <div class="stat"><b class="disp">{activeCount}</b><span>ACTIVE</span></div>
+        <div class="stat"><b class="disp">{list.length}</b><span>UNITS</span></div>
+        <div class="stat"><b class="disp">${totalBurn.toFixed(2)}</b><span>BURN</span></div>
+        <div class="badges mono">
+          <span class="hb" class:ok={daemon?.docker} class:bad={daemon && !daemon.docker} title="Docker daemon">
+            ◉ DOCKER
+          </span>
+          <span class="hb" class:ok={daemon?.anthropic_key} class:bad={daemon && !daemon.anthropic_key} title="ANTHROPIC_API_KEY set">
+            ◉ KEY
+          </span>
+        </div>
+        <div class="conn mono" title={FLEET_BASE}>◉ {FLEET_BASE.replace(/^https?:\/\//, '')}</div>
       </div>
-      <div class="conn mono" title={FLEET_BASE}>◉ {FLEET_BASE.replace(/^https?:\/\//, '')}</div>
-    </div>
+    {/if}
   </header>
 
+  {#if view === 'projects'}
+    <!-- Projects: the read-only Project Dashboard. Mounts with the real Tauri-backed
+         readers, seeds its fleet lane from the shared store, and advances live off the
+         store's `phase_changed` stream (no second socket). The store stays alive while
+         this view is mounted, so switching back to Fleet preserves all state. -->
+    <Dashboard
+      halyardReader={tauriHalyardReader}
+      audienceReader={tauriAudienceReader}
+      fleetSnapshots={fleet.snapshots()}
+      onFleetPhase={(cb) => fleet.onPhase(cb)}
+    />
+  {:else}
   <main class="grid">
     <!-- left: new mission -->
     <aside class="panel left">
@@ -178,7 +173,7 @@
       {:else}
         <div class="tiles">
           {#each list as u (u.id)}
-            <button class="tile {phaseClass(u.phase)}" class:sel={selectedId === u.id} onclick={() => (selectedId = u.id)}>
+            <button class="tile {phaseClass(u.phase)}" class:sel={selectedId === u.id} onclick={() => fleet.select(u.id)}>
               <div class="tile-top">
                 <span class="uid mono">{u.id}</span>
                 <span class="tier disp">{u.tier}</span>
@@ -256,6 +251,7 @@
       {/if}
     </aside>
   </main>
+  {/if}
 </div>
 
 <style>
@@ -267,7 +263,7 @@
     border-bottom: 1px solid var(--line-2);
     background: linear-gradient(180deg, var(--panel-2), var(--panel));
   }
-  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 14px; }
   .glyph { color: var(--cyan); letter-spacing: -2px; filter: drop-shadow(0 0 6px var(--cyan-glow)); }
   .wordmark { font-weight: 800; font-size: 19px; letter-spacing: 3px; color: #eaf6fa; }
   .sub { color: var(--text-faint); font-size: 11px; letter-spacing: 1px; }
