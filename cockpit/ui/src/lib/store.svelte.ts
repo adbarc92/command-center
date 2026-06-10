@@ -28,11 +28,27 @@ export class FleetStore {
   // Guards against double-connecting (e.g. a re-mounted Fleet view re-calling reconnect).
   private started = false;
 
+  // A REAL-mode launch the host has staged but not yet confirmed. While set, the host
+  // overlay (Lane O) shows a confirm modal; nothing is sent to the daemon until the human
+  // confirms. The store stays the single source of fleet state, so the modal is driven
+  // purely off this field — independent of which view/plugin is mounted.
+  pendingLaunch = $state<CreateReq | null>(null);
+
   // ── derived projections ────────────────────────────────────────────────────
   readonly selected = $derived(this.selectedId ? this.units[this.selectedId] : null);
   readonly list = $derived(this.order.map((id) => this.units[id]).filter(Boolean));
   readonly activeCount = $derived(this.list.filter((u) => !isTerminal(u.phase)).length);
   readonly totalBurn = $derived(this.list.reduce((s, u) => s + u.cost, 0));
+
+  /**
+   * The first unit (in fleet order) parked in `awaiting_oracle_approval`, or null.
+   * This is the host overlay's trigger (Lane O): when non-null, the host pops a
+   * focus-stealing Oracle Approval modal regardless of the active view/plugin. Driven
+   * purely by host-owned fleet state, so a plugin cannot suppress or satisfy it.
+   */
+  readonly awaitingApproval = $derived(
+    this.list.find((u) => u.phase === 'awaiting_oracle_approval') ?? null,
+  );
 
   /** All current units as `GET /units`-shaped snapshots (seeds the Dashboard's fleet lane). */
   snapshots(): Snapshot[] {
@@ -114,6 +130,33 @@ export class FleetStore {
     this.selectedId = id;
     this.sockets[id] = openStream(id, 0, (e) => this.onEvt(id, e));
     return id;
+  }
+
+  /**
+   * Stage a REAL-mode launch for human confirmation instead of firing it immediately.
+   * Sets `pendingLaunch`, which the host overlay (Lane O) renders as a confirm modal.
+   * DEMO launches don't need confirmation — call `launch()` directly for those.
+   */
+  requestRealLaunch(req: CreateReq): void {
+    this.pendingLaunch = req;
+  }
+
+  /**
+   * Confirm the staged REAL launch: actually create the mission and clear the pending
+   * state. Returns the new unit id, or null if nothing was staged. Clears
+   * `pendingLaunch` even if the launch throws, so a failed confirm closes the modal and
+   * surfaces the error through the normal launch path.
+   */
+  async confirmLaunch(): Promise<string | null> {
+    const req = this.pendingLaunch;
+    if (!req) return null;
+    this.pendingLaunch = null;
+    return this.launch(req);
+  }
+
+  /** Dismiss a staged REAL launch without sending anything to the daemon. */
+  cancelLaunch(): void {
+    this.pendingLaunch = null;
   }
 
   /** Send a control command to a unit (defaults to the selected one). */
