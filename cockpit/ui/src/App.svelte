@@ -6,6 +6,7 @@
   import { fleet } from './lib/store.svelte';
   import Switcher, { type ViewEntry } from './lib/Switcher.svelte';
   import Dashboard from './views/Dashboard.svelte';
+  import ApprovalOverlay, { type ApprovalRequest } from './lib/ApprovalOverlay.svelte';
   import { tauriHalyardReader, tauriAudienceReader } from './lib/dashboard/api';
 
   // ── top-level view switcher (Lane A) ─────────────────────────────
@@ -45,8 +46,14 @@
   let launchErr = $state<string | null>(null);
 
   async function launch() {
-    launching = true;
     launchErr = null;
+    // REAL launches are human-authority: stage them for the host overlay's confirm modal
+    // instead of firing immediately. DEMO launches go straight through.
+    if (mode === 'real') {
+      fleet.requestRealLaunch({ task, tier, mode, min_review_rounds: rounds });
+      return;
+    }
+    launching = true;
     try {
       await fleet.launch({ task, tier, mode, min_review_rounds: rounds });
     } catch (err) {
@@ -58,6 +65,47 @@
 
   async function cmd(name: CommandName) {
     await fleet.cmd(name);
+  }
+
+  // ── host overlay (Lane O) — human-authority modal layer ──────────────────────
+  // Driven purely by host-owned fleet state, independent of the active view/plugin.
+  // Oracle approval takes priority; otherwise a staged REAL launch shows its confirm.
+  const awaitingApproval = $derived(fleet.awaitingApproval);
+  const pendingLaunch = $derived(fleet.pendingLaunch);
+  const approvalRequest = $derived<ApprovalRequest | null>(
+    awaitingApproval
+      ? { kind: 'oracle', unit: awaitingApproval }
+      : pendingLaunch
+        ? { kind: 'launch', req: pendingLaunch }
+        : null,
+  );
+  // While a modal is open the rest of the app is `inert`: removed from focus and
+  // hit-testing (honored by WebView2/Chromium), so a future mounted plugin/webview
+  // subtree cannot receive input. A backdrop + z-index alone does NOT do this.
+  const overlayOpen = $derived(approvalRequest !== null);
+
+  function onApprove() {
+    if (!approvalRequest) return;
+    if (approvalRequest.kind === 'oracle') {
+      void fleet.cmd('approve_oracle', approvalRequest.unit.id);
+    } else {
+      // Confirm the staged REAL launch; surface any failure on the form.
+      launching = true;
+      launchErr = null;
+      void fleet
+        .confirmLaunch()
+        .catch((err) => (launchErr = String(err)))
+        .finally(() => (launching = false));
+    }
+  }
+
+  function onReject() {
+    if (!approvalRequest) return;
+    if (approvalRequest.kind === 'oracle') {
+      void fleet.cmd('reject_oracle', approvalRequest.unit.id);
+    } else {
+      fleet.cancelLaunch();
+    }
   }
 
 
@@ -87,7 +135,10 @@
   });
 </script>
 
-<div class="hud">
+<!-- Content subtree. Marked `inert` while a host-overlay modal is open so nothing here
+     (including a future mounted plugin/webview) can take focus or pointer input — the
+     real input block, not the backdrop. -->
+<div class="hud" inert={overlayOpen} data-testid="hud" aria-hidden={overlayOpen}>
   <header class="topbar">
     <div class="brand">
       <span class="glyph">◢◤</span>
@@ -207,9 +258,14 @@
           <span class="badge disp {phaseClass(selected.phase)}">{PHASE_LABEL[selected.phase] ?? selected.phase}</span>
         </div>
 
+        <!-- Oracle approval is a host-authority action: the verb lives in the focus-stealing
+             host overlay (Lane O), not here. The Fleet view shows only a non-interactive
+             AWAITING APPROVAL indicator — no approve/reject button in-view. -->
+        {#if canApprove}
+          <div class="await disp" data-testid="awaiting-approval-indicator">◆ AWAITING APPROVAL · respond in overlay</div>
+        {/if}
+
         <div class="cmds">
-          <button class="cmd ok" disabled={!canApprove} onclick={() => cmd('approve_oracle')}>APPROVE</button>
-          <button class="cmd" disabled={!canApprove} onclick={() => cmd('reject_oracle')}>REJECT</button>
           <button class="cmd" disabled={!canResume} onclick={() => cmd('resume')}>RESUME</button>
           <button class="cmd ok" disabled={!canShip} onclick={() => cmd('ship')}>SHIP</button>
           <button class="cmd warn" disabled={!canHalt} onclick={() => cmd('halt')}>HALT</button>
@@ -253,6 +309,10 @@
   </main>
   {/if}
 </div>
+
+<!-- The host overlay lives OUTSIDE the inert subtree so it remains interactive and
+     focusable while the rest of the app is frozen. -->
+<ApprovalOverlay request={approvalRequest} onapprove={onApprove} onreject={onReject} />
 
 <style>
   .hud { display: flex; flex-direction: column; height: 100vh; }
@@ -363,6 +423,13 @@
   .cmd.ok:not(:disabled) { color: var(--green); border-color: rgba(53, 208, 127, 0.4); }
   .cmd.warn:not(:disabled) { color: var(--amber); border-color: rgba(240, 180, 41, 0.4); }
   .cmd.bad:not(:disabled) { color: var(--red); border-color: rgba(255, 93, 108, 0.4); }
+
+  .await {
+    font-size: 11px; letter-spacing: 1.5px; font-weight: 700; color: var(--cyan);
+    border: 1px solid var(--cyan-dim); background: rgba(74, 222, 222, 0.08);
+    padding: 8px 10px; border-radius: 2px; text-align: center;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
 
   .alert { font-size: 12px; color: var(--amber); border: 1px solid rgba(240, 180, 41, 0.4); background: rgba(240, 180, 41, 0.07); padding: 8px; border-radius: 2px; }
   .alert.bad { color: var(--red); border-color: rgba(255, 93, 108, 0.4); background: rgba(255, 93, 108, 0.07); }
