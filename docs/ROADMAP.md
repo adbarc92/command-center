@@ -3,7 +3,8 @@
 > Cross-cutting roadmap for the Command Center. App-plugins-specific roadmap items live in
 > [`docs/superpowers/specs/2026-06-07-app-plugins-design.md` §5](superpowers/specs/2026-06-07-app-plugins-design.md);
 > this file holds the broader product + workflow backlog.
-> Last updated: 2026-06-10.
+> Last updated: 2026-06-11 (status flags reconciled against merged code — items 1, 4, 5 shipped;
+> 2, 3, 6 partially shipped; see each item).
 
 ## North Star
 
@@ -54,7 +55,7 @@ from their design docs. Remaining to **shippable** = certs + one signed release 
 
 ---
 
-## 1. Cache-aware approval timer  ·  💡  ·  lane: workflow
+## 1. Cache-aware approval timer  ·  ✅ shipped (installed & live in `~/.claude/settings.json`)  ·  lane: workflow
 
 A live countdown of the Anthropic prompt-cache TTL (~5 min / 300s) shown whenever a task is
 **awaiting user approval**, so the user responds before the cache goes cold and a large session
@@ -69,7 +70,7 @@ has to be re-read at full cost.
 - **Serves:** low cost. **Pairs with:** 5 (retry within the cache window), 6E (cache-aware pacing).
 - **Why it's the trigger that matters:** "task awaiting user approval" == the `Stop` hook fires.
 
-## 2. Swarm Handoff — master-agent capability  ·  💡  ·  lane: workflow
+## 2. Swarm Handoff — master-agent capability  ·  🛠️ partial (fleetd engine shipped; skill wrapper deferred)  ·  lane: workflow
 
 Turn "Swarm Handoff" from a hand-run process into a **first-class ability the orchestrating agent
 invokes itself**: given a spec/plan with several *independent* features, it automatically
@@ -87,7 +88,7 @@ decomposes the work into parallel lanes and dispatches a swarm.
   **Part II** is the first worked example this capability would later auto-generate.
 - **Serves:** ship autonomously & fast.
 
-## 3. Dual-tier context offload for budget  ·  💡  ·  lane: workflow
+## 3. Dual-tier context offload for budget  ·  🛠️ partial (Tier 1 shipped; Tier 2 🔗 blocked on claude.ai connector)  ·  lane: workflow
 
 Cut token re-spend by moving durable context out of the active window and pulling it on demand,
 managed automatically by the agent. **Two complementary tiers (no conflict — different content):**
@@ -106,7 +107,7 @@ managed automatically by the agent. **Two complementary tiers (no conflict — d
      can be absent in cron/CI; "behind the scenes" must fall back to Tier 1 + repo, never block.
 - **Serves:** context hygiene + low cost. **Overlaps:** the existing memory system + ContextCurator.
 
-## 4. Central Project Manager — project-tracking dashboard  ·  💡 (major) ·  lane: product
+## 4. Central Project Manager — project-tracking dashboard  ·  ✅ shipped (board built + mounted; app-plugin lane wires post-P3)  ·  lane: product
 
 **A core piece of this build.** Tell at a glance the **stage every project is in**.
 
@@ -123,7 +124,7 @@ managed automatically by the agent. **Two complementary tiers (no conflict — d
     "deferred" (see the app-plugins spec's Halyard notes + the Halyard-head brief).
 - **Serves:** ship autonomously & fast (visibility into the autonomous fleet's output).
 
-## 5. API rate-limit auto-retry  ·  💡  ·  lane: workflow
+## 5. API rate-limit auto-retry  ·  ✅ shipped (harness `CLAUDE_CODE_MAX_RETRIES` verified + live)  ·  lane: workflow
 
 Automatic, periodic retries when the **Anthropic API** returns "Server is temporarily limiting
 requests" (429s) — at the **harness/agent level**.
@@ -135,7 +136,7 @@ requests" (429s) — at the **harness/agent level**.
   TTL where possible so a 429 doesn't force a cold, full-cost re-read.
 - **Serves:** low cost + seamless autonomy (don't stall on transient limits).
 
-## 6. Proactive budget discipline  ·  💡  ·  lane: workflow
+## 6. Proactive budget discipline  ·  🛠️ partial (rules A/C/D/F/G shipped; 6B 🔗 ContextCurator, 6D hook optional)  ·  lane: workflow
 
 Umbrella item: make existing capabilities into **automatic** budget discipline rather than manual
 practice. Concrete mechanisms:
