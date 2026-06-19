@@ -85,9 +85,13 @@ def append_record(dir: Path, record: dict, tries: int = 10) -> bool:
 def prune(dir: Path, max_records: int = 1000, orphan_days: int = 7) -> None:
     tl = dir / "timeline.jsonl"
     if tl.exists():
-        lines = tl.read_text(encoding="utf-8").splitlines()
-        if len(lines) > max_records:
-            tl.write_text("\n".join(lines[-max_records:]) + "\n", encoding="utf-8")
+        try:
+            with file_lock(dir / "timeline.lock"):
+                lines = tl.read_text(encoding="utf-8").splitlines()
+                if len(lines) > max_records:
+                    tl.write_text("\n".join(lines[-max_records:]) + "\n", encoding="utf-8")
+        except LockTimeout:
+            pass  # truncation is best-effort; skip if lock is contested
     sc = dir / "scratch"
     if sc.is_dir():
         cutoff = time.time() - orphan_days * 86400

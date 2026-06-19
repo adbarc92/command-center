@@ -43,11 +43,12 @@ def file_lock(lock_path: Path, tries: int = 10, backoff: float = 0.2):
         yield
     finally:
         try:
-            if _WINDOWS:
-                fh.seek(0)
-                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            if acquired:
+                if _WINDOWS:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
         except OSError:
             pass
         fh.close()
