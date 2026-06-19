@@ -12,6 +12,12 @@ for _s in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
+# Make `src/` importable when this script is run directly by path (the hooks/CLI do this),
+# since running a script by path only puts its own dir on sys.path, not the package parent.
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+
 
 def _resolve_dir(selector: str | None):
     from session_state import keying
