@@ -26,7 +26,7 @@ def main() -> int:
 
         from session_state import keying, store, merge
         cwd = Path(os.getcwd())
-        dir = keying.state_dir(cwd)  # read-only path; never writes
+        dir = keying.state_dir(cwd, create=False)  # read-only path; never writes
         block = merge.render_resume_block(store.read_timeline(dir, tail=50), store.read_scratches(dir))
         if not block:
             return 0

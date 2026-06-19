@@ -50,9 +50,10 @@ def repo_key(cwd: Path) -> str:
     return path_to_slug(root if root is not None else cwd)
 
 
-def state_dir(cwd: Path) -> Path:
+def state_dir(cwd: Path, create: bool = True) -> Path:
     d = claude_home() / "state" / "sessions" / repo_key(cwd)
-    (d / "scratch").mkdir(parents=True, exist_ok=True)
+    if create:
+        (d / "scratch").mkdir(parents=True, exist_ok=True)
     return d
 
 

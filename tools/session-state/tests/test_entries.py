@@ -53,6 +53,28 @@ def test_resume_silent_on_compact(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out.strip() == ""
 
 
+def test_kill_switch_noops_all_entries(tmp_path, monkeypatch):
+    import io, json
+    monkeypatch.setenv("CC_SESSION_STATE_DISABLE", "1")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "s", "reason": "other"})))
+    assert ce.main() == 0
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"source": "startup"})))
+    assert rz.main() == 0
+    # capture_rich no-ops without even requiring --input
+    assert cr.main([]) == 0
+
+
+def test_resume_does_not_create_state_dir(tmp_path, monkeypatch):
+    import io, json
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"source": "startup"})))
+    assert rz.main() == 0
+    import session_state.keying as k
+    # state dir should NOT have been created by the read path
+    assert not (k.state_dir(tmp_path, create=False)).exists()
+
+
 def test_capture_rich_appends_and_deletes_tempfile(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
     _init_git_repo(tmp_path)

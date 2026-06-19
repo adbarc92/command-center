@@ -20,6 +20,8 @@ for _s in (sys.stdout, sys.stderr):
 
 
 def main(argv: list[str] | None = None) -> int:
+    if os.environ.get("CC_SESSION_STATE_DISABLE"):
+        return 0
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
     args = ap.parse_args(argv)
