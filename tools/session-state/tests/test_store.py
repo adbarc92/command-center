@@ -1,5 +1,4 @@
 import json
-import pytest
 from pathlib import Path
 import session_state.store as s
 
@@ -27,7 +26,6 @@ def test_read_timeline_skips_corrupt(tmp_path):
     assert [r["ts"] for r in recs] == ["1", "2"]
 
 
-@pytest.mark.xfail(reason="needs Task 6 merge.render_latest_md", strict=False)
 def test_append_record_writes_line_and_latest_md(tmp_path):
     rec = s.make_record("rich", "save-state", "sid", "D:/r", {"branch": "main"},
                         did="x", next=["a"], open_threads=[])
