@@ -86,3 +86,28 @@ def test_capture_rich_appends_and_deletes_tempfile(tmp_path, monkeypatch):
     import session_state.keying as k, session_state.store as st
     recs = st.read_timeline(k.state_dir(tmp_path))
     assert recs and recs[-1]["did"] == "shipped"
+
+
+import session_state.cli as cli
+
+
+def test_cli_show_renders_state(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    import session_state.keying as k, session_state.store as st
+    dir = k.state_dir(tmp_path)
+    st.append_record(dir, st.make_record("rich", "save-state", "s", str(tmp_path),
+                                         {"branch": "main", "head": "abc x", "dirty": []},
+                                         did="hello", next=[], open_threads=[]))
+    assert cli.main(["show"]) == 0
+    assert "hello" in capsys.readouterr().out
+
+
+def test_cli_list_shows_repo(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    import session_state.keying as k
+    k.state_dir(tmp_path)  # create the dir
+    assert cli.main(["list"]) == 0
