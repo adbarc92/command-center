@@ -61,39 +61,29 @@ command-center/
     README.md
 ```
 
-**The hook-invocation shape is decided by Spike 0a — do not assume one.** Important correction
-(round 3, verified): the official superpowers `run-hook.cmd` resolves **bash** and runs **bash entry
-scripts** (`exec bash "$dir/<entry>"`), it does **not** resolve node or run `.mjs`. So there is *no*
-proven node-resolving wrapper to copy, and the bare `{"command":"node","args":[…]}` exec form is also
-unproven on Windows. The three candidate shapes are:
-- (i) bare `{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/src/<entry>.mjs"]}` exec form;
-- (ii) a node-resolving `run-hook.cmd` cmd/sh polyglot (hand-written; quotes every path expansion;
-  resolves `node` via PATH then known locations) invoked as a single command string;
-- (iii) the superpowers pattern verbatim — extensionless **bash** entry scripts that each
-  `exec node "$ROOT/src/<entry>.mjs"`, which on Windows **depends on Git-Bash** (no-op when bash is
-  absent, as superpowers does).
-
-**Spike 0a** (`spikes/SPIKE-RESULTS-session-state-plugin.md`): on a real Windows box, determine which
-of (i)/(ii)/(iii) actually fires a plugin hook, forwards the hook **stdin JSON**, and returns exit 0 —
-**without assuming Git-Bash**. Phase-1 hooks.json uses the winner. Tentative `hooks.json` (matchers
-included so SessionStart fires only on `startup|resume`, matching the runtime source-gate at the
-manifest, not only in-script):
+**Hook-invocation shape: bare `node` + `args` exec form — Spike 0a PASSED (no wrapper).**
+`spikes/SPIKE-RESULTS-session-state-plugin.md` empirically confirmed on the live Windows box that the
+plain exec form fires both hooks, forwards the hook **stdin JSON**, resolves `${CLAUDE_PLUGIN_ROOT}`,
+and exits 0 — so the earlier wrapper concern (superpowers' `run-hook.cmd` runs *bash*, not node) is
+moot and **no `run-hook.cmd` / Git-Bash dependency is needed**:
 ```json
 { "hooks": {
-  "SessionStart": [{ "matcher":"startup|resume", "hooks": [{ "type":"command","command":"<shape from Spike 0a → resume>" }] }],
-  "Stop":         [{ "hooks": [{ "type":"command","command":"<shape from Spike 0a → capture_scratch>","timeout":5 }] }],
-  "SessionEnd":   [{ "hooks": [{ "type":"command","command":"<shape from Spike 0a → capture_end>" }] }]
+  "SessionStart": [{ "matcher":"startup|resume", "hooks": [{ "type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/src/resume.mjs"] }] }],
+  "Stop":         [{ "hooks": [{ "type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/src/capture_scratch.mjs"],"timeout":5 }] }],
+  "SessionEnd":   [{ "hooks": [{ "type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/src/capture_end.mjs"] }] }]
 }}
 ```
-Whatever shape wins, **stdin forwarding is a tested invariant** (`§7`) — `resume`'s source-gate and
-`capture_end`'s reason-gate read the hook stdin JSON, so a wrapper that drops stdin silently breaks
-gating.
+(The `SessionStart` matcher `startup|resume` aligns the source-gate at the manifest; the scripts also
+self-gate on the stdin `source`/`reason`. **Stdin forwarding is a tested invariant**, `§7`.)
+**Spike-0a nuance:** for a *directory* marketplace, runtime `${CLAUDE_PLUGIN_ROOT}` = the **source**
+dir while the registry `installPath` = the **cache copy**; both contain the full tree, so the
+`save-state` skill's registry-based resolution (`§3`) works either way.
 
-**Spike 0b** (same file): `claude plugin marketplace add <command-center repo>` + `claude plugin
-install session-state@<marketplace>` — confirm a *large app repo* can serve as a self-marketplace,
-observe the install dir, and confirm the **skill + hooks register and a hook fires**. (Plugin-skill
-auto-discovery and the `source:"./plugins/<name>"` shape are verified; *this repo as a marketplace* is
-not.)
+**Self-marketplace install — Spike 0b PASSED.** `claude plugin marketplace add <command-center repo>`
+(a *directory* source) + `claude plugin install session-state@command-center` installs + enables;
+`installed_plugins.json` v2 records a **version-stamped** `installPath`; `claude plugin details` shows
+the **skill + 2 hooks auto-discovered**. (`--sparse` is git/github-only — irrelevant for the directory
+path; relevant only for the git-URL standalone path.)
 
 - `${CLAUDE_PLUGIN_ROOT}` changes on update; state lives under `~/.claude/state/sessions/`, so history
   survives updates. Plugin hooks **merge** with settings.json hooks (coexist with `recall.py` /

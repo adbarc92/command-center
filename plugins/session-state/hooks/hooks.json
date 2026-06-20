@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|resume", "hooks": [
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/src/resume.mjs"] }
+      ] }
+    ],
+    "Stop": [
+      { "hooks": [
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/src/capture_scratch.mjs"], "timeout": 5 }
+      ] }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "session-state",
+  "version": "0.0.1",
+  "description": "Per-repo dev-session capture + zero-friction resume (spike skeleton).",
+  "author": { "name": "Alex Barclay", "email": "adbarclay92@gmail.com" }
+}
