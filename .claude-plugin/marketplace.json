@@ -3,11 +3,7 @@
   "name": "command-center",
   "owner": { "name": "Alex Barclay", "email": "adbarclay92@gmail.com" },
   "plugins": [
-    {
-      "name": "session-state",
-      "source": "./plugins/session-state",
-      "description": "Per-repo dev-session capture + zero-friction resume (spike).",
-      "version": "0.0.1"
-    }
+    { "name": "session-state", "source": "./plugins/session-state",
+      "description": "Per-repo dev-session capture + zero-friction resume.", "version": "0.1.0" }
   ]
 }

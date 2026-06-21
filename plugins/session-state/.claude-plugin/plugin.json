@@ -1,6 +1,6 @@
 {
   "name": "session-state",
-  "version": "0.0.1",
-  "description": "Per-repo dev-session capture + zero-friction resume (spike skeleton).",
+  "version": "0.1.0",
+  "description": "Per-repo dev-session capture + zero-friction resume for Claude Code.",
   "author": { "name": "Alex Barclay", "email": "adbarclay92@gmail.com" }
 }

@@ -9,6 +9,11 @@
       { "hooks": [
         { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/src/capture_scratch.mjs"], "timeout": 5 }
       ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/src/capture_end.mjs"] }
+      ] }
     ]
   }
 }
