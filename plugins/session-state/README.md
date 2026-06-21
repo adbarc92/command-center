@@ -15,4 +15,4 @@ Set `CC_SESSION_STATE_DISABLE=1` in a shell to make all hooks no-op there.
     node plugins/session-state/src/cli.mjs show [<path-or-repo-key>]
 
 ## Tests
-    node --test plugins/session-state/test/
+    node --test "plugins/session-state/test/*.test.mjs"
