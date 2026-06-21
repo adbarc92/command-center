@@ -1,24 +1,19 @@
-// Spike 0a sentinel: prove the SessionStart hook fires, forwards stdin, and can emit the envelope.
 import fs from "node:fs";
+import * as keying from "./keying.mjs";
+import * as store from "./store.mjs";
+import { renderResumeBlock } from "./merge.mjs";
 
-let stdin = "";
-try { stdin = fs.readFileSync(0, "utf8"); } catch {}
+function readStdin() { try { return fs.readFileSync(0, "utf8"); } catch { return ""; } }
 
-const sentinel = process.env.SPIKE_SENTINEL;
-if (sentinel) {
-  try {
-    fs.appendFileSync(sentinel,
-      `resume fired | shape=${process.env.SPIKE_SHAPE || "?"} | root=${process.env.CLAUDE_PLUGIN_ROOT || "?"} | stdin=${stdin.replace(/\s+/g, " ").trim()}\n`);
-  } catch {}
-}
-
-// Emit the SessionStart envelope only for startup/resume (source-gate test).
 try {
-  const data = stdin.trim() ? JSON.parse(stdin) : {};
-  if (["startup", "resume"].includes(data.source)) {
-    console.log(JSON.stringify({ hookSpecificOutput: {
-      hookEventName: "SessionStart",
-      additionalContext: "<session-state>spike: resume hook reached</session-state>" } }));
+  if (!process.env.CC_SESSION_STATE_DISABLE) {
+    const raw = readStdin();
+    const data = raw.trim() ? JSON.parse(raw) : {};
+    if (["startup", "resume"].includes(data.source)) {
+      const dir = keying.stateDir(process.cwd(), { create: false });
+      const block = renderResumeBlock(store.readTimeline(dir, { tail: 50 }), store.readScratches(dir));
+      if (block) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: block } }));
+    }
   }
 } catch {}
 process.exit(0);
