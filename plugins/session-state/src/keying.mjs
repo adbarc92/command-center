@@ -43,7 +43,18 @@ export function checkMeta(dir, canonicalRepo) {
     return true;
   }
   let existing = null;
-  try { existing = JSON.parse(fs.readFileSync(meta, "utf8")).repo; } catch {}
+  let parsed = false;
+  try {
+    existing = JSON.parse(fs.readFileSync(meta, "utf8")).repo;
+    parsed = true;
+  } catch {}
+  // Corrupt/unparseable meta, or a parsed meta with no repo recorded, is recoverable:
+  // heal it by rewriting with the current repo. Only a parsed meta that records a
+  // genuinely different repo is a real COLLISION.
+  if (!parsed || existing == null) {
+    fs.writeFileSync(meta, JSON.stringify({ repo: canonicalRepo }));
+    return true;
+  }
   if (existing === canonicalRepo) return true;
   fs.writeFileSync(path.join(dir, "COLLISION"), `expected ${existing} got ${canonicalRepo}`);
   return false;
