@@ -3,8 +3,8 @@
 > Cross-cutting roadmap for the Command Center. App-plugins-specific roadmap items live in
 > [`docs/superpowers/specs/2026-06-07-app-plugins-design.md` §5](superpowers/specs/2026-06-07-app-plugins-design.md);
 > this file holds the broader product + workflow backlog.
-> Last updated: 2026-06-11 (status flags reconciled against merged code — items 1, 4, 5 shipped;
-> 2, 3, 6 partially shipped; see each item).
+> Last updated: 2026-06-23 (added Hardening backlog H1–H3 for the merged session-state plugin, PR #30).
+> 2026-06-11: status flags reconciled against merged code — items 1, 4, 5 shipped; 2, 3, 6 partially shipped.
 
 ## North Star
 
@@ -162,6 +162,22 @@ practice. Concrete mechanisms:
 
 ---
 
+## Hardening backlog (session-state plugin — item 3 Tier 1)
+
+Non-blocking follow-ups carried over from the session-state plugin port (PR #30, merged 2026-06-23;
+see [`docs/handoff/2026-06-21-session-state-plugin-shipped.md`](handoff/2026-06-21-session-state-plugin-shipped.md)).
+The plugin is shipped and green (40/40 tests); these are known edge cases, not regressions.
+
+| # | Item | Severity |
+|---|---|---|
+| **H1** | **`resolve.mjs` semver sort.** Cache scan picks the plugin version by **lexical** sort (`0.10.0` < `0.2.0`), so it would resolve the wrong dir once a double-digit minor exists. | 🔴 **hard gate — fix before any `0.10.x` plugin release** |
+| **H2** | **`lock.mjs` torn-token steal.** A corrupt/torn lock token with a fresh mtime isn't stolen until `maxAgeMs` (60s), so a crashed writer can stall the next capture for up to a minute. One-line fix available. | 🟡 minor |
+| **H3** | **`keying.mjs` spurious collision.** A malformed `meta.json` writes a spurious `COLLISION` for the same repo, mis-keying its timeline. | 🟡 minor |
+
+- **Serves:** context hygiene (item 3 Tier 1 reliability). **Parallelizable:** all three are independent, single-file fixes.
+
+---
+
 ## Dependency notes (for sequencing / Swarm Handoff lane-carving)
 
 - **Independent, parallelizable now:** 1 (cache timer), 5 (rate-limit retry), 6A/C/F/G (discipline
@@ -175,3 +191,5 @@ practice. Concrete mechanisms:
     doc proves the format.
 - **Recurring theme:** 1, 5, and 6D/E all orbit the same 5-minute cache window — treat them as one
   coherent "cache-economics" cluster when scheduling.
+- **Release gate:** **H1** (`resolve.mjs` semver sort) must land before any `0.10.x` session-state
+  plugin release; H2/H3 are independent and can be picked up anytime.
