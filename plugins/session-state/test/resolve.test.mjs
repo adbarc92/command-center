@@ -31,6 +31,33 @@ test("falls back to cache scan when registry path missing", () => {
   delete process.env.CLAUDE_CONFIG_DIR;
 });
 
+test("cache scan picks highest semver, not lexically-last", () => {
+  const home = mkdtempSync(path.join(tmpdir(), "cc-"));
+  process.env.CLAUDE_CONFIG_DIR = home;
+  seed(home, path.join(home, "GONE"), { create: false });
+  const base = path.join(home, "plugins", "cache", "command-center", "session-state");
+  // Created in an order where lexical sort would wrongly rank "0.9.0" above "0.10.0".
+  for (const v of ["0.2.0", "0.9.0", "0.10.0"]) {
+    mkdirSync(path.join(base, v, "src"), { recursive: true });
+    writeFileSync(path.join(base, v, "src", "capture_rich.mjs"), "//");
+  }
+  assert.equal(pluginInstallPath(), path.join(base, "0.10.0"));
+  delete process.env.CLAUDE_CONFIG_DIR;
+});
+
+test("cache scan tolerates non-semver dirs without crashing", () => {
+  const home = mkdtempSync(path.join(tmpdir(), "cc-"));
+  process.env.CLAUDE_CONFIG_DIR = home;
+  seed(home, path.join(home, "GONE"), { create: false });
+  const base = path.join(home, "plugins", "cache", "command-center", "session-state");
+  for (const v of ["garbage", "0.1.0", "1.0.0-beta"]) {
+    mkdirSync(path.join(base, v, "src"), { recursive: true });
+    writeFileSync(path.join(base, v, "src", "capture_rich.mjs"), "//");
+  }
+  assert.equal(pluginInstallPath(), path.join(base, "1.0.0-beta"));
+  delete process.env.CLAUDE_CONFIG_DIR;
+});
+
 test("null when nothing found", () => {
   const home = mkdtempSync(path.join(tmpdir(), "cc-"));
   process.env.CLAUDE_CONFIG_DIR = home;
