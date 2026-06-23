@@ -37,3 +37,15 @@ test("age-backstop steals a stale live-looking lock", () => {
   withLock(lf, () => { ran = true; }, { tries: 3, backoffMs: 1, maxAgeMs: 60000 });
   assert.ok(ran);
 });
+
+test("torn/corrupt lock (non-JSON) is stolen immediately, no maxAge wait", () => {
+  const lf = path.join(mkdtempSync(path.join(tmpdir(), "lk-")), "t.lock");
+  writeFileSync(lf, "{not valid json"); // truncated/torn write, fresh mtime
+  let ran = false;
+  const t0 = Date.now();
+  // large maxAgeMs + large backoffMs: if we wrongly wait, this would block ~maxAgeMs
+  // and never steal within `tries`; bound the run so a regression can't spin long.
+  withLock(lf, () => { ran = true; }, { tries: 3, backoffMs: 10, maxAgeMs: 60000 });
+  assert.ok(ran);
+  assert.ok(Date.now() - t0 < 5000, "should steal immediately, not wait for maxAgeMs");
+});
