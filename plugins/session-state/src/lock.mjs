@@ -33,7 +33,10 @@ export function withLock(lockfile, fn, { tries = 20, backoffMs = 50, maxAgeMs = 
       const tok = readToken(lockfile);
       let stale = false;
       try { stale = (Date.now() - fs.statSync(lockfile).mtimeMs) > maxAgeMs; } catch { stale = true; }
-      if ((tok && !alive(tok.pid)) || stale) {
+      // steal if: holder pid is dead, the token is torn/unparseable (readToken → null),
+      // or the lock is stale beyond maxAge. A valid token with a live pid is NOT stolen.
+      const torn = tok === null;
+      if (torn || (tok && !alive(tok.pid)) || stale) {
         try { fs.unlinkSync(lockfile); } catch {}       // steal; loser of the race just retries
         continue;                                       // retry immediately
       }
