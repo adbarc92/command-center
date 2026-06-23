@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "command-center",
+  "owner": { "name": "Alex Barclay", "email": "adbarclay92@gmail.com" },
+  "plugins": [
+    { "name": "session-state", "source": "./plugins/session-state",
+      "description": "Per-repo dev-session capture + zero-friction resume.", "version": "0.1.0" }
+  ]
+}
