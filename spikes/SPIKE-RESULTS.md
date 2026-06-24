@@ -98,3 +98,65 @@ These patterns cover the known Anthropic HTTP status codes (429 = too many reque
 rate-limit and overload conditions. The classifier is built and tested against synthetic
 fixtures; this spike only would have refined the patterns — the absence of a confirmed
 signal does not block implementation.
+
+---
+
+# P4 — View-plugin handshake spike (Spike #1 from the view-plugins design)
+
+> **Status: harness SCAFFOLDED (branch `spike/view-plugins-handshake`), awaiting the watched run.**
+> Spec / gates: [`docs/superpowers/specs/2026-06-07-view-plugins-design.md`](../docs/superpowers/specs/2026-06-07-view-plugins-design.md)
+> §"Sandbox, CSP, loader & the Tauri reality" → "Spike #1 — hard go/no-go".
+> Build verified: `cargo check` clean · `npm run check` 0/0 · `npm test` 72/72.
+
+**What's wired (this branch):**
+- `ccplugin://` scheme handler serving an embedded plugin (`index.html`/`sdk.js`/`probe.js`)
+  with the plugin-doc CSP as a **response header** — `cockpit/ui/src-tauri/src/spike_view_plugins.rs`.
+- Host harness with the 100-reload driver + gate scoreboard —
+  `cockpit/ui/src/lib/spike/SpikeViewPlugins.svelte` (launched by the `⌬ VP SPIKE`
+  button bottom-right of the cockpit; `App.svelte` is otherwise untouched).
+
+**How to run** — the harness must run **inside the Tauri WebView2 window** (the scheme
+handler doesn't exist in a plain browser):
+
+```bash
+cd cockpit/ui
+# DEV
+npm run desktop                       # sidecar + tauri dev → click "⌬ VP SPIKE" → "▶ RUN 100-RELOAD…"
+# PACKAGED (must also pass)
+npm run bundle                        # sidecar:release + tauri build → install the MSI/NSIS → same buttons
+```
+
+### Results — fill in during the watched run
+
+| Gate | What passes | Dev | Packaged |
+|---|---|---|---|
+| **(a) renders** | sandboxed iframe paints its marker; origin shows `null` | ☐ | ☐ |
+| **(b) handshake ×100** | scoreboard shows **100/100 ok, 0 dropped** | ☐ ___/100 | ☐ ___/100 |
+| **(c-CORS) self-code-load** | `c · self-code-load` = PASS (opaque-origin `import()` worked) | ☐ | ☐ |
+| **(c-CSP) network blocked** | `c · network blocked` = PASS (fetch rejected) | ☐ | ☐ |
+| **(d) host CSP / HMR** | *manual* — see below | ☐ | n/a |
+
+**Gate (d) — manual step (left out of the harness so it runs as-is).** In
+`cockpit/ui/src-tauri/tauri.conf.json`, set `app.security.csp` (currently `null`) to the
+candidate below, relaunch `npm run desktop`, and confirm **(i)** the iframe still loads and
+**(ii)** Vite HMR still works (edit a `.svelte` file → hot update, no full reload, no CSP
+console error):
+
+```
+default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://asset.localhost; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost ws://localhost:5173 http://localhost:5173 http://127.0.0.1:8787 ws://127.0.0.1:8787; frame-src http://ccplugin.localhost
+```
+
+(Note: `style-src`/`font-src` allow the Google Fonts `<link>` in `index.html`; tighten or
+self-host before production.)
+
+### Decision (record after the run)
+
+- **GO** (all gates PASS, 0/100 drops dev **and** packaged) → dispatch the view-plugin
+  runtime swarm (+ the `feat/view-plugins` de-stale pre-step). Note the exact scheme + CSP used.
+- **c-CORS FAIL** (opaque-origin `import()` blocked) → cheapest remedy first: add
+  `Access-Control-Allow-Origin: *` to the scheme handler's response and re-run; if still
+  failing, adopt **fallback #1** (single inlined bundle). Record which.
+- **c-CSP FAIL** (fetch succeeded) → the plugin-doc CSP isn't being honored from the scheme
+  handler; do **not** proceed — the "no network" guarantee is the trust boundary.
+- **handshake drops** → capture which rounds in the harness log; the announce-first design
+  should make this 0 — any drop is a real finding worth a NO-GO until understood.

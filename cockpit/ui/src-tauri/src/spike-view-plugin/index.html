@@ -1,0 +1,39 @@
+<!doctype html>
+<!--
+  THROWAWAY P4 SPIKE — the sandboxed view-plugin document. Served by the `ccplugin://`
+  scheme handler (src-tauri/src/spike_view_plugins.rs) under a strict plugin-doc CSP
+  delivered as a RESPONSE HEADER (not a <meta> the plugin controls). Do NOT merge to main.
+
+  The host loads this inside <iframe sandbox="allow-scripts"> (no allow-same-origin →
+  opaque "null" origin). It must: render (gate a), complete the plugin-hello→init
+  MessagePort handshake (gate b), import a 2nd same-scheme module (gate c-CORS), and have
+  all network blocked by `connect-src 'none'` (gate c-CSP).
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>cc view-plugin spike</title>
+    <style>
+      html, body {
+        margin: 0; height: 100%;
+        background: #0c1830; color: #7fe3ff;
+        font: 600 13px/1.6 ui-monospace, "Cascadia Mono", monospace;
+        display: flex; align-items: center; justify-content: center; text-align: center;
+      }
+      .ok { padding: 16px 20px; border: 1px solid #2bd6ff; border-radius: 4px; background: #0a1426; }
+      b { color: #c08bff; }
+      .v { color: #35d07f; }
+    </style>
+  </head>
+  <body>
+    <!-- gate-a visual marker; sdk.js fills the live fields below. -->
+    <div class="ok">
+      <div>CC VIEW-PLUGIN · <b>sandboxed</b></div>
+      <div>origin: <span class="v" id="org">?</span></div>
+      <div>handshake: <span class="v" id="hs">…</span></div>
+    </div>
+    <!-- Loaded as a module ENTRY via <script src> — not subject to the cross-origin
+         module-graph CORS rule that gate c-CORS tests (that's the `import` inside sdk.js). -->
+    <script type="module" src="sdk.js"></script>
+  </body>
+</html>

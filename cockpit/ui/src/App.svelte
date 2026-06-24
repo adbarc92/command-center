@@ -8,6 +8,11 @@
   import Dashboard from './views/Dashboard.svelte';
   import ApprovalOverlay, { type ApprovalRequest } from './lib/ApprovalOverlay.svelte';
   import { tauriHalyardReader, tauriAudienceReader } from './lib/dashboard/api';
+  // P4 SPIKE (THROWAWAY — do not merge): the view-plugin handshake harness. Remove with
+  // the spike branch (this import + `vpSpike` state + the fenced markup/style below).
+  import SpikeViewPlugins from './lib/spike/SpikeViewPlugins.svelte';
+
+  let vpSpike = $state(false);
 
   // ── top-level view switcher (Lane A) ─────────────────────────────
   // Fleet = the inline cockpit below; Projects = the read-only Project Dashboard.
@@ -314,6 +319,14 @@
      focusable while the rest of the app is frozen. -->
 <ApprovalOverlay request={approvalRequest} onapprove={onApprove} onreject={onReject} />
 
+<!-- ╔═ P4 SPIKE (THROWAWAY — do not merge) ════════════════════════════════════════╗
+     View-plugin handshake harness launcher. The harness must run inside this Tauri
+     WebView2 window (the `ccplugin://` scheme handler only exists here, not in a browser).
+     Remove this whole block with the spike branch. -->
+<button class="vp-spike-launch" onclick={() => (vpSpike = true)} title="P4 view-plugin handshake spike">⌬ VP SPIKE</button>
+{#if vpSpike}<SpikeViewPlugins onclose={() => (vpSpike = false)} />{/if}
+<!-- ╚═══════════════════════════════════════════════════════════════════════════════╝ -->
+
 <style>
   .hud { display: flex; flex-direction: column; height: 100vh; }
 
@@ -448,4 +461,13 @@
   .ln.check .tag { color: var(--amber); }
   .ln.system { color: var(--text-faint); }
   .ln.done { color: var(--green); }
+
+  /* P4 SPIKE (THROWAWAY — do not merge): the harness launch button. */
+  .vp-spike-launch {
+    position: fixed; right: 10px; bottom: 10px; z-index: 8000;
+    background: #1a0c30; color: #c08bff; border: 1px solid #6a3bd6; border-radius: 3px;
+    padding: 6px 10px; font: 600 11px/1 var(--font-mono, ui-monospace), monospace;
+    letter-spacing: 1px; cursor: pointer;
+  }
+  .vp-spike-launch:hover { background: #25104a; }
 </style>

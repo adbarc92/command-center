@@ -5,11 +5,20 @@ mod plugins;
 mod dashboard;
 // LANE-B → HOST: fleetd-serve sidecar supervisor (health-gate / restart / kill).
 mod sidecar;
+// P4 SPIKE (THROWAWAY — do not merge): registers the `ccplugin://` scheme handler for
+// the sandboxed view-plugin handshake go/no-go. Remove with the spike branch.
+mod spike_view_plugins;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        // P4 SPIKE (THROWAWAY): serve the sandboxed view-plugin from a custom scheme with
+        // the strict plugin-doc CSP as a response header. Available in dev AND packaged.
+        // Remove with the spike branch.
+        .register_uri_scheme_protocol(spike_view_plugins::SCHEME, |_ctx, request| {
+            spike_view_plugins::respond(request)
+        })
         .manage(plugins::manager::PluginManager::default())
         // LANE-B → HOST: holds the live fleetd-serve child so the shutdown hook
         // can kill it (no orphaned sidecar) and the supervisor can restart it.
