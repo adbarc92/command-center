@@ -1,5 +1,9 @@
 # Session Pickup — 2026-06-21
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — PR #30 merged; the plugin has since been hardened (H1–H3 via PR #31)
+> with **H4** still open. Current status: [`docs/ROADMAP.md`](../ROADMAP.md). Kept for history (live-machine
+> migration record).
+
 **Branch:** `spike/session-state-plugin`
 **Active plan:** [`docs/superpowers/plans/2026-06-20-session-state-plugin-phase1.md`](../superpowers/plans/2026-06-20-session-state-plugin-phase1.md) — **11/11 tasks complete**
 **PR:** [#30](https://github.com/adbarc92/command-center/pull/30) → `main` (open, ready to review/merge)

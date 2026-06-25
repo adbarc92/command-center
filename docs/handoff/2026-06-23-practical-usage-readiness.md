@@ -1,5 +1,9 @@
 # Handoff — Practical-usage readiness (2026-06-23)
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — status here is stale (P4 is now scaffolded & committed; the P3
+> `spike_show` hang is fixed & committed). Current readiness audit + swarm plan:
+> **[`2026-06-25-ship-readiness-swarm-handoff.md`](2026-06-25-ship-readiness-swarm-handoff.md)**. Kept for history.
+
 **Branch:** `main` @ `b35c9e2` (everything below is merged; nothing in flight).
 **Question this answers:** how far is the Command Center from **practical day-to-day usage** by its owner?
 **Verdict:** **~85% — the gap is human-gated validation + procurement, not engineering.** The swarmable

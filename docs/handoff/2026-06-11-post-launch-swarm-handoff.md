@@ -1,5 +1,9 @@
 # Handoff — Post-launch: spikes, overlays, and the road to a signed release
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — the overlay + packaging swarm shipped; the spike/cert track moved on.
+> Current human-gated work: **[`2026-06-25-spikes-handoff.md`](2026-06-25-spikes-handoff.md)**; ship plan:
+> [`2026-06-25-ship-readiness-swarm-handoff.md`](2026-06-25-ship-readiness-swarm-handoff.md). Kept for history.
+
 **For:** the next agent (or future-you), 2026-06-11.
 **Goal of the session:** with the launchable shell landed, take the product from *daily-usable* to
 *shippable + feature-complete*. The remaining work is **mostly serial** — two human-gated go/no-go

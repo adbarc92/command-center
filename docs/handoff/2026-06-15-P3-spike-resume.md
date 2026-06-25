@@ -1,5 +1,9 @@
 # Session Pickup — 2026-06-15 — P3 webview spike (mid-debug)
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — the `spike_show` hang documented here is **fixed and committed**
+> (`a41a573` on `spike/app-plugins-webview-v2`). To run P3, use
+> **[`2026-06-25-spikes-handoff.md`](2026-06-25-spikes-handoff.md)**. Kept for history (root-cause + gate-5 plan).
+
 **Main repo branch:** `main` @ `b36ec90` (synced to `origin/main`; local commits below are **not pushed**).
 **Spike work lives in a worktree, not main:**
 `.claude/worktrees/agent-a709aaf1bcad07d41` on branch `spike/app-plugins-webview-v2` @ `59470d7`.

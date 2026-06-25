@@ -1,5 +1,9 @@
 # Handoff — finish SP1-Hardening (Phases 4b, 5, 6)
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — SP1-Hardening shipped; the SP1 spine is merged and e2e-proven.
+> Current project state: [`../handoff/2026-06-25-ship-readiness-swarm-handoff.md`](../handoff/2026-06-25-ship-readiness-swarm-handoff.md);
+> live status: [`../ROADMAP.md`](../ROADMAP.md). Kept for history.
+
 > For the agent picking this up. Everything referenced is in the repo or git; this
 > doc adds only the state + gotchas that aren't already captured elsewhere.
 > Date: 2026-06-06.

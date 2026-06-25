@@ -1,5 +1,9 @@
 # Swarm Handoff — session-state plugin hardening (H1–H3)
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — H1–H3 were shipped via PR #31. The remaining hardening item is **H4**
+> (keying path-separator spurious collision); see [`docs/ROADMAP.md`](../ROADMAP.md) and Lane H in
+> [`2026-06-25-ship-readiness-swarm-handoff.md`](2026-06-25-ship-readiness-swarm-handoff.md). Kept for history.
+
 **Source:** [`docs/ROADMAP.md` → Hardening backlog](../ROADMAP.md) (carried from PR #30).
 **Date:** 2026-06-23
 **Base branch:** `main` @ `f09f2ad` (PR #30 merged).
