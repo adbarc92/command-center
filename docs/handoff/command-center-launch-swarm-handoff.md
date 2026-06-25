@@ -1,5 +1,9 @@
 # Handoff — Dispatch & manage the Command Center launch-readiness swarm
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — this launch-readiness swarm was executed and merged (PRs #17–#21).
+> Current project state + the live swarm plan: **[`2026-06-25-ship-readiness-swarm-handoff.md`](2026-06-25-ship-readiness-swarm-handoff.md)**;
+> live status: [`docs/ROADMAP.md`](../ROADMAP.md). Kept for history.
+
 **For:** a fresh agent taking over orchestration.
 **Your job:** dispatch the **5 launch-readiness lanes**, collect their work, open PRs, and run the
 integration/reconcile. You are the orchestrator — you do NOT write lane code yourself; you fan it out

@@ -1,5 +1,9 @@
 # P3 — App-plugin webview embedding spike (visual go/no-go)
 
+> ℹ️ **STATUS (2026-06-25)** — to *run* P3, use the current
+> **[`2026-06-25-spikes-handoff.md`](2026-06-25-spikes-handoff.md)** (the fix is committed; runbook is current).
+> This doc is retained as the **reference for the gate definitions + the GO=overlay-B / NO-GO=windows-C decision.**
+
 **You run this** — it needs visual judgment a tool can't give. Goal: decide **how** the cockpit hosts
 a whole web app (proving app: **Audience**) as a child webview, before any embedding code is written.
 

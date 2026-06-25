@@ -1,5 +1,9 @@
 # Handoff — Tomorrow's session: finish the launchable shell (organized for parallel dispatch)
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — the launchable shell shipped; this plan's lanes are merged.
+> Current: **[`2026-06-25-ship-readiness-swarm-handoff.md`](2026-06-25-ship-readiness-swarm-handoff.md)**;
+> live status: [`docs/ROADMAP.md`](../ROADMAP.md). Kept for history.
+
 **For:** the next agent (or future-you), 2026-06-10.
 **Goal of the session:** take the merged-but-unreachable dashboard + the documented-but-unbuilt
 launch lanes to a **daily-usable, self-launching desktop app**, by running one **serial pre-step**

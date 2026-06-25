@@ -1,5 +1,9 @@
 # Plan + Swarm Handoff — tomorrow's command-center work
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — first by `2026-06-12-remaining-work-handoff.md`, now by the current set.
+> Current human-gated work: **[`2026-06-25-spikes-handoff.md`](2026-06-25-spikes-handoff.md)**; ship plan:
+> [`2026-06-25-ship-readiness-swarm-handoff.md`](2026-06-25-ship-readiness-swarm-handoff.md). Kept for history.
+
 **For:** the next session (you + an agent swarm). **From:** 2026-06-11.
 **One-line state:** every agent-buildable feature is shipped; the two unbuilt features
 (app-plugin embedding, view-plugin runtime) are blocked behind **human-only visual spikes**. So

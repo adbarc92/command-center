@@ -1,5 +1,10 @@
 # Swarm Handoff — remaining work (post-swarm, 2026-06-11)
 
+> ℹ️ **STATUS (2026-06-25)** — the project-state summary here is superseded by
+> **[`2026-06-25-ship-readiness-swarm-handoff.md`](2026-06-25-ship-readiness-swarm-handoff.md)**. This doc is
+> retained because its **Parts A–C remain the design source** for the app-plugin embedding / view-plugin
+> runtime feature lanes (cited by the current swarm handoff).
+
 **For:** the next session. **Supersedes:** `2026-06-12-plan-and-swarm-handoff.md` (its Part B
 3-lane swarm was **executed and merged** this session).
 **One-line, honest state:** the **swarmable-now backlog is essentially cleared**. Everything

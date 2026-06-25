@@ -1,5 +1,9 @@
 # Handoff — Spikes, signed release, and the blocked feature swarms
 
+> ⚠️ **SUPERSEDED (2026-06-25)** — the spike/cert status here is stale (both spikes are now committed &
+> ready to run). Current human-gated work: **[`2026-06-25-spikes-handoff.md`](2026-06-25-spikes-handoff.md)**;
+> ship plan: [`2026-06-25-ship-readiness-swarm-handoff.md`](2026-06-25-ship-readiness-swarm-handoff.md). Kept for history.
+
 **For:** the next agent (or future-you), continuing from 2026-06-11.
 **One-line state:** the swarmable-now work is **done and on `main`**; everything substantial that
 remains is **human-gated** (two visual spikes, one paid mission, code-signing certs). This doc hands
