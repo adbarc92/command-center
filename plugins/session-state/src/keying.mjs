@@ -17,6 +17,13 @@ export function pathToSlug(p) {
   return p.replace(/[\\/:]/g, "-");
 }
 
+// Canonicalize separators for repo-path comparison/keying only (display is unaffected):
+// "\" and "/" denote the same repo, so collapse to a single canonical separator before
+// any compare. Applied to BOTH sides so a sep difference can never produce a mismatch.
+function normSep(p) {
+  return p == null ? p : p.replace(/\\/g, "/");
+}
+
 export function repoRoot(cwd) {
   try {
     const out = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"],
@@ -55,7 +62,8 @@ export function checkMeta(dir, canonicalRepo) {
     fs.writeFileSync(meta, JSON.stringify({ repo: canonicalRepo }));
     return true;
   }
-  if (existing === canonicalRepo) return true;
+  // Compare separator-normalized: a "\" vs "/" difference is the same repo, not a collision.
+  if (normSep(existing) === normSep(canonicalRepo)) return true;
   fs.writeFileSync(path.join(dir, "COLLISION"), `expected ${existing} got ${canonicalRepo}`);
   return false;
 }

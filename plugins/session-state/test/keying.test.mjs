@@ -60,3 +60,13 @@ test("checkMeta still flags COLLISION for a genuinely different repo", () => {
   assert.equal(k.checkMeta(d, "D:/repo-b"), false);
   assert.ok(existsSync(path.join(d, "COLLISION")));
 });
+
+test("checkMeta does not flag COLLISION when only the path separator differs (H4)", () => {
+  // Same logical repo: a prior write stored a backslash path; git now emits the
+  // forward-slash form. These denote the SAME repository — no collision.
+  const d = mkdtempSync(path.join(tmpdir(), "ss-"));
+  const meta = path.join(d, "meta.json");
+  writeFileSync(meta, JSON.stringify({ repo: "D:\\MajorProjects\\repo-a" }));
+  assert.equal(k.checkMeta(d, "D:/MajorProjects/repo-a"), true);
+  assert.ok(!existsSync(path.join(d, "COLLISION")));
+});
