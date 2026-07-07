@@ -5,6 +5,8 @@ mod plugins;
 mod dashboard;
 // LANE-B → HOST: fleetd-serve sidecar supervisor (health-gate / restart / kill).
 mod sidecar;
+// U4 (spec §4, §6): filesystem discovery + raw reads for the `local` dashboard source.
+mod local_projects;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,6 +26,7 @@ pub fn run() {
             dashboard::halyard_queue,
             dashboard::audience_health,
             dashboard::audience_posts,
+            local_projects::scan_local_projects,
         ])
         .setup(|app| {
             // LANE-P → HOST: activate the updater runtime. Lane B already wired
