@@ -33,6 +33,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-updater": "^2.9.0",
-    "js-yaml": "^5.2.1"
+    "js-yaml": "^5.2.1",
+    "marked": "^18.0.5"
   }
 }

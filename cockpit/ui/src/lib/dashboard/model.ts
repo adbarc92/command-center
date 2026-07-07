@@ -102,6 +102,20 @@ export interface ProjectCard {
   url?: string;
   /** §6.4 — groups two-axis cards (Audience app vs. Audience posts) without merging. */
   family?: string;
+  /** §5 — local source only: the project's roadmap work-queue (read by the Phase-2 UI). */
+  dispatch?: { items: RoadmapItem[] };
+}
+
+// §5 — a roadmap work-item parsed from a ROADMAP.md cc-item header (local source).
+export interface RoadmapItem {
+  id: string;
+  title: string;
+  status: 'open' | 'active' | 'blocked' | 'done';
+  tier: 't1' | 't2' | 't3';
+  lane?: string;
+  task: string;          // resolved dispatch text: Dispatch block → prose → title
+  missionId?: string;    // Phase-2, inert here
+  dispatchable: boolean; // has a unique id (Phase-2 gate; computed now)
 }
 
 // ── §5.2 StageSignal — what adapters consume ────────────────────────────────
