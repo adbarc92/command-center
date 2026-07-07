@@ -18,6 +18,16 @@ describe('localCards', () => {
     expect(cards[0].detail).toContain('85%');
   });
 
+  it('uses the poll time (not the declared date) for updatedIso on a healthy card', async () => {
+    const cards = await localCards(
+      reader([{ projectDir: 'D:/proj/alpha', statusText: '---\nstage: Build\nupdated: "2026-06-01"\n---\n', isPinned: false }]),
+      { now: NOW },
+    );
+    expect(cards).toHaveLength(1);
+    expect(cards[0].health).toBe('ok');
+    expect(cards[0].updatedIso).toBe(NOW().toISOString());
+  });
+
   it('does NOT emit a card for an auto-discovered project with no marker', async () => {
     const cards = await localCards(reader([{ projectDir: 'D:/proj/beta', statusText: '# no frontmatter\n', isPinned: false }]), { now: NOW });
     expect(cards).toHaveLength(0);

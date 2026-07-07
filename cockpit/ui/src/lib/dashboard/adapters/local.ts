@@ -102,7 +102,7 @@ export async function localCards(
       projectId, source: LOCAL_SOURCE, name: marker.name ?? nameFallback,
       stage: canon as ProjectCard['stage'], detail, blocked,
       stageSource: 'declared', override: null, conflict: null,
-      updatedIso: marker.updated ?? nowIso, staleAfterSec, health: 'ok',
+      updatedIso: nowIso, staleAfterSec, health: 'ok',
       dispatch: { items },
     });
   }
