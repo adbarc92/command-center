@@ -146,6 +146,18 @@ mod tests {
     }
 
     #[test]
+    fn roadmap_hash_is_over_raw_bytes_even_when_not_utf8() {
+        let root = tmp();
+        make_project(&root, "gamma", "---\nstage: Build\n---\n");
+        std::fs::write(root.join("gamma/ROADMAP.md"), [0x23, 0x20, 0xff, 0xfe, 0x0a]).unwrap();
+        let cfg = ScanConfig { scan_roots: vec![root.to_string_lossy().into()], max_depth: 5, pins: vec![], excludes: vec![] };
+        let docs = scan_local_projects(cfg).unwrap();
+        let gamma = docs.iter().find(|d| d.project_dir.ends_with("/gamma")).unwrap();
+        assert!(gamma.roadmap_hash.as_ref().unwrap().len() == 64); // hash computed despite invalid UTF-8
+        assert!(gamma.roadmap_text.is_none()); // decode fails, proving hash path is independent of decode
+    }
+
+    #[test]
     fn pinned_unmarked_dir_is_included() {
         let root = tmp();
         let pin = root.join("pinned-no-marker");
