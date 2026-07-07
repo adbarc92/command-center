@@ -50,7 +50,7 @@ export function isOffPipeline(s: Stage): s is OffPipelineStage {
 
 // ── §5.1 ProjectCard — the single render contract ───────────────────────────
 
-export type Source = 'halyard' | 'audience' | 'fleet' | 'app-plugin' | 'manual';
+export type Source = 'halyard' | 'audience' | 'fleet' | 'app-plugin' | 'manual' | 'local';
 
 export type Health = 'ok' | 'degraded' | 'unknown';
 
