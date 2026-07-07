@@ -21,6 +21,7 @@
     "@testing-library/jest-dom": "^6.4.8",
     "@testing-library/svelte": "^5.2.4",
     "@tsconfig/svelte": "^5.0.8",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.12.3",
     "jsdom": "^25.0.1",
     "svelte": "^5.55.5",
@@ -31,6 +32,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
-    "@tauri-apps/plugin-updater": "^2.9.0"
+    "@tauri-apps/plugin-updater": "^2.9.0",
+    "js-yaml": "^5.2.1"
   }
 }
