@@ -11,6 +11,7 @@ import { STAGE_ORDINAL, isPipelineStage } from './model';
 import type { Phase, Snapshot } from '../types';
 import { halyardCards, type HalyardReader } from './adapters/halyard';
 import { audienceCards, type AudienceReader } from './adapters/audience';
+import { localCards, type LocalReader } from './adapters/local';
 import { fleetCard, fleetCardsFromSnapshots, type FleetUnitState } from './adapters/fleet';
 import { appPluginCard, type PluginUnit, type PluginState } from './adapters/appPlugin';
 
@@ -73,6 +74,15 @@ export async function pollAudience(
 ): Promise<BoardState> {
   const cards = await audienceCards(reader, { overrides, now });
   return replaceSource(state, 'audience', cards);
+}
+
+export async function pollLocal(
+  state: BoardState,
+  reader: LocalReader,
+  now: () => Date = () => new Date(),
+): Promise<BoardState> {
+  const cards = await localCards(reader, { now });
+  return replaceSource(state, 'local', cards);
 }
 
 // ── push sources (events) ────────────────────────────────────────────────────

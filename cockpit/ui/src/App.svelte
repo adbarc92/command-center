@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { FLEET_BASE } from './lib/api';
   import { phaseClass, progress, isTerminal } from './lib/fleet';
   import type { CommandName } from './lib/types';
@@ -8,6 +9,16 @@
   import Dashboard from './views/Dashboard.svelte';
   import ApprovalOverlay, { type ApprovalRequest } from './lib/ApprovalOverlay.svelte';
   import { tauriHalyardReader, tauriAudienceReader } from './lib/dashboard/api';
+  import type { LocalReader, LocalProjectDoc } from './lib/dashboard/adapters/local';
+
+  // U4: local-source reader, backed by the `scan_local_projects` Tauri command.
+  // Lazy like the other Tauri-backed readers (tauriHalyardReader/tauriAudienceReader
+  // in ./lib/dashboard/api): invoke() only runs when scan() is called, and a rejection
+  // in a non-Tauri context is caught by localCards' own try/catch (degrades to
+  // health:'unknown' rather than throwing at mount).
+  const localReader: LocalReader = {
+    scan: () => invoke<LocalProjectDoc[]>('scan_local_projects', { config: { scanRoots: ['D:/MajorProjects'], maxDepth: 5, pins: [], excludes: [] } }),
+  };
 
   // ── top-level view switcher (Lane A) ─────────────────────────────
   // Fleet = the inline cockpit below; Projects = the read-only Project Dashboard.
@@ -171,6 +182,7 @@
     <Dashboard
       halyardReader={tauriHalyardReader}
       audienceReader={tauriAudienceReader}
+      {localReader}
       fleetSnapshots={fleet.snapshots()}
       onFleetPhase={(cb) => fleet.onPhase(cb)}
     />

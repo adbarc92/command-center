@@ -3,6 +3,7 @@ import {
   newBoard,
   pollHalyard,
   pollAudience,
+  pollLocal,
   seedFleet,
   applyFleetPhase,
   applyPluginState,
@@ -14,6 +15,7 @@ import {
 } from './store';
 import type { HalyardReader } from './adapters/halyard';
 import type { AudienceReader } from './adapters/audience';
+import type { LocalReader } from './adapters/local';
 import type { Snapshot } from '../types';
 
 const NOW = () => new Date('2026-06-09T12:00:00Z');
@@ -87,6 +89,19 @@ describe('board composition', () => {
     expect(ids).not.toContain('halyard:aurora:r1'); // replaced
     expect(ids).toContain('halyard:beta:r2');
     expect(ids).toContain('fleet:u1'); // untouched
+  });
+});
+
+describe('pollLocal (U4)', () => {
+  it('pollLocal replaces only the local source', async () => {
+    const reader: LocalReader = { scan: async () => [
+      { projectDir: 'D:/p/one', statusText: '---\nstage: Build\n---\n', isPinned: false },
+    ] };
+    const board = await pollLocal(newBoard(), reader, () => new Date('2026-07-10T00:00:00Z'));
+    const cards = cardList(board);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].source).toBe('local');
+    expect(cards[0].projectId).toBe('local:D--p-one');
   });
 });
 
