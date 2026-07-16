@@ -3,8 +3,10 @@
 > Cross-cutting roadmap for the Command Center. App-plugins-specific roadmap items live in
 > [`docs/superpowers/specs/2026-06-07-app-plugins-design.md` §5](superpowers/specs/2026-06-07-app-plugins-design.md);
 > this file holds the broader product + workflow backlog.
-> Last updated: 2026-06-25 (Hardening backlog: H1–H3 shipped via PR #31; H4 path-separator collision is the lone open item).
-> 2026-06-11: status flags reconciled against merged code — items 1, 4, 5 shipped; 2, 3, 6 partially shipped.
+> Last updated: **2026-07-16** (work-audit reconcile: #36 Local-Tracker Phase 1 shipped; hardening
+> backlog H1–H4 all merged; vision sharpened to "one-stop shop for agentic engineering"; Remote
+> Control added as a future pillar; auth-foundation-first build order locked).
+> 2026-06-25: H1–H3 shipped (PR #31), H4 (PR #34). 2026-06-11: items 1, 4, 5 shipped; 2, 3, 6 partial.
 
 ## North Star
 
@@ -12,15 +14,30 @@
 > low through intelligent resource use, maintain good context hygiene, and ship useful code
 > autonomously. Build cool, useful things quickly.
 
+**The synthesis (2026-07-16):** the Command Center is becoming the operator's **one-stop shop for
+agentic engineering** — a single surface to *dispatch* autonomous work, *see* every project's stage
+across sources, *act* on it without alt-tabbing, and (soon) *host the other tools inside it*. The
+sooner it is that single surface, the better. **Feature-complete before launch.**
+
 **Membership test:** a feature belongs in the Command Center **if and only if it serves that
-goal.** Use it to accept or reject roadmap items. Every item below is an expression of one of the
-three pillars:
+goal.** Use it to accept or reject roadmap items. Every item below is an expression of one pillar:
 
 | Pillar | Items |
 |---|---|
 | **Low cost** (intelligent resource use) | 1 Cache timer · 5 Rate-limit retry · 6 Budget discipline |
 | **Context hygiene** | 3 Context offload · 6B ContextCurator |
-| **Ship autonomously & fast** | 2 Swarm Handoff · 4 Project dashboard |
+| **Ship autonomously & fast** | 2 Swarm Handoff · 4 Project dashboard (+ Local Tracker) |
+| **Remote reach** (future) | **R Remote Control** — drive the fleet from away-from-desk |
+
+### Build order (locked 2026-07-16) — auth-foundation-first
+
+1. **Local-Tracker Phase 2 dispatch** — the keystone that turns the board from a *viewer* into a
+   *command surface*. Its daemon-wide loopback-auth migration (tracker spec §7.4) is **also the exact
+   security foundation Remote Control needs** — build it once, here.
+2. **Resolve P4 → dispatch the app-plugin + view-plugin embedding swarms** — hosts the other tools
+   inside the shell (the "no alt-tabbing" promise).
+3. **Design overhaul** — make the one-stop shop pleasant to live in (blocked on Claude Design output).
+4. **Remote Control** — its own brainstorm→spec, *after* Phase-2 auth lands (rides on it).
 
 Legend — **Status:** 💡 idea · 🛠️ in progress · 🔗 blocked on a dependency · ✅ shipped.
 **Lane:** `workflow` (how the agent operates — hooks/skills/harness) · `product` (Command Center app code).
@@ -28,7 +45,9 @@ Legend — **Status:** 💡 idea · 🛠️ in progress · 🔗 blocked on a dep
 > **In flight (current build, not a roadmap item):** **app-plugins** — host whole web apps
 > (proving app: Audience) in the cockpit. Phases 2–5.1 done (backend lifecycle complete: 17 Rust +
 > 2 JS tests green, clippy clean); gated on a hands-on Phase-0 webview spike before the embedding
-> phases. See [the spec](superpowers/specs/2026-06-07-app-plugins-design.md) and
+> phases. **P3 status (2026-07-16):** the `spike_show` hang is fixed (async commands, off-main-thread
+> webview creation) and the hide/show finding is captured in the spec — **effectively done, pending
+> only the go/no-go writeup in `SPIKE-RESULTS.md`.** See [the spec](superpowers/specs/2026-06-07-app-plugins-design.md) and
 > [plan](superpowers/plans/2026-06-07-app-plugins.md). Its own roadmap items (third-party isolation,
 > production auth, host↔app bridge, secrets, external-nav hardening) live in the spec's §5.
 
@@ -43,15 +62,21 @@ out-of-repo procurement. Everything downstream of them is already built or dispa
 
 | # | Item | Why only you | Unblocks |
 |---|---|---|---|
-| **P3** | **App-plugin webview spike — gates 2–5.** Bring Audience up (`:3000`, dev posture) and walk gates 2–5 on `spike/app-plugins-webview`; record go/no-go + the exact webview API to `spikes/SPIKE-RESULTS-app-plugins.md`. (Gate 1 already PASS.) | Interactive/visual judgment: renders, resize ≤150ms, hide-on-overlay no-flash, lifecycle orphan check. | **App-plugin embedding** feature swarm (`app-plugins-design.md` §6). |
-| **P4** | **View-plugin handshake spike.** Prove sandboxed-iframe + MessagePort handshake — `plugin-hello → init` round-trip across **100 reloads, zero drops**, dev **and** packaged. Record to `spikes/SPIKE-RESULTS.md`. | Needs a watched run across dev + packaged builds. | **View-plugin runtime** swarm (+ the `feat/view-plugins` de-stale pre-step). |
+| **P3** | **App-plugin webview spike — write up the verdict.** Hang fixed + hide/show finding captured (see In-flight note); the spike is *effectively done* — just needs the go/no-go recorded to `spikes/SPIKE-RESULTS-app-plugins.md` so the embedding swarm is formally unblocked. | Interactive/visual judgment already done; only the writeup remains. | **App-plugin embedding** feature swarm (`app-plugins-design.md` §6). |
+| **P4** | **View-plugin handshake spike — one debugging session from a verdict.** First watched run: **all 100 rounds dropped** (systematic, not a race). Leading hypothesis (documented, unverified): module scripts fetched CORS-mode → `sdk.js` never runs → no `plugin-hello`. Cheap fix identified (`Access-Control-Allow-Origin: *` on the scheme handler). **Re-run watched `tauri dev`, confirm the fix, record 100/100.** | Needs a watched run across dev + packaged builds. | **View-plugin runtime** swarm (+ the `feat/view-plugins` de-stale pre-step). |
 | **S3** | **One live paid T1 mission.** Set `ANTHROPIC_API_KEY`; dispatch a real T1 mission oracle→build→review→PR on a throwaway repo, human-watched. | Real credential + real token spend + live observation. The last unproven slice of the SP1 spine. | Confidence in the end-to-end spine on real tokens. |
 | **Certs** | **Code-signing certs.** Apple Developer ID ($99/yr + notarization) + Windows Authenticode. Wiring + exact secret names already done — see [`docs/release/signing-and-updates.md`](release/signing-and-updates.md) §4; `release.yml` consumes them by name. | Procurement (CA / Apple Developer Program) — out of repo. | The **signed cross-platform release run** (CI is otherwise ready). |
 
-**Status of the rest:** the human-authority overlays (PR #22) and packaging/release hardening
-(PR #23 — release sidecar + live updater runtime) shipped this session. Once P3/P4 each record a
-"go", the two **blocked feature swarms** (app-plugin embedding, view-plugin runtime) are dispatch-ready
-from their design docs. Remaining to **shippable** = certs + one signed release run.
+**Status of the rest:** human-authority overlays (PR #22) + packaging/release hardening (PR #23)
+shipped; **Project Dashboard + Local-Tracker Phase 1 shipped (PR #36, 2026-07-12).** Once P3/P4 each
+record a "go", the two **blocked feature swarms** (app-plugin embedding, view-plugin runtime) are
+dispatch-ready. Per the locked build order, **Local-Tracker Phase 2 dispatch is the next build** (it
+also lays the Remote-Control auth foundation). Remaining to **shippable** = certs + one signed release
+run + one live paid T1 mission (S3).
+
+> **Note (verify):** CI runner allocation was blocked by a GitHub Actions billing failure. #36 merged
+> 2026-07-12, which *suggests* billing may now be resolved — confirm with a fresh `gh run` before
+> relying on green CI.
 
 ---
 
@@ -107,9 +132,18 @@ managed automatically by the agent. **Two complementary tiers (no conflict — d
      can be absent in cron/CI; "behind the scenes" must fall back to Tier 1 + repo, never block.
 - **Serves:** context hygiene + low cost. **Overlaps:** the existing memory system + ContextCurator.
 
-## 4. Central Project Manager — project-tracking dashboard  ·  ✅ shipped (board built + mounted; app-plugin lane wires post-P3)  ·  lane: product
+## 4. Central Project Manager — project-tracking dashboard  ·  ✅ board shipped · 🛠️ Local-Tracker Phase 2 = the keystone next build  ·  lane: product
 
-**A core piece of this build.** Tell at a glance the **stage every project is in**.
+**A core piece of this build — and the spine of the "one-stop shop."** Tell at a glance the **stage
+every project is in**, and act on it.
+
+> **Status (2026-07-16):** board built + mounted; **Local Project Tracker Phase 1 shipped (PR #36)** —
+> the board now reads a project's own `docs/STATUS.md` front-matter + `ROADMAP.md` `cc-item`s as a
+> fifth (`local`) source. **Phase 2 (one-click dispatch a roadmap item → real fleet mission →
+> loops back onto the board) is fully specced through 3 critique rounds (Option A) but NOT built —
+> and it is the locked next build.** It converts the board from a viewer into a command surface and
+> lays the daemon-wide loopback-auth foundation Remote Control (pillar R) reuses. Spec:
+> [`2026-07-06-local-project-tracker-design.md`](superpowers/specs/2026-07-06-local-project-tracker-design.md).
 
 - **Data sources / integration:** **Halyard** is the natural backend — per its digest it's already
   a git-backed JSON store *over project/work state*, so it's the obvious source of "what stage is
@@ -162,21 +196,46 @@ practice. Concrete mechanisms:
 
 ---
 
+## R. Remote Control  ·  💡 named pillar — spec after Phase-2 auth lands  ·  lane: product
+
+Drive the fleet **from away-from-desk** — check what needs a human, approve a gate, dispatch a roadmap
+item, watch a mission, without being at the machine running the cockpit. The natural extension of the
+"one-stop shop": the shop should be reachable, not desk-bound.
+
+- **Why it waits on Phase 2, not the reverse:** `fleetd` today is an **unauthenticated** daemon on
+  `127.0.0.1:8787` wielding the operator's ambient `gh`/git credentials (full push). It **cannot** be
+  exposed remotely as-is. Local-Tracker Phase 2 already requires building **router-level loopback auth
+  over every mutating endpoint + a token handshake** (tracker spec §7.4). That is exactly R's security
+  prerequisite — so R is *cheap* once Phase 2 lands and *reckless* before it.
+- **Open design questions (for R's own brainstorm→spec):**
+  - **Transport:** expose the authed daemon over a tunnel/relay, or a thin cloud broker? (Never a raw
+    port-forward of an ambient-credential daemon.)
+  - **UI shell:** the cockpit is a Svelte SPA today wrapped in Tauri — could it *also* be served as a
+    PWA/web client (same UI, two shells) talking to the authed daemon? Reuses the design-system work.
+  - **AuthN/Z for a remote human:** device pairing, short-lived tokens, and which actions a remote
+    session may take (view-only vs approve-gate vs dispatch).
+  - **Push:** "a mission needs you" as an actual push notification to the phone.
+- **Serves:** ship autonomously & fast (the operator supervises from anywhere). **Membership:** passes
+  the test — it makes the autonomous fleet *more* usable, not a new unrelated surface.
+- **Depends on:** Local-Tracker Phase 2 auth (hard prerequisite); benefits from the design overhaul
+  (a served web shell wants the new design system).
+
 ## Hardening backlog (session-state plugin — item 3 Tier 1)
 
 Non-blocking follow-ups carried over from the session-state plugin port (PR #30, merged 2026-06-23;
 see [`docs/handoff/2026-06-21-session-state-plugin-shipped.md`](handoff/2026-06-21-session-state-plugin-shipped.md)).
 The plugin is shipped and green; these are known edge cases, not regressions.
 
-**Shipped:** H1 (`resolve.mjs` semver sort), H2 (`lock.mjs` torn-token steal), and H3 (`keying.mjs`
-malformed-meta spurious collision) all landed via **PR #31** (commit `b35c9e2`, "fix(session-state):
-plugin hardening H1–H3"). The hard release gate (H1) is therefore cleared.
+**✅ CLEARED (2026-07-16) — all four merged.** H1 (`resolve.mjs` semver sort), H2 (`lock.mjs`
+torn-token steal), and H3 (`keying.mjs` malformed-meta collision) landed via **PR #31**; **H4**
+(`keying.mjs` path-separator spurious collision that blocked `save-state` capture) landed via **PR #34**
+— its merged fix also *heals* the stored path to canonical form so the mismatch cannot recur. The hard
+release gate (H1) and the whole hardening backlog are cleared.
 
-| # | Item | Severity |
-|---|---|---|
-| **H4** | **`keying.mjs` path-separator spurious collision.** When git emits a forward-slash repo path but a prior write stored the backslash form for the **same** repo, `checkMeta`'s raw string compare differs and writes a spurious `COLLISION` — which then **blocks `save-state` capture** for that repo until cleared. | 🟠 **functional — blocks capture when it triggers** |
-
-- **Serves:** context hygiene (item 3 Tier 1 reliability). **Single-file fix** in `keying.mjs`.
+- **Follow-up (not a code item):** the *installed* session-state plugin on this machine is still
+  v0.1.0 (pre-H1–H4); the fixes are on `main` but not re-released/reinstalled. Cut a `0.10.x` plugin
+  release when convenient (now safe — H1 gate cleared).
+- **Serves:** context hygiene (item 3 Tier 1 reliability).
 
 ---
 
@@ -193,6 +252,8 @@ plugin hardening H1–H3"). The hard release gate (H1) is therefore cleared.
     doc proves the format.
 - **Recurring theme:** 1, 5, and 6D/E all orbit the same 5-minute cache window — treat them as one
   coherent "cache-economics" cluster when scheduling.
-- **Release gate:** cleared — **H1** (`resolve.mjs` semver sort) shipped in PR #31, so there is no
-  longer a hard gate on a `0.10.x` session-state plugin release. The lone open hardening item, **H4**
-  (`keying.mjs` path-separator collision), is independent and can be picked up anytime.
+- **Auth foundation:** **Local-Tracker Phase 2** and **Remote Control (R)** share the daemon-wide
+  loopback-auth migration — build it once in Phase 2 and R inherits it. Do not spec R's transport
+  until Phase 2's auth model is settled in code.
+- **Release gate:** cleared — the entire hardening backlog (H1–H4) is merged (PR #31 + #34); a
+  `0.10.x` session-state plugin release is safe whenever convenient.

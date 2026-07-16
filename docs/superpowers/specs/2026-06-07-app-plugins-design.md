@@ -305,6 +305,14 @@ upstream.
   `TOKEN_ENC_KEY` KMS) need a secrets store, not the manifest.
 - **Per-app resource limits / crash supervision** beyond the basic state machine (restart
   backoff, etc.).
+- **Webview keep-warm without reload** — §4's "hide, not destroy" keep-alive is **not** free: the
+  P3 watched run (2026-06-26) showed WebView2 `Webview::hide()`→`show()` forces a repaint/reload on
+  every tab switch (loses scroll/form/session state, re-runs the app's startup). For instant,
+  stateful switching, **park the inactive webview off-screen** (negative coords / zero size)
+  instead of `hide()`, so its render tree is never torn down; bound memory with a **warm-pool LRU
+  cap** (evict the least-recently-used app webview past N warm / after an idle timeout). Refines the
+  `plugin_hide` step in §4. Surfaced by the P3 spike; verify the off-screen-park fix during the
+  embedding build before relying on cheap switching.
 - **External-navigation hardening** — constraining/allowlisting the origins an app webview may
   navigate to (and validating redirect return-targets like Stripe's `success_url`), once apps are
   no longer all trusted first-party.

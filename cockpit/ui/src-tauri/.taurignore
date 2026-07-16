@@ -1,0 +1,6 @@
+# Tauri dev file-watcher ignore list (gitignore syntax, relative to src-tauri/).
+# fleetd writes its SQLite DB here; WAL-mode rewrites the -shm/-wal sidecars constantly,
+# which would otherwise trigger an endless "Rebuilding application…" loop in `tauri dev`.
+fleet.db
+fleet.db-shm
+fleet.db-wal
