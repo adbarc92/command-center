@@ -16,7 +16,10 @@
 /cockpit/ui/src-tauri/fleet.db-wal
 
 # git worktrees + local claude overlay
+# settings.json is a per-machine permission allowlist (absolute paths, broad grants) —
+# keep it out of shared history like settings.local.json; it stays live locally, untracked.
 /.claude/worktrees/
+/.claude/settings.json
 /.claude/settings.local.json
 
 # ContextCurator local store (user's product data, not ours to track)
