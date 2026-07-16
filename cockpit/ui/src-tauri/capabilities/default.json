@@ -1,23 +1,43 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "enables the default permissions",
-  "windows": [
-    "main"
-  ],
-  "permissions": [
-    "core:default",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/fleetd-serve",
-          "sidecar": true,
-          "args": true
-        }
-      ]
-    },
-    "shell:allow-kill",
-    "updater:default"
-  ]
-}
+[
+  {
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "default",
+    "description": "enables the default permissions",
+    "windows": [
+      "main"
+    ],
+    "permissions": [
+      "core:default",
+      {
+        "identifier": "shell:allow-execute",
+        "allow": [
+          {
+            "name": "binaries/fleetd-serve",
+            "sidecar": true,
+            "args": true
+          }
+        ]
+      },
+      "shell:allow-kill",
+      "updater:default"
+    ]
+  },
+  {
+    "identifier": "app-plugins",
+    "description": "Host control of trusted app-plugin child webviews. The glob MUST match the webview-label scheme `app::<id>` (spec §6 step 0). Scoped with `webviews` and NO `windows` so it applies only to app-plugin webviews, never the main shell. Deliberately EXCLUDES core:default and the shell permissions: app content (e.g. Audience) gets no host IPC bridge — spec §5 'no host<->app data bridge'. Only the host-side visibility/position/focus commands the embedding layer (plugin_show/plugin_hide/plugin_set_rect) drives are granted.",
+    "webviews": [
+      "app::*"
+    ],
+    "permissions": [
+      "core:webview:allow-create-webview",
+      "core:webview:allow-set-webview-position",
+      "core:webview:allow-set-webview-size",
+      "core:webview:allow-set-webview-focus",
+      "core:webview:allow-webview-show",
+      "core:webview:allow-webview-hide",
+      "core:webview:allow-webview-position",
+      "core:webview:allow-webview-close",
+      "core:webview:allow-reparent"
+    ]
+  }
+]

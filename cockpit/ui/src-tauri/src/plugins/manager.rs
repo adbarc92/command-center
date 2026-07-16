@@ -23,9 +23,17 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
-    /// Discovery roots: the per-user plugins dir. (A dev-list root can be added later.)
+    /// Discovery roots (spec §2 seam: dev list ∪ user dir). Ordered so LATER roots
+    /// win on `id` collision (discovery dedupes with later-wins): the dev-list root is
+    /// placed first and the per-user dir last, so a user-installed plugin overrides a
+    /// dev-checkout one of the same id. The dev-list root is opt-in via the
+    /// `CC_APP_PLUGINS_DEV` env var (points at e.g. this repo's
+    /// `cockpit/ui/src-tauri/app-plugins/`), keeping machine paths out of the binary.
     pub fn roots() -> Vec<PathBuf> {
         let mut v = Vec::new();
+        if let Some(dev) = std::env::var_os("CC_APP_PLUGINS_DEV") {
+            v.push(PathBuf::from(dev));
+        }
         if let Some(home) = home_dir() {
             v.push(home.join(".command-center/app-plugins"));
         }
@@ -160,5 +168,68 @@ pub fn plugin_launch(
             Ok(())
         }
         StartOutcome::Error(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::discovery::discover;
+    use crate::plugins::manifest::Popups;
+    use std::path::Path;
+
+    /// The shipped Audience proving manifest lives in the repo (dev-list root) and must
+    /// parse, validate, and carry the credential-free dev posture (spec §2 + audience
+    /// digest): fake providers baked as BUILD args, and devAuth selected at runtime env.
+    #[test]
+    fn shipped_audience_manifest_is_credential_free_dev() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("app-plugins/audience/app-plugin.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let m = Manifest::from_json(&text).expect("audience manifest parses");
+        m.validate().expect("audience manifest validates");
+
+        assert_eq!(m.id, "audience");
+        let lc = &m.lifecycle;
+
+        // Fake providers are BUILD args (baked into the image — a runtime env can't flip a
+        // prod-built Next image to devAuth/fake; spec §2 "build vs runtime env").
+        let build = lc.build.as_ref().expect("audience has a build step");
+        assert_eq!(build.args.get("NODE_ENV").map(String::as_str), Some("development"));
+        assert_eq!(build.args.get("AI_PROVIDER").map(String::as_str), Some("fake"));
+        assert_eq!(build.args.get("MEDIA_PROVIDER").map(String::as_str), Some("fake"));
+
+        // devAuth is selected at runtime (NODE_ENV) and fabricates an identity from
+        // DEV_WORKSPACE_ID/DEV_USER_ID (audience digest) — so no Clerk cookie is needed.
+        assert_eq!(lc.env.get("NODE_ENV").map(String::as_str), Some("development"));
+        assert!(lc.env.contains_key("DEV_WORKSPACE_ID"));
+        assert!(lc.env.contains_key("DEV_USER_ID"));
+
+        // Audience root `/` 302-redirects to /dashboard → the ready probe must accept 3xx
+        // or a perfectly healthy Next server is marked `error` (spec §2, critique R1 #3).
+        assert!(lc.ready.ok_status.contains(&302));
+        assert_eq!(lc.health.ok_status, vec![200]);
+
+        // OAuth popups must share the app's session partition (spec §4) → popups allowed.
+        assert_eq!(m.webview.popups, Popups::Allow);
+    }
+
+    /// `CC_APP_PLUGINS_DEV` adds a dev-list discovery root; discovery finds a manifest
+    /// placed under it. (Verifies the dev seam wired into `roots()` end-to-end.)
+    #[test]
+    fn dev_list_root_is_discovered() {
+        let tmp = std::env::temp_dir().join("appplugins_devroot_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("audience")).unwrap();
+        let text = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("app-plugins/audience/app-plugin.json"),
+        )
+        .unwrap();
+        std::fs::write(tmp.join("audience/app-plugin.json"), text).unwrap();
+
+        let found = discover(&[tmp.as_path()]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].manifest.id, "audience");
     }
 }
