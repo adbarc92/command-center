@@ -98,3 +98,73 @@ These patterns cover the known Anthropic HTTP status codes (429 = too many reque
 rate-limit and overload conditions. The classifier is built and tested against synthetic
 fixtures; this spike only would have refined the patterns — the absence of a confirmed
 signal does not block implementation.
+
+---
+
+## Plugin Runtime — Swarm Integration (Lane S)  → **CODE-COMPLETE; interactive smoke pending** ⏳
+
+> Run 2026-07-17 on the target machine (Windows 11, Tauri 2.11.2 `unstable`). Integrates the
+> view-plugin runtime (Lane V) + app-plugin embedding (Lane A) into the shared shell.
+> Dispatch doc: [docs/SWARM-HANDOFF-plugin-runtime.md](../docs/SWARM-HANDOFF-plugin-runtime.md).
+
+**What landed (branch `feat/plugin-runtime`):**
+- **Lane V** (view-plugin core): `store.svelte.ts` command-sink extraction, `bridge.ts`
+  (MessagePort `PluginBridge`/`PluginSession` + command policy + flood/rate kill), `loader.ts`,
+  `cockpit/plugin-sdk/`, `plugins/reference/`. Merged conflict-free.
+- **Lane A** (app-plugin core): `src-tauri/src/plugins/*` (manifest/discovery/lifecycle already
+  on main, extended), Tauri `unstable` pinned `=2.11.2`, `capabilities/default.json` `app::*`
+  capability, Audience proving manifest + dev-list discovery. Merged conflict-free.
+- **Lane S** (this integration, single writer of the three shared files):
+  - `tauri.conf.json`: host CSP — `frame-src http://ccplugin.localhost` + `connect-src` for
+    fleetd (`127.0.0.1:8787` http/ws).
+  - `src-tauri/src/view_plugins.rs` (new): production `ccplugin://` asset handler serving from
+    dev roots (`CC_VIEW_PLUGINS_DEV`) ∪ packaged resources ∪ `~/.command-center/plugins`, with
+    the **P4 findings** baked in — `script-src … http://ccplugin.localhost` (opaque origin ⇒
+    `'self'` matches nothing), `Access-Control-Allow-Origin: *` (opaque-origin module fetch is
+    CORS-mode), CSP as a **response header**, `connect-src 'none'`.
+  - `src-tauri/src/embedding.rs` (new): `plugin_show`/`plugin_hide`/`plugin_set_rect` — **async**
+    (P3: sync deadlocks webview creation), `plugin_hide` **parks off-screen** (never `hide()`,
+    which forces a repaint/reload), warm-pool LRU (cap 3), label scheme `app::<id>`.
+  - `lib.rs`: registers the `ccplugin://` scheme + the three embedding commands + `WebviewPool`.
+  - `App.svelte`: ONE topbar switcher across Fleet (in-DOM, default) + Projects + view-plugins
+    (sandboxed iframe) + app-plugins (native webview); `PluginBridge` handshake wiring;
+    hide-on-overlay compositing (native webview parked when a host overlay opens); ResizeObserver
+    rect tracking. Fleet ops grid behaviour unchanged (regression canary).
+
+**Automated gates — all GREEN (real output):**
+- `cd cockpit/ui/src-tauri && cargo test` → **28 passed; 0 failed** (clean compile against 2.11.2
+  `unstable`; the `add_child`/`get_webview`/`get_window`/`register_uri_scheme_protocol` surface).
+- `cd cockpit/ui && npm run check` → **0 errors / 0 warnings** across 352 files.
+- `cd cockpit/ui && npm test` → **133 passed** (18 files), incl. bridge handshake 100×-zero-drop,
+  command policy/flood-kill, store single-sink, and the `App.overlay`/`Switcher`/`ApprovalOverlay`
+  ops-grid regression canaries.
+- `cd cockpit/ui && npm run build` → clean (one benign `INEFFECTIVE_DYNAMIC_IMPORT` warning).
+
+**Provenance note:** the P3/P4 GO verdicts + throwaway spike harnesses live on unmerged branches
+`spike/app-plugins-webview-v2` (P3: `spike_show` async fix) and `spike/view-plugins-handshake`
+(P4 full GO). Their load-bearing *findings* are carried into `embedding.rs` / `view_plugins.rs`
+above; the spike files themselves were **not** merged (throwaway, per the handoff).
+
+### REMAINING HUMAN GATE — interactive dev + packaged smoke (not run headlessly)
+
+This is the spec's "spike-and-smoke" step: it needs a watched window and cannot be asserted from
+an automated run. Steps:
+
+1. **Dev seam env** (so `ccplugin://` + app discovery resolve to the repo in dev):
+   - `CC_VIEW_PLUGINS_DEV=<repo>/plugins`
+   - `CC_PLUGIN_SDK=<repo>/cockpit/plugin-sdk/index.js`  (served as `<id>/sdk.js`)
+   - `CC_APP_PLUGINS_DEV=<repo>/cockpit/ui/src-tauri/app-plugins`  (for the Audience app tab)
+2. **Dev:** `cd cockpit/ui && npm run desktop` (or `tauri dev`). Verify:
+   - Switcher shows FLEET (default, ops grid unchanged) + PROJECTS + REFERENCE (view-plugin) +
+     AUDIENCE (app-plugin).
+   - REFERENCE → sandboxed iframe renders, `plugin-hello`→`ready` completes, a policed `launch`
+     round-trips, `command-ack` rejection path fires; **no network** from the plugin.
+   - AUDIENCE → native webview appears over the reserved rect; resize the window and confirm the
+     webview stays glued; trigger a host overlay (stage a REAL launch) and confirm the webview
+     **parks off-screen** (hide-on-overlay across the native boundary), then restores on close.
+   - Switch AUDIENCE→FLEET→AUDIENCE with no leak / no orphaned webview; Fleet state preserved.
+   - Verify Vite HMR still works under the new host CSP (P4 spike gate d).
+3. **Packaged:** `npm run bundle` → run `target/release/*app*.exe`; repeat the above. Confirm the
+   `ccplugin://` scheme + child webview both work in the packaged build (no dev server).
+
+Record PASS/FAIL here once run on the target machine.
