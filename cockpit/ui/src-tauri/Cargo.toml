@@ -25,7 +25,12 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2"
 log = "0.4"
-tauri = { version = "2.11.2", features = [] }
+# LANE-A (app-plugins): the child-webview embedding layer needs Tauri's `unstable`
+# feature (multiwebview: create/position/show/hide child webviews). `unstable` is
+# explicitly NOT semver-stable, so the version is PINNED with `=` — a patch bump can
+# silently change or remove the unstable webview APIs. Note for CI/upgrade docs: bumping
+# this line requires re-verifying the embedding smoke (spec §6 step 0), not a blind bump.
+tauri = { version = "=2.11.2", features = ["unstable"] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
 # LANE-P (packaging): activate the updater runtime so the `plugins.updater`
