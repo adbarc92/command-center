@@ -7,6 +7,11 @@ mod dashboard;
 mod sidecar;
 // U4 (spec §4, §6): filesystem discovery + raw reads for the `local` dashboard source.
 mod local_projects;
+// PLUGIN RUNTIME (Lane S integration):
+//  - `view_plugins`: the `ccplugin://` scheme serving sandboxed view-plugin assets (Lane V).
+//  - `embedding`: the app-plugin child-webview show/hide/set_rect commands (Lane A).
+mod embedding;
+mod view_plugins;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -16,12 +21,24 @@ pub fn run() {
         // LANE-B → HOST: holds the live fleetd-serve child so the shutdown hook
         // can kill it (no orphaned sidecar) and the supervisor can restart it.
         .manage(sidecar::SidecarSupervisor::default())
+        // PLUGIN RUNTIME (Lane S): warm-pool bookkeeping for app-plugin child webviews.
+        .manage(embedding::WebviewPool::default())
+        // PLUGIN RUNTIME (Lane S): serve sandboxed view-plugin assets over `ccplugin://`
+        // with the plugin-doc CSP + ACAO headers (P4 spike findings). Registered on the
+        // builder so it works in BOTH `tauri dev` and a packaged build.
+        .register_uri_scheme_protocol(view_plugins::SCHEME, |ctx, req| {
+            view_plugins::respond(ctx.app_handle(), req)
+        })
         // LANE-A → SHELL contract: register the dashboard read-seam commands so the
         // frontend's `invoke('halyard_status'|'halyard_queue'|'audience_health'|
         // 'audience_posts')` resolve. Additive only — remove nothing here.
         .invoke_handler(tauri::generate_handler![
             plugins::manager::plugins_list,
             plugins::manager::plugin_launch,
+            // PLUGIN RUNTIME (Lane S): app-plugin child-webview embedding (Lane A bundle).
+            embedding::plugin_show,
+            embedding::plugin_hide,
+            embedding::plugin_set_rect,
             dashboard::halyard_status,
             dashboard::halyard_queue,
             dashboard::audience_health,

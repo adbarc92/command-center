@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import { FLEET_BASE } from './lib/api';
   import { phaseClass, progress, isTerminal } from './lib/fleet';
   import type { CommandName } from './lib/types';
@@ -10,6 +11,10 @@
   import ApprovalOverlay, { type ApprovalRequest } from './lib/ApprovalOverlay.svelte';
   import { tauriHalyardReader, tauriAudienceReader } from './lib/dashboard/api';
   import type { LocalReader, LocalProjectDoc } from './lib/dashboard/adapters/local';
+  // PLUGIN RUNTIME (Lane S): the sandboxed view-plugin bridge (Lane V) + app-plugin
+  // discovery (Lane A). The one topbar switcher unifies host views + both plugin kinds.
+  import { PluginBridge, makeFleetHost } from './lib/bridge';
+  import { discoverFrom } from './lib/loader';
 
   // U4: local-source reader, backed by the `scan_local_projects` Tauri command.
   // Lazy like the other Tauri-backed readers (tauriHalyardReader/tauriAudienceReader
@@ -20,16 +25,114 @@
     scan: () => invoke<LocalProjectDoc[]>('scan_local_projects', { config: { scanRoots: ['D:/MajorProjects'], maxDepth: 5, pins: [], excludes: [] } }),
   };
 
-  // ── top-level view switcher (Lane A) ─────────────────────────────
-  // Fleet = the inline cockpit below; Projects = the read-only Project Dashboard.
-  // Both project the SAME shared `fleet` store, so switching never loses state.
+  // ── unified top-level switcher (Lane S) ──────────────────────────
+  // ONE switcher spans four kinds of destination, all through the existing Switcher
+  // component (so the Fleet/Projects regression canary is untouched):
+  //   • host views   — Fleet (inline ops grid, default) + Projects (dashboard), in-DOM.
+  //   • view-plugins — sandboxed `<iframe>` served over `ccplugin://` (Lane V runtime).
+  //   • app-plugins  — trusted native child webviews composited over a reserved rect (Lane A).
+  // Exactly one destination is active at a time. Host views + the fleet store are never
+  // torn down on a switch, so returning to Fleet preserves units/sockets/selection.
   type ViewId = 'fleet' | 'projects';
   let view = $state<ViewId>('fleet');
 
-  const views: ViewEntry[] = [
+  // View-plugins (Lane V): discovered from a dev index of raw manifests, validated +
+  // capability-negotiated by the loader. Forced to the `packaged` env so `src` is the
+  // `ccplugin://localhost/<id>/<entry>` scheme — which our Rust handler serves in BOTH
+  // `tauri dev` and packaged builds (matches the host CSP `frame-src`). NOTE: this static
+  // index is the reference dogfood plugin; a Vite plugin that scans `plugins/*/manifest.json`
+  // into this index is the remaining dev-seam follow-up.
+  const VIEW_PLUGIN_INDEX: unknown[] = [
+    {
+      id: 'reference',
+      name: 'Reference',
+      version: '0.1.0',
+      apiVersion: 1,
+      capabilities: ['log-append'],
+      entry: 'index.html',
+    },
+  ];
+  const viewPlugins = discoverFrom('packaged', VIEW_PLUGIN_INDEX).plugins;
+  let activeViewPlugin = $state<string | null>(null); // plugin id, or null when a host/app view is active
+
+  // App-plugins (Lane A): discovered from Rust (`plugins_list`); each is a native child
+  // webview shown over a Svelte-reserved rect. `pluginState` mirrors the `plugin://state`
+  // lifecycle enum; `activeApp` is the id of the app whose webview is currently on-screen.
+  type AppTab = { id: string; name: string; icon: string; url: string };
+  let appTabs = $state<AppTab[]>([]);
+  let pluginState = $state<Record<string, string>>({}); // id -> "building"|"starting"|…|"healthy"|"error"
+  let activeApp = $state<string | null>(null);
+  let rectEl = $state<HTMLDivElement | null>(null); // the reserved content rect the webview tracks
+
+  // View-plugin bridge (Lane V): the `plugin-hello`→`init`→`PluginSession` handshake around
+  // the active iframe. Rebuilt whenever the active view-plugin changes; destroyed on leave.
+  let pluginFrame = $state<HTMLIFrameElement | null>(null);
+
+  // The one Switcher's entries + which is active, derived across all three destination kinds.
+  const switcherViews = $derived<ViewEntry[]>([
     { id: 'fleet', label: 'FLEET' },
     { id: 'projects', label: 'PROJECTS' },
-  ];
+    ...viewPlugins.map((p) => ({ id: `view:${p.manifest.id}`, label: p.manifest.name.toUpperCase() })),
+    ...appTabs.map((t) => ({ id: `app:${t.id}`, label: t.name.toUpperCase() })),
+  ]);
+  const activeSwitcherId = $derived(
+    activeApp ? `app:${activeApp}` : activeViewPlugin ? `view:${activeViewPlugin}` : view,
+  );
+
+  function toRect(r: DOMRect) {
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  }
+
+  // Leave the active app webview (if any): park it off-screen (keep-warm), clear activeApp.
+  async function leaveApp() {
+    if (activeApp) {
+      const id = activeApp;
+      activeApp = null;
+      await invoke('plugin_hide', { id });
+    }
+  }
+
+  // Select a host view (Fleet/Projects): park any app webview, drop any view-plugin.
+  async function selectHostView(v: ViewId) {
+    await leaveApp();
+    activeViewPlugin = null;
+    view = v;
+  }
+
+  // Select a view-plugin: park any app webview, mount its sandboxed iframe (the bridge
+  // `$effect` below wires the handshake once the frame is in the DOM).
+  async function selectViewPlugin(id: string) {
+    await leaveApp();
+    activeViewPlugin = id;
+  }
+
+  // Select an app-plugin: drop any view-plugin, keep the in-DOM base mounted, launch the
+  // plugin if it isn't healthy yet, then show its child webview over the reserved rect.
+  async function selectApp(id: string) {
+    if (activeApp && activeApp !== id) await invoke('plugin_hide', { id: activeApp });
+    activeViewPlugin = null;
+    activeApp = id;
+    await tick(); // let the reserved rect mount so we can measure it
+    if (pluginState[id] !== 'healthy') {
+      try {
+        await invoke('plugin_launch', { id });
+        pluginState = { ...pluginState, [id]: 'healthy' };
+      } catch (e) {
+        pluginState = { ...pluginState, [id]: 'error' };
+        return;
+      }
+    }
+    if (rectEl) await invoke('plugin_show', { id, rect: toRect(rectEl.getBoundingClientRect()) });
+  }
+
+  function onSwitch(id: string) {
+    if (id.startsWith('view:')) void selectViewPlugin(id.slice('view:'.length));
+    else if (id.startsWith('app:')) void selectApp(id.slice('app:'.length));
+    else void selectHostView(id as ViewId);
+  }
+
+  // True only for the default host Fleet ops grid (drives the topbar stats + regression canary).
+  const onFleet = $derived(view === 'fleet' && !activeViewPlugin && !activeApp);
 
   // The fleet store is the single source of fleet truth, shared across views. It owns
   // its own WebSocket streams; we connect once on app mount and tear down on app
@@ -37,6 +140,28 @@
   onMount(() => {
     fleet.start();
     return () => fleet.dispose();
+  });
+
+  // Discover app-plugins from Rust and subscribe to their lifecycle-state events. Guarded:
+  // in a plain-browser dev context (no Tauri) these calls reject and we simply show no app
+  // tabs — the host views and view-plugins are unaffected.
+  onMount(() => {
+    let un: (() => void) | undefined;
+    void (async () => {
+      try {
+        appTabs = await invoke<AppTab[]>('plugins_list');
+      } catch {
+        appTabs = [];
+      }
+      try {
+        un = await listen<{ id: string; state: string }>('plugin://state', (e) => {
+          pluginState = { ...pluginState, [e.payload.id]: e.payload.state };
+        });
+      } catch {
+        /* no Tauri event bus (browser dev) — state chips stay at their defaults */
+      }
+    })();
+    return () => un?.();
   });
 
   // Convenience aliases so the Fleet markup below reads like before, but every read
@@ -94,6 +219,53 @@
   // hit-testing (honored by WebView2/Chromium), so a future mounted plugin/webview
   // subtree cannot receive input. A backdrop + z-index alone does NOT do this.
   const overlayOpen = $derived(approvalRequest !== null);
+
+  // The active view-plugin's sandboxed-iframe `src` (ccplugin://…), or null.
+  const activeViewPluginSrc = $derived(
+    activeViewPlugin
+      ? (viewPlugins.find((p) => p.manifest.id === activeViewPlugin)?.src ?? null)
+      : null,
+  );
+
+  // View-plugin bridge (Lane V): while a view-plugin is active and its iframe is mounted, run
+  // the `plugin-hello`→`init`→`PluginSession` handshake. `makeFleetHost` hands the plugin the
+  // policed command sink; `onKill` (inbound flood or teardown) reverts to the trusted ops grid.
+  $effect(() => {
+    if (!activeViewPlugin || !pluginFrame) return;
+    const bridge = new PluginBridge(pluginFrame, makeFleetHost(fleet), {
+      onKill: () => {
+        activeViewPlugin = null;
+        view = 'fleet';
+      },
+    });
+    return () => bridge.destroy();
+  });
+
+  // App-plugin compositing (Lane A): a native child webview cannot be covered by CSS z-index,
+  // so a host overlay must trigger a Rust PARK of the active app webview (and a restore on
+  // close). This is the overlay-open/close signal crossing the native boundary.
+  $effect(() => {
+    if (!activeApp || !rectEl) return;
+    const id = activeApp;
+    const el = rectEl;
+    if (overlayOpen) {
+      void invoke('plugin_hide', { id });
+    } else if (pluginState[id] === 'healthy') {
+      void invoke('plugin_show', { id, rect: toRect(el.getBoundingClientRect()) });
+    }
+  });
+
+  // Keep the native app webview glued to the reserved rect on any resize/layout change.
+  $effect(() => {
+    if (!activeApp || !rectEl) return;
+    const id = activeApp;
+    const el = rectEl;
+    const ro = new ResizeObserver(() => {
+      void invoke('plugin_set_rect', { id, rect: toRect(el.getBoundingClientRect()) });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
 
   function onApprove() {
     if (!approvalRequest) return;
@@ -154,9 +326,9 @@
     <div class="brand">
       <span class="glyph">◢◤</span>
       <span class="wordmark disp">FLEET&nbsp;COMMAND</span>
-      <Switcher {views} active={view} onselect={(id) => (view = id as ViewId)} />
+      <Switcher views={switcherViews} active={activeSwitcherId} onselect={onSwitch} />
     </div>
-    {#if view === 'fleet'}
+    {#if onFleet}
       <div class="stats">
         <div class="stat"><b class="disp">{activeCount}</b><span>ACTIVE</span></div>
         <div class="stat"><b class="disp">{list.length}</b><span>UNITS</span></div>
@@ -174,7 +346,24 @@
     {/if}
   </header>
 
-  {#if view === 'projects'}
+  {#if activeViewPlugin}
+    <!-- View-plugin: untrusted, sandboxed iframe (opaque "null" origin — allow-scripts only,
+         never allow-same-origin) served over ccplugin://. It lives INSIDE the inert content
+         subtree, so an open host overlay removes it from focus/hit-testing entirely. -->
+    <iframe
+      bind:this={pluginFrame}
+      class="plugin-frame"
+      title="view plugin: {activeViewPlugin}"
+      sandbox="allow-scripts"
+      src={activeViewPluginSrc ?? 'about:blank'}
+      data-testid="view-plugin-frame"
+    ></iframe>
+  {:else if activeApp}
+    <!-- App-plugin: a trusted native child webview is composited OVER this reserved rect by
+         Rust (z-index can't cross the native boundary). The box stays empty; a ResizeObserver
+         keeps the webview glued to it and a host overlay parks it off-screen. -->
+    <div class="app-rect" bind:this={rectEl} data-testid="app-plugin-rect"></div>
+  {:else if view === 'projects'}
     <!-- Projects: the read-only Project Dashboard. Mounts with the real Tauri-backed
          readers, seeds its fleet lane from the shared store, and advances live off the
          store's `phase_changed` stream (no second socket). The store stays alive while
@@ -350,6 +539,11 @@
   .hb.bad { color: var(--red); border-color: rgba(255, 93, 108, 0.45); }
 
   .grid { flex: 1; display: grid; grid-template-columns: 300px 1fr 360px; min-height: 0; }
+
+  /* View-plugin sandboxed iframe fills the content region below the 52px topbar. */
+  .plugin-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
+  /* App-plugin reserved rect: the native child webview composites over this empty box. */
+  .app-rect { flex: 1; min-height: 0; }
   .panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
   .left { border-right: 1px solid var(--line-1); padding: 16px; gap: 14px; overflow-y: auto; }
   .right { border-left: 1px solid var(--line-1); padding: 14px; gap: 10px; }
