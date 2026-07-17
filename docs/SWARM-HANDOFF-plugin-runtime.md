@@ -27,6 +27,30 @@ self-contained.
 
 ---
 
+## 🔧 Reconciliation (2026-07-16, pre-dispatch) — read before dispatching Lane V
+
+A pre-dispatch audit found the repo state on `main` has moved since this doc was authored. The
+plan holds, but two facts must be carried into dispatch:
+
+1. **Spike GO verdicts live on unmerged branches, not on `main`.** `spikes/SPIKE-RESULTS.md` on
+   `main` is *stale* (old `claude -p` rate-limit spike), and `spikes/SPIKE-RESULTS-app-plugins.md`
+   does **not exist on `main`.** The real verdicts are on `spike/view-plugins-handshake` (tip:
+   *"P4 full GO — update next action to swarm dispatch"*) and `spike/app-plugins-webview-v2` (tip:
+   *"fix spike_show hang — async commands"*). The spikes **did pass**; the load-bearing findings
+   are already inlined in each lane's **Notes** below (ACAO + `ccplugin.localhost` script-src for V;
+   async-off-main-thread + park-offscreen-LRU for A), so lanes are not blocked — but treat "both GO"
+   as branch-attested, not main-verifiable.
+2. **A prior swarm (Lane A shell-store + Lane O overlay) already landed some of Lane V's files on
+   `main`.** Specifically: `cockpit/ui/src/lib/store.svelte.ts` **already exists** (the shared
+   `FleetStore` + `fleet` singleton, with `reconnect`/sockets and `pendingLaunch`/`awaitingApproval`),
+   and `cockpit/ui/src/lib/ApprovalOverlay.svelte` **already exists** (the focus-stealing
+   oracle-approval + real-launch modal, driven purely off host state). Lane V's brief below is
+   **corrected accordingly**: `store.svelte.ts` is **modify-not-create**, and the `overlay/`
+   deliverable is **already satisfied by `ApprovalOverlay.svelte`** — Lane V relies on it, does not
+   duplicate it. Lane A's `src-tauri/src/plugins/*` scaffolds exist as expected (no change).
+
+---
+
 ## ⚠️ Honest dependency analysis (why the shape is V + A + S, not 3 equal lanes)
 
 The two features are **not cleanly independent**, and each is **internally serial**:
@@ -85,18 +109,29 @@ Svelte glue, config-key deltas) so Lane S can paste-and-reconcile in one write.
 - **Goal:** the sandboxed-iframe view-plugin runtime — store extraction (single command sink),
   MessagePort bridge + command policy, host overlay (oracle approval), plugin SDK, loader, and a
   reference plugin that exercises the full message surface.
-- **Owns (exclusive write):** `cockpit/ui/src/lib/store.svelte.ts` (new), `cockpit/ui/src/lib/bridge.ts`
-  (new), `cockpit/ui/src/lib/loader.ts` (new), `cockpit/ui/src/lib/overlay/**` (new),
-  `cockpit/plugin-sdk/**`, `plugins/reference/**`, plus their tests.
-- **Reads (no write):** `cockpit/ui/src/lib/{api.ts,fleet.ts,types.ts}`, `cockpit/ui/src/App.svelte`,
-  `spikes/SPIKE-RESULTS.md` (P4 findings).
+- **Owns (exclusive write):** `cockpit/ui/src/lib/store.svelte.ts` (**MODIFY — already exists**; add
+  the single policed command-sink; do NOT recreate), `cockpit/ui/src/lib/bridge.ts` (new),
+  `cockpit/ui/src/lib/loader.ts` (new), `cockpit/plugin-sdk/**`, `plugins/reference/**`, plus their
+  tests. **The `overlay/` deliverable is already satisfied by the existing
+  `cockpit/ui/src/lib/ApprovalOverlay.svelte`** (from the prior Lane O swarm) — rely on it, do NOT
+  build a parallel `overlay/`. If you touch `ApprovalOverlay.svelte` at all it is a **read**, not a
+  rewrite.
+- **Reads (no write):** `cockpit/ui/src/lib/{api.ts,fleet.ts,types.ts}`,
+  `cockpit/ui/src/lib/ApprovalOverlay.svelte` (existing host overlay — the oracle-approval modal),
+  `cockpit/ui/src/App.svelte`. **P4 spike findings** are inlined in Notes below (the on-`main`
+  `SPIKE-RESULTS.md` is stale; the GO verdict is on branch `spike/view-plugins-handshake`).
 - **Shared contract:** files requests to **Lane S** for the App.svelte / lib.rs / tauri.conf.json
   entries in the table above. Does **not** write those files.
-- **Internal order (one agent, serial):** `store.svelte.ts` (+ regression: a bridge `launch`
+- **Internal order (one agent, serial):** `store.svelte.ts` **command-sink extraction** (MODIFY the
+  existing `FleetStore` — route plugin-originated commands through one policed sink; preserve the
+  live `reconnect`/socket path and its double-connect guards. + regression: a bridge `launch`
   concurrent with `reconnect()` yields **exactly one unit + one socket**) → `bridge.ts`
   (plugin-hello→init→ready 100× no-drop; dirty-delta `state`; `log-append`/`log-reset`;
-  **command policy** — shape/authority/cost/rate + inbound-flood-kill; `command-ack`) → `overlay/`
-  (oracle-approval modal, focus-stealing) → `plugin-sdk` + `loader` + **reference plugin**.
+  **command policy** — shape/authority/cost/rate + inbound-flood-kill; `command-ack`) → **overlay
+  is already done** (the existing `ApprovalOverlay.svelte` + the store's `awaitingApproval` derived
+  give the focus-stealing oracle-approval modal, driven purely off host state — a plugin cannot
+  satisfy/suppress it; wire the bridge's `awaiting_oracle_approval` presence to *read* this, never to
+  drive a new modal) → `plugin-sdk` + `loader` + **reference plugin**.
 - **Done when:** unit tests green for store (fold/single-sink), bridge (handshake/policy/ack),
   policy (reject unknown-type/unknown-id/over-bound `task`/`approve_oracle`; flood→kill);
   reference plugin exercises the full surface (dirty-`state`, `log-append`, a policed `launch`, a
