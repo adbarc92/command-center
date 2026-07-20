@@ -88,6 +88,7 @@ pub async fn run<R: Runner, F: Forge>(
         permit: None,
         resume: ctx.resume,
         handle_id: None,
+        oracle_hash: None,
         spec,
         commands,
         events,
@@ -121,6 +122,9 @@ struct Run<R: Runner, F: Forge> {
     /// Container id retained across pause (when `handle` is cleared) so `abandon`
     /// can still discard the volume.
     handle_id: Option<String>,
+    /// The oracle's real content hash, frozen at Spec (Task 3 compares against
+    /// this at Checking to detect tampering).
+    oracle_hash: Option<String>,
 }
 
 /// Max mergeability polls before treating the PR as unverifiable.
@@ -396,9 +400,14 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     else {
                         continue;
                     };
-                    let test_files = out.stdout.clone();
-                    // A content hash stands in for the frozen test-set fingerprint.
-                    let hash = format!("h{}", test_files.len());
+                    let frozen = self
+                        .runner
+                        .read_files(self.handle.as_ref().expect("handle in Spec"), "*.test.js")
+                        .await
+                        .unwrap_or_default();
+                    let hash = hash_oracle(&frozen);
+                    self.oracle_hash = Some(hash.clone());
+                    let test_files = out.stdout.clone(); // keep event's human-facing test_files (agent narration)
                     self.emit(Event::OracleProposed {
                         test_files,
                         hash,
@@ -767,6 +776,24 @@ mod tests {
         ]
     }
 
+    /// Drive a run to its terminal phase and return every emitted event.
+    async fn run_to_completion(runner: FakeRunner, spec: UnitSpec) -> Vec<EventEnvelope> {
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        drop(ctx);
+        let _final_phase =
+            run(runner, FakeForge::default(), spec, RunCtx::standalone(), crx, etx).await;
+        drain(&mut erx)
+    }
+
+    /// Pull the `hash` out of the first emitted `OracleProposed` event, if any.
+    fn find_oracle_proposed_hash(events: &[EventEnvelope]) -> Option<String> {
+        events.iter().find_map(|e| match &e.event {
+            Event::OracleProposed { hash, .. } => Some(hash.clone()),
+            _ => None,
+        })
+    }
+
     #[tokio::test]
     async fn t1_autonomous_runs_to_done() {
         // oracle, then 3 cycles trending 2 -> 1 -> 0 blockers; floor 3.
@@ -984,6 +1011,18 @@ mod tests {
         let seq = phases(&all);
         assert!(seq.contains(&Phase::AwaitingOracleApproval));
         assert!(seq.contains(&Phase::Building));
+    }
+
+    #[tokio::test]
+    async fn oracle_is_frozen_with_a_real_content_hash() {
+        let content = vec!["test('x', () => assert(sum(2,3)===5))".to_string()];
+        let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])]; // oracle step
+        script.extend(cycle(0)); // one clean build/check/review round
+        let runner = FakeRunner::new(script).oracle_contents(vec![content.clone()]);
+        let events = run_to_completion(runner, spec(Tier::T1, 100.0, 1)).await; // collect emitted events
+        let hash = find_oracle_proposed_hash(&events).expect("OracleProposed emitted");
+        assert_eq!(hash, hash_oracle(&content));
+        assert_eq!(hash.len(), 17); // real hash is "h"+16 hex, not the old "h{len}" line-count
     }
 
     #[tokio::test]
