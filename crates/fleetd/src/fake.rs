@@ -21,6 +21,9 @@ pub struct FakeRunner {
     pub discards: Arc<AtomicUsize>,
     /// Unit-ids returned by `list_unit_containers` (for reconciliation tests).
     unit_containers: Vec<String>,
+    /// Scripted `read_files` results (consumed front-to-back), same
+    /// interior-mutability wrapper as `scripted`.
+    oracle_reads: Mutex<Vec<Vec<String>>>,
 }
 
 impl FakeRunner {
@@ -34,6 +37,7 @@ impl FakeRunner {
             teardowns: Arc::new(AtomicUsize::new(0)),
             discards: Arc::new(AtomicUsize::new(0)),
             unit_containers: Vec::new(),
+            oracle_reads: Mutex::new(Vec::new()),
         }
     }
 
@@ -46,6 +50,12 @@ impl FakeRunner {
     /// Make `has_diff` report no changes (to exercise the NO_CHANGE path).
     pub fn empty_diff(mut self) -> Self {
         self.has_diff = false;
+        self
+    }
+
+    /// Script the results of successive `read_files` calls (consumed front-to-back).
+    pub fn oracle_contents(mut self, reads: Vec<Vec<String>>) -> Self {
+        self.oracle_reads = Mutex::new(reads);
         self
     }
 
@@ -136,6 +146,13 @@ impl Runner for FakeRunner {
     async fn reap_unit(&self, _unit_id: &str) -> Result<(), RunnerError> {
         self.teardowns.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+
+    async fn read_files(&self, _handle: &Handle, _glob: &str) -> Result<Vec<String>, RunnerError> {
+        // Pop the next scripted read; default to a STABLE constant so unscripted tests
+        // see an unchanged oracle and never trip tamper detection.
+        let mut q = self.oracle_reads.lock().unwrap();
+        Ok(if q.is_empty() { vec!["<frozen>".to_string()] } else { q.remove(0) })
     }
 }
 

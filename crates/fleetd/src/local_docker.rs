@@ -279,6 +279,14 @@ impl Runner for LocalDockerRunner {
         let _ = docker(vec!["rm".into(), "-f".into(), Self::container_name(unit_id)]).await;
         Ok(())
     }
+
+    async fn read_files(&self, handle: &Handle, glob: &str) -> Result<Vec<String>, RunnerError> {
+        // `glob` is always a compile-time constant ("*.test.js") — no injection surface.
+        let script = format!("find . -type f -name '{glob}' | sort | xargs -r cat");
+        let argv = vec!["sh".to_string(), "-c".to_string(), script];
+        let out = self.exec(handle, crate::steps::WORKDIR, &argv).await?;
+        Ok(out.stdout)
+    }
 }
 
 #[cfg(test)]

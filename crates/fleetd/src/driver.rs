@@ -52,6 +52,14 @@ impl RunCtx {
     }
 }
 
+/// Fingerprint a frozen oracle's contents so tampering can be detected later.
+fn hash_oracle(lines: &[String]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    lines.join("\n").hash(&mut h); // join normalizes exec's line-splitting
+    format!("h{:016x}", h.finish())
+}
+
 /// Drive a unit to a terminal phase, returning it. `commands` carries inbound
 /// control; `events` receives the outbound stream.
 pub async fn run<R: Runner, F: Forge>(
@@ -1206,5 +1214,15 @@ mod tests {
         assert!(saw_invalid, "a non-Halt command during backoff emits a 'not valid' error");
         ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
         let _ = h.await;
+    }
+
+    #[test]
+    fn hash_oracle_is_stable_and_content_sensitive() {
+        let a = vec!["assert(sum(2,3)===5)".to_string()];
+        let b = vec!["assert(sum(2,3)===5)".to_string()];
+        let c = vec!["assert(true)".to_string()]; // gutted test
+        assert_eq!(hash_oracle(&a), hash_oracle(&b)); // same content → same hash
+        assert_ne!(hash_oracle(&a), hash_oracle(&c)); // tampered content → different hash
+        assert_eq!(hash_oracle(&a).len(), 17); // "h" + 16 hex chars — a real fingerprint, not "h{len}"
     }
 }
