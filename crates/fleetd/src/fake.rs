@@ -24,6 +24,9 @@ pub struct FakeRunner {
     /// Scripted `read_files` results (consumed front-to-back), same
     /// interior-mutability wrapper as `scripted`.
     oracle_reads: Mutex<Vec<Vec<String>>>,
+    /// When set, `read_files` returns `Err` instead of a scripted/default read
+    /// (exercises the fail-safe unreadable-oracle path).
+    oracle_read_should_fail: bool,
 }
 
 impl FakeRunner {
@@ -38,6 +41,7 @@ impl FakeRunner {
             discards: Arc::new(AtomicUsize::new(0)),
             unit_containers: Vec::new(),
             oracle_reads: Mutex::new(Vec::new()),
+            oracle_read_should_fail: false,
         }
     }
 
@@ -56,6 +60,12 @@ impl FakeRunner {
     /// Script the results of successive `read_files` calls (consumed front-to-back).
     pub fn oracle_contents(mut self, reads: Vec<Vec<String>>) -> Self {
         self.oracle_reads = Mutex::new(reads);
+        self
+    }
+
+    /// Make `read_files` return `Err` (exercises the fail-safe unreadable-oracle path).
+    pub fn oracle_read_fails(mut self) -> Self {
+        self.oracle_read_should_fail = true;
         self
     }
 
@@ -149,6 +159,9 @@ impl Runner for FakeRunner {
     }
 
     async fn read_files(&self, _handle: &Handle, _glob: &str) -> Result<Vec<String>, RunnerError> {
+        if self.oracle_read_should_fail {
+            return Err(RunnerError::Failed("scripted oracle read failure".into()));
+        }
         // Pop the next scripted read; default to a STABLE constant so unscripted tests
         // see an unchanged oracle and never trip tamper detection.
         let mut q = self.oracle_reads.lock().unwrap();
