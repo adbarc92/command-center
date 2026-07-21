@@ -424,6 +424,15 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         continue;
                     };
                     let Some(frozen) = self.read_oracle_files().await else { continue };
+                    if frozen.is_empty() {
+                        self.emit(Event::Error {
+                            scope: ErrorScope::System,
+                            retryable: false,
+                            detail: "oracle is empty — nothing to freeze".into(),
+                        });
+                        self.goto(Trigger::OracleTampering, Some("empty oracle".into()), None);
+                        continue;
+                    }
                     let hash = hash_oracle(&frozen);
                     self.oracle_hash = Some(hash.clone());
                     let test_files = out.stdout.clone(); // keep event's human-facing test_files (agent narration)
@@ -1364,7 +1373,8 @@ mod tests {
         // never treat an unreadable oracle as empty; park before ever building.
         // Same event-watching pattern as `tampered_oracle_routes_to_needs_human`
         // (NeedsHuman is not a value `run()` itself returns).
-        let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])]; // oracle step (unused: read fails first)
+        // oracle exec runs; the read fails after → parks before building
+        let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])];
         script.extend(cycle(0));
         let runner = FakeRunner::new(script).oracle_read_fails();
         let (ctx, crx) = mpsc::unbounded_channel();
@@ -1386,6 +1396,52 @@ mod tests {
             }
         };
         assert_eq!(phase, Phase::NeedsHuman);
+
+        ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn empty_oracle_at_spec_routes_to_needs_human() {
+        // The very first oracle read (at Spec) succeeds (exit 0) but returns NO
+        // content — an empty glob match. A trust gate must never freeze an empty
+        // baseline: that's a pass-everything oracle, the exact thing the design
+        // forbids. Both scripted reads are empty (Spec AND the later Checking
+        // read) so hash_oracle(&[]) == hash_oracle(&[]) and the pre-existing
+        // tamper-hash-mismatch path (Checking) can NOT be what parks the unit —
+        // only the dedicated empty-oracle refusal at Spec should fire, and it
+        // must fire before Checking is ever reached. Same event-watching pattern
+        // as `unreadable_oracle_routes_to_needs_human` (NeedsHuman is not a value
+        // `run()` itself returns).
+        let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])]; // oracle exec runs
+        script.extend(cycle(0));
+        let runner = FakeRunner::new(script).oracle_contents(vec![vec![], vec![]]);
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+
+        let handle = tokio::spawn(run(
+            runner,
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+
+        let mut saw_empty_error = false;
+        let phase = loop {
+            let e = erx.recv().await.expect("stream closed before NeedsHuman");
+            if let Event::Error { ref detail, .. } = e.event {
+                if detail.contains("empty") {
+                    saw_empty_error = true;
+                }
+            }
+            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = e.event {
+                break Phase::NeedsHuman;
+            }
+        };
+        assert_eq!(phase, Phase::NeedsHuman);
+        assert!(saw_empty_error, "expected an empty-oracle Error event before parking");
 
         ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
         let _ = handle.await;

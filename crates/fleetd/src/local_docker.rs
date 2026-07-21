@@ -285,6 +285,12 @@ impl Runner for LocalDockerRunner {
         let script = format!("find . -type f -name '{glob}' | sort | xargs -r cat");
         let argv = vec!["sh".to_string(), "-c".to_string(), script];
         let out = self.exec(handle, crate::steps::WORKDIR, &argv).await?;
+        if out.exit_code != 0 {
+            return Err(RunnerError::Failed(format!(
+                "read_files exit {}: {:?}",
+                out.exit_code, out.stderr
+            )));
+        }
         Ok(out.stdout)
     }
 }
