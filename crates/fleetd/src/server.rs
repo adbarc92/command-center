@@ -194,6 +194,7 @@ fn row_from_spec(spec: &UnitSpec, mode: &str) -> UnitRow {
         cost: 0.0,
         last_seq: 0,
         oracle_frozen: spec.oracle_frozen,
+        oracle_hash: None,
         terminal_reason: None,
         mode: mode.into(),
         min_review_rounds: spec.gate.min_review_rounds,
@@ -397,16 +398,18 @@ fn spawn_forwarder(
     bcast: broadcast::Sender<EventEnvelope>,
     mut evt_rx: mpsc::UnboundedReceiver<EventEnvelope>,
     unit_id: String,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut cur_phase = "queued".to_string();
         let mut cur_cost = 0.0_f64;
         let mut terminal_reason: Option<String> = None;
+        let mut oracle_hash: Option<String> = None;
         while let Some(env) = evt_rx.recv().await {
             match &env.event {
                 Event::PhaseChanged { to, .. } => cur_phase = phase_str(to),
                 Event::Metric { cost_usd, .. } => cur_cost = *cost_usd,
                 Event::Done { result } => terminal_reason = Some(result.clone()),
+                Event::OracleProposed { hash, .. } => oracle_hash = Some(hash.clone()),
                 _ => {}
             }
             let json = serde_json::to_string(&env).unwrap_or_default();
@@ -414,11 +417,12 @@ fn spawn_forwarder(
             {
                 let s = store.lock().unwrap();
                 let _ = s.append_event(&unit_id, env.seq, ts, &json);
-                let _ = s.update_unit(&unit_id, &cur_phase, cur_cost, env.seq, terminal_reason.as_deref(), ts);
+                let _ = s.update_unit(&unit_id, &cur_phase, cur_cost, env.seq,
+                    terminal_reason.as_deref(), oracle_hash.as_deref(), ts);
             }
             let _ = bcast.send(env);
         }
-    });
+    })
 }
 
 #[derive(Serialize)]
@@ -722,7 +726,7 @@ fn halt_in_store(state: &AppState, id: &str) {
         };
         let ts = now_ms();
         let _ = s.append_event(id, seq, ts, &serde_json::to_string(&env).unwrap_or_default());
-        let _ = s.update_unit(id, "halted", row.cost, seq, Some("daemon restarted"), ts);
+        let _ = s.update_unit(id, "halted", row.cost, seq, Some("daemon restarted"), None, ts);
     }
 }
 
@@ -1015,11 +1019,46 @@ mod tests {
             cost: 0.2,
             last_seq: 7,
             oracle_frozen: true,
+            oracle_hash: None,
             terminal_reason: None,
             mode: "real".into(),
             min_review_rounds: 1,
             swarm_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn fold_persists_oracle_hash_and_freezes_on_oracle_proposed() {
+        // The projection fold currently ignores OracleProposed; this proves it
+        // persists the hash and flips oracle_frozen once the event is folded.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let mut r = building_row("u1");
+            r.oracle_hash = None;
+            r.oracle_frozen = false;
+            store.lock().unwrap().upsert_unit(&r, now_ms()).unwrap();
+        }
+        let (bcast_tx, _bcast_rx) = broadcast::channel(16);
+        let (evt_tx, evt_rx) = mpsc::unbounded_channel();
+        let handle = spawn_forwarder(store.clone(), bcast_tx, evt_rx, "u1".to_string());
+
+        evt_tx
+            .send(EventEnvelope {
+                unit_id: "u1".into(),
+                seq: 1,
+                event: Event::OracleProposed {
+                    test_files: vec![],
+                    hash: "h0000000000000abc".into(),
+                    summary: String::new(),
+                },
+            })
+            .expect("forwarder task alive");
+        drop(evt_tx);
+        handle.await.expect("forwarder task did not panic");
+
+        let row = store.lock().unwrap().get_unit("u1").unwrap().unwrap();
+        assert_eq!(row.oracle_hash.as_deref(), Some("h0000000000000abc"));
+        assert!(row.oracle_frozen, "oracle_frozen flips true once the fold sees OracleProposed");
     }
 
     #[tokio::test]
