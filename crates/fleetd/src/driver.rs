@@ -52,6 +52,14 @@ impl RunCtx {
     }
 }
 
+/// Fingerprint a frozen oracle's contents so tampering can be detected later.
+fn hash_oracle(lines: &[String]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    lines.join("\n").hash(&mut h); // join normalizes exec's line-splitting
+    format!("h{:016x}", h.finish())
+}
+
 /// Drive a unit to a terminal phase, returning it. `commands` carries inbound
 /// control; `events` receives the outbound stream.
 pub async fn run<R: Runner, F: Forge>(
@@ -80,6 +88,7 @@ pub async fn run<R: Runner, F: Forge>(
         permit: None,
         resume: ctx.resume,
         handle_id: None,
+        oracle_hash: None,
         spec,
         commands,
         events,
@@ -113,6 +122,9 @@ struct Run<R: Runner, F: Forge> {
     /// Container id retained across pause (when `handle` is cleared) so `abandon`
     /// can still discard the volume.
     handle_id: Option<String>,
+    /// The oracle's real content hash, frozen at Spec (Task 3 compares against
+    /// this at Checking to detect tampering).
+    oracle_hash: Option<String>,
 }
 
 /// Max mergeability polls before treating the PR as unverifiable.
@@ -317,6 +329,29 @@ impl<R: Runner, F: Forge> Run<R, F> {
         }
     }
 
+    /// Read the frozen oracle test files. If the read itself fails, park the unit at
+    /// NeedsHuman (a trust gate must never treat an unreadable oracle as empty).
+    /// Returns None if it parked — the caller should `continue`.
+    async fn read_oracle_files(&mut self) -> Option<Vec<String>> {
+        // Scope the immutable field borrows so they end before the &mut self emit/goto.
+        let result = {
+            let handle = self.handle.as_ref().expect("handle present in agent-active phase");
+            self.runner.read_files(handle, "*.test.js").await
+        };
+        match result {
+            Ok(files) => Some(files),
+            Err(e) => {
+                self.emit(Event::Error {
+                    scope: ErrorScope::System,
+                    retryable: false,
+                    detail: format!("oracle read failed: {e}"),
+                });
+                self.goto(Trigger::OracleTampering, Some("oracle unreadable".into()), None);
+                None
+            }
+        }
+    }
+
     async fn drive(mut self) -> Phase {
         loop {
             // Entry-side cleanup for paused states: stop the container (keeping the
@@ -388,9 +423,19 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     else {
                         continue;
                     };
-                    let test_files = out.stdout.clone();
-                    // A content hash stands in for the frozen test-set fingerprint.
-                    let hash = format!("h{}", test_files.len());
+                    let Some(frozen) = self.read_oracle_files().await else { continue };
+                    if frozen.is_empty() {
+                        self.emit(Event::Error {
+                            scope: ErrorScope::System,
+                            retryable: false,
+                            detail: "oracle is empty — nothing to freeze".into(),
+                        });
+                        self.goto(Trigger::OracleTampering, Some("empty oracle".into()), None);
+                        continue;
+                    }
+                    let hash = hash_oracle(&frozen);
+                    self.oracle_hash = Some(hash.clone());
+                    let test_files = out.stdout.clone(); // keep event's human-facing test_files (agent narration)
                     self.emit(Event::OracleProposed {
                         test_files,
                         hash,
@@ -464,6 +509,18 @@ impl<R: Runner, F: Forge> Run<R, F> {
                 Phase::Checking => {
                     if self.check_halt() {
                         continue;
+                    }
+                    if let Some(frozen_hash) = self.oracle_hash.clone() {
+                        let Some(current) = self.read_oracle_files().await else { continue };
+                        if hash_oracle(&current) != frozen_hash {
+                            self.emit(Event::Blocked {
+                                reason: "frozen oracle tests were modified".into(),
+                                cap: None,
+                                detail: String::new(),
+                            });
+                            self.goto(Trigger::OracleTampering, Some("oracle tampering".into()), None);
+                            continue;
+                        }
                     }
                     self.n_check += 1;
                     let n = self.n_check;
@@ -759,6 +816,24 @@ mod tests {
         ]
     }
 
+    /// Drive a run to its terminal phase and return every emitted event.
+    async fn run_to_completion(runner: FakeRunner, spec: UnitSpec) -> Vec<EventEnvelope> {
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        drop(ctx);
+        let _final_phase =
+            run(runner, FakeForge::default(), spec, RunCtx::standalone(), crx, etx).await;
+        drain(&mut erx)
+    }
+
+    /// Pull the `hash` out of the first emitted `OracleProposed` event, if any.
+    fn find_oracle_proposed_hash(events: &[EventEnvelope]) -> Option<String> {
+        events.iter().find_map(|e| match &e.event {
+            Event::OracleProposed { hash, .. } => Some(hash.clone()),
+            _ => None,
+        })
+    }
+
     #[tokio::test]
     async fn t1_autonomous_runs_to_done() {
         // oracle, then 3 cycles trending 2 -> 1 -> 0 blockers; floor 3.
@@ -976,6 +1051,18 @@ mod tests {
         let seq = phases(&all);
         assert!(seq.contains(&Phase::AwaitingOracleApproval));
         assert!(seq.contains(&Phase::Building));
+    }
+
+    #[tokio::test]
+    async fn oracle_is_frozen_with_a_real_content_hash() {
+        let content = vec!["test('x', () => assert(sum(2,3)===5))".to_string()];
+        let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])]; // oracle step
+        script.extend(cycle(0)); // one clean build/check/review round
+        let runner = FakeRunner::new(script).oracle_contents(vec![content.clone()]);
+        let events = run_to_completion(runner, spec(Tier::T1, 100.0, 1)).await; // collect emitted events
+        let hash = find_oracle_proposed_hash(&events).expect("OracleProposed emitted");
+        assert_eq!(hash, hash_oracle(&content));
+        assert_eq!(hash.len(), 17); // real hash is "h"+16 hex, not the old "h{len}" line-count
     }
 
     #[tokio::test]
@@ -1206,5 +1293,157 @@ mod tests {
         assert!(saw_invalid, "a non-Halt command during backoff emits a 'not valid' error");
         ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
         let _ = h.await;
+    }
+
+    #[test]
+    fn hash_oracle_is_stable_and_content_sensitive() {
+        let a = vec!["assert(sum(2,3)===5)".to_string()];
+        let b = vec!["assert(sum(2,3)===5)".to_string()];
+        let c = vec!["assert(true)".to_string()]; // gutted test
+        assert_eq!(hash_oracle(&a), hash_oracle(&b)); // same content → same hash
+        assert_ne!(hash_oracle(&a), hash_oracle(&c)); // tampered content → different hash
+        assert_eq!(hash_oracle(&a).len(), 17); // "h" + 16 hex chars — a real fingerprint, not "h{len}"
+    }
+
+    #[tokio::test]
+    async fn tampered_oracle_routes_to_needs_human() {
+        // The oracle is frozen with `good` at Spec, but by Checking time the frozen
+        // test file has been gutted (`tampered`) — the daemon must catch this.
+        // NeedsHuman is not a terminal `Phase` (see `Phase::is_terminal`) — `run()`
+        // parks there awaiting a command rather than returning, so (as in the
+        // pre-existing `cap_breach_routes_to_needs_human` test) we observe the park
+        // via the emitted `PhaseChanged` event, then send `Abandon` to let the
+        // spawned task finish.
+        let good = vec!["test('x', () => assert(sum(2,3)===5))".to_string()];
+        let tampered = vec!["test('x', () => assert(true))".to_string()]; // gutted at build time
+        let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])]; // oracle step
+        script.extend(cycle(0)); // one clean build/check/review round (floor 1)
+        // oracle read #1 (Spec freeze) = good; read #2 (Checking) = tampered
+        let runner = FakeRunner::new(script).oracle_contents(vec![good, tampered]);
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+
+        let handle = tokio::spawn(run(
+            runner,
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+
+        let phase = loop {
+            let e = erx.recv().await.expect("stream closed before NeedsHuman");
+            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = e.event {
+                break Phase::NeedsHuman;
+            }
+        };
+        assert_eq!(phase, Phase::NeedsHuman);
+
+        ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn untampered_oracle_proceeds_to_done() {
+        // Same shape as the tampered test, but the Checking read matches the
+        // frozen hash — no false positive, the unit runs to completion.
+        let good = vec!["test('x', () => assert(sum(2,3)===5))".to_string()];
+        let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])]; // oracle step
+        script.extend(cycle(0)); // one clean build/check/review round (floor 1)
+        let runner = FakeRunner::new(script).oracle_contents(vec![good.clone(), good]);
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, _erx) = mpsc::unbounded_channel();
+        drop(ctx);
+        let phase = run(
+            runner,
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        )
+        .await;
+        assert_eq!(phase, Phase::Done);
+    }
+
+    #[tokio::test]
+    async fn unreadable_oracle_routes_to_needs_human() {
+        // The very first oracle read (at Spec) fails outright — a trust gate must
+        // never treat an unreadable oracle as empty; park before ever building.
+        // Same event-watching pattern as `tampered_oracle_routes_to_needs_human`
+        // (NeedsHuman is not a value `run()` itself returns).
+        // oracle exec runs; the read fails after → parks before building
+        let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])];
+        script.extend(cycle(0));
+        let runner = FakeRunner::new(script).oracle_read_fails();
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+
+        let handle = tokio::spawn(run(
+            runner,
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+
+        let phase = loop {
+            let e = erx.recv().await.expect("stream closed before NeedsHuman");
+            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = e.event {
+                break Phase::NeedsHuman;
+            }
+        };
+        assert_eq!(phase, Phase::NeedsHuman);
+
+        ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn empty_oracle_at_spec_routes_to_needs_human() {
+        // The very first oracle read (at Spec) succeeds (exit 0) but returns NO
+        // content — an empty glob match. A trust gate must never freeze an empty
+        // baseline: that's a pass-everything oracle, the exact thing the design
+        // forbids. Both scripted reads are empty (Spec AND the later Checking
+        // read) so hash_oracle(&[]) == hash_oracle(&[]) and the pre-existing
+        // tamper-hash-mismatch path (Checking) can NOT be what parks the unit —
+        // only the dedicated empty-oracle refusal at Spec should fire, and it
+        // must fire before Checking is ever reached. Same event-watching pattern
+        // as `unreadable_oracle_routes_to_needs_human` (NeedsHuman is not a value
+        // `run()` itself returns).
+        let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])]; // oracle exec runs
+        script.extend(cycle(0));
+        let runner = FakeRunner::new(script).oracle_contents(vec![vec![], vec![]]);
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+
+        let handle = tokio::spawn(run(
+            runner,
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+
+        let mut saw_empty_error = false;
+        let phase = loop {
+            let e = erx.recv().await.expect("stream closed before NeedsHuman");
+            if let Event::Error { ref detail, .. } = e.event {
+                if detail.contains("empty") {
+                    saw_empty_error = true;
+                }
+            }
+            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = e.event {
+                break Phase::NeedsHuman;
+            }
+        };
+        assert_eq!(phase, Phase::NeedsHuman);
+        assert!(saw_empty_error, "expected an empty-oracle Error event before parking");
+
+        ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
+        let _ = handle.await;
     }
 }
