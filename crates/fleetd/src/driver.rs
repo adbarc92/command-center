@@ -36,6 +36,10 @@ pub struct RunCtx {
     pub start_phase: Phase,
     /// Fleet concurrency permits.
     pub permits: Arc<Semaphore>,
+    /// The oracle hash persisted from a prior Spec phase (`UnitRow.oracle_hash`),
+    /// reloaded so a resumed run's Checking phase can still detect tampering even
+    /// though `--resume` skips the live Spec phase that would otherwise freeze it.
+    pub oracle_hash: Option<String>,
 }
 
 impl RunCtx {
@@ -48,6 +52,7 @@ impl RunCtx {
             resume: false,
             start_phase: Phase::Queued,
             permits: Arc::new(Semaphore::new(1)),
+            oracle_hash: None,
         }
     }
 }
@@ -88,7 +93,7 @@ pub async fn run<R: Runner, F: Forge>(
         permit: None,
         resume: ctx.resume,
         handle_id: None,
-        oracle_hash: None,
+        oracle_hash: ctx.oracle_hash,
         spec,
         commands,
         events,
@@ -918,6 +923,7 @@ mod tests {
                 resume: true,
                 start_phase: Phase::Queued,
                 permits: permits.clone(),
+                oracle_hash: None,
             },
             crx,
             etx,
@@ -947,6 +953,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resumed_tampered_oracle_routes_to_needs_human() {
+        // A resumed unit: the oracle was frozen (with `good`) in a PRIOR run, so
+        // there is no live Spec phase here to (re)establish `self.oracle_hash` —
+        // it must come from the persisted hash threaded through `RunCtx`. By
+        // Checking time the frozen test file has been gutted (`tampered`); the
+        // reloaded hash must still catch it, exactly like the live-Spec tamper
+        // test (`tampered_oracle_routes_to_needs_human`), proving the gate
+        // re-arms on resume without a live Spec phase.
+        let good = vec!["test('x', () => assert(sum(2,3)===5))".to_string()];
+        let tampered = vec!["test('x', () => assert(true))".to_string()]; // gutted at build time
+        // Resumed unit: the oracle is already frozen, so the script has NO oracle
+        // call — just one build/check/review cycle (floor 1 opens the gate).
+        let script = cycle(0);
+        // Only ONE scripted read: the Checking-phase read (Spec is skipped on resume).
+        let runner = FakeRunner::new(script).oracle_contents(vec![tampered]);
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let mut s = spec(Tier::T1, 100.0, 1);
+        s.oracle_frozen = true;
+
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+
+        let handle = tokio::spawn(run(
+            runner,
+            FakeForge::default(),
+            s,
+            RunCtx {
+                start_seq: 5,
+                start_cost: 0.5,
+                resume: true,
+                start_phase: Phase::Queued,
+                permits: permits.clone(),
+                oracle_hash: Some(hash_oracle(&good)),
+            },
+            crx,
+            etx,
+        ));
+
+        let phase = loop {
+            let e = erx.recv().await.expect("stream closed before NeedsHuman");
+            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = e.event {
+                break Phase::NeedsHuman;
+            }
+        };
+        assert_eq!(phase, Phase::NeedsHuman);
+
+        ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
     async fn driver_waits_for_a_concurrency_slot() {
         // One slot, already taken: the driver must announce the wait (Blocked) and
         // must NOT provision until the slot frees — the concurrency guarantee.
@@ -968,6 +1025,7 @@ mod tests {
                 resume: true,
                 start_phase: Phase::Queued,
                 permits: permits.clone(),
+                oracle_hash: None,
             },
             crx,
             etx,
@@ -1176,6 +1234,7 @@ mod tests {
                 resume: false,
                 start_phase: Phase::Queued,
                 permits: permits.clone(),
+                oracle_hash: None,
             },
             crx,
             etx,

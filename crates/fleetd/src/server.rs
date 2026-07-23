@@ -173,6 +173,7 @@ fn fresh_ctx(st: &AppState) -> RunCtx {
         resume: false,
         start_phase: Phase::Queued,
         permits: st.permits.clone(),
+        oracle_hash: None,
     }
 }
 
@@ -339,6 +340,7 @@ fn rehydrate(st: &AppState, unit_id: &str) {
         // (which reuses the kept volume and skips the already-frozen oracle).
         start_phase: Phase::Halted,
         permits: st.permits.clone(),
+        oracle_hash: row.oracle_hash.clone(),
     };
     // Rehydrate as the SAME runner the unit was launched with (persisted), so a
     // demo unit resumes as a demo and never attempts a real Docker provision.
@@ -1301,6 +1303,58 @@ mod tests {
         }
         assert!(done, "rehydrated demo unit reached Done");
         assert!(!saw_oracle, "resume must not re-run the oracle");
+    }
+
+    #[tokio::test]
+    async fn rehydrate_reloads_oracle_hash_so_tamper_gate_rearms() {
+        // A halted DEMO unit whose persisted `oracle_hash` does NOT match what the
+        // demo runner's oracle read will produce at Checking time — standing in for
+        // a frozen-then-tampered oracle surviving a daemon restart. `demo_script`
+        // doesn't script `oracle_contents`, so `FakeRunner::read_files` always
+        // returns its constant default (`["<frozen>"]`); any hash that isn't
+        // `hash_oracle(&["<frozen>".into()])` therefore reads as tampered. This
+        // proves `rehydrate`'s `oracle_hash: row.oracle_hash.clone()` wiring
+        // actually re-arms the Checking-phase gate, not just that the field compiles.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            let mut r = building_row("u1");
+            r.mode = "demo".into();
+            r.min_review_rounds = 1;
+            r.phase = "halted".into();
+            r.oracle_frozen = true; // frozen → resume skips the oracle
+            r.oracle_hash = Some("h_stale_pre_restart_hash".into()); // won't match "<frozen>"
+            r.last_seq = 3;
+            r.cost = 0.1;
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let state = AppState::new(store);
+        rehydrate(&state, "u1");
+
+        let (mut rx, tx) = {
+            let units = state.units.lock().unwrap();
+            let h = units.get("u1").expect("rehydrated handle present");
+            (h.bcast.subscribe(), h.cmd_tx.clone())
+        };
+        tx.send(Command::Resume { cmd_id: "r1".into() }).expect("driver alive");
+
+        let mut needs_human = false;
+        for _ in 0..200 {
+            // `AppState` keeps the broadcast sender alive for the life of the
+            // process, so this stream never closes on its own — without a
+            // timeout, a regression that fails to emit NeedsHuman hangs the
+            // whole suite instead of failing fast.
+            let env = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+                .await
+                .expect("timed out waiting for NeedsHuman: tamper gate did not re-arm on resume")
+                .expect("event stream closed before NeedsHuman");
+            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = env.event {
+                needs_human = true;
+                break;
+            }
+        }
+        assert!(needs_human, "a stale reloaded oracle_hash must re-arm the tamper gate on resume");
+        tx.send(Command::Abandon { cmd_id: "cleanup".into() }).expect("driver alive");
     }
 
     #[tokio::test]

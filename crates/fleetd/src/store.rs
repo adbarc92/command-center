@@ -469,6 +469,14 @@ mod tests {
         let got2 = s.get_unit("u1").unwrap().unwrap();
         assert_eq!(got2.oracle_hash.as_deref(), Some("h0000000000000abc"));
         assert!(got2.oracle_frozen, "oracle_frozen flips true once update_unit sees a hash");
+
+        // A later update_unit call with oracle_hash=None (the common case — most
+        // phase transitions don't carry a fresh hash) must NOT clobber the
+        // already-persisted hash/frozen state (COALESCE / OR are no-ops on None).
+        s.update_unit("u1", "reviewing", got2.cost, got2.last_seq + 1, None, None, 1002).unwrap();
+        let got3 = s.get_unit("u1").unwrap().unwrap();
+        assert_eq!(got3.oracle_hash.as_deref(), Some("h0000000000000abc"), "None must not wipe a prior hash");
+        assert!(got3.oracle_frozen, "None must not un-freeze");
     }
 
     #[test]
