@@ -20,7 +20,7 @@ use crate::docsource::DocSource;
 use crate::driver::{run, EventEnvelope, RunCtx};
 use crate::fake::{FakeForge, FakeRunner};
 use crate::planner::Planner;
-use crate::reconcile::{reconcile, Action};
+use crate::reconcile::{reconcile, reconcile_live, Action};
 use crate::runner::{ExecOutput, Runner, UnitSpec};
 use crate::swarm::{admit_lanes, slug, AdmissionConfig, LaneDecision};
 use crate::store::{Store, UnitRow};
@@ -652,6 +652,36 @@ pub async fn reconcile_on_startup<R: Runner>(state: &AppState, runner: &R) {
     }
 }
 
+/// One steady-state reconciliation pass, safe to run repeatedly on a timer (the
+/// periodic reconcile loop). Reaps genuinely-orphan containers and halts stranded
+/// units, but — unlike [`reconcile_on_startup`] — leaves every unit that still has
+/// a live in-memory driver untouched (see [`reconcile_live`]).
+pub async fn reconcile_tick<R: Runner>(state: &AppState, runner: &R) {
+    // Snapshot store + live-driver state (locks released before the .await below).
+    let nonterminal: Vec<String> = {
+        let rows = state.store.lock().unwrap().list_units().unwrap_or_default();
+        rows.iter()
+            .filter(|r| !fleet_core::TERMINAL_PHASE_STRS.contains(&r.phase.as_str()))
+            .map(|r| r.unit_id.clone())
+            .collect()
+    };
+    let live: Vec<String> = state.units.lock().unwrap().keys().cloned().collect();
+    let running = runner.list_unit_containers().await.unwrap_or_default();
+
+    for action in reconcile_live(&nonterminal, &live, &running) {
+        match action {
+            Action::HaltWithContainer(id) => {
+                let _ = runner.reap_unit(&id).await;
+                halt_in_store(state, &id);
+            }
+            Action::HaltNoContainer(id) => halt_in_store(state, &id),
+            Action::ReapStray(id) => {
+                let _ = runner.reap_unit(&id).await;
+            }
+        }
+    }
+}
+
 /// Re-commit any admitted lane whose unit doesn't yet exist, then mark running.
 /// A lane counts as launched only if its `unit_id` is set AND a unit row actually
 /// exists (defensive against a crash between minting the id and committing the row).
@@ -1011,6 +1041,128 @@ mod tests {
         let evs = s.events_since("u1", 7).unwrap();
         assert_eq!(evs.len(), 1);
         assert!(evs[0].contains("halted"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_tick_reaps_strays_but_spares_live_units() {
+        // Steady-state drift: a healthy live unit (u1) keeps its container, while a
+        // genuine orphan container (u2, no unit row, no driver) lingers. One tick
+        // must converge by reaping ONLY the orphan — never the live unit's container.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        store.lock().unwrap().upsert_unit(&building_row("u1"), 1).unwrap();
+        let state = AppState::new(store.clone());
+        // u1 has a live in-memory driver → healthy.
+        register_unit_if_absent(&state, "u1");
+        // The runner sees u1 (healthy) + u2 (stray).
+        let runner =
+            FakeRunner::new(vec![]).with_unit_containers(vec!["u1".into(), "u2".into()]);
+
+        reconcile_tick(&state, &runner).await;
+
+        // u1 untouched: still non-terminal, driver still live.
+        let row = store.lock().unwrap().get_unit("u1").unwrap().unwrap();
+        assert_eq!(row.phase, "building", "healthy live unit must not be halted");
+        assert!(state.units.lock().unwrap().contains_key("u1"), "live driver retained");
+        // Exactly one reap — the stray u2 (`reap_unit` bumps `teardowns`).
+        assert_eq!(
+            runner.teardowns.load(Ordering::Relaxed),
+            1,
+            "only the orphan container is reaped, not the live unit's"
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_stream_delivers_the_unit_event_log_to_a_client() {
+        // End-to-end: dispatch a demo unit, serve the real router on a loopback port,
+        // then connect a genuine WebSocket client to /units/:id/stream and assert it
+        // receives the complete, seq-tagged event log the daemon persisted — i.e. the
+        // daemon streams unit state to a thin renderer over WebSocket.
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::Message as WsMsg;
+
+        let state = AppState::default();
+
+        let unit_id = create_mission(
+            State(state.clone()),
+            Json(CreateReq {
+                task: "add a sum() helper".into(),
+                tier: TierReq::T1,
+                mode: "demo".into(),
+                min_review_rounds: 1,
+            }),
+        )
+        .await
+        .expect("mission created")
+        .0
+        .unit_id;
+
+        // Serve the real router on an ephemeral loopback port.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let app = router(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        // Wait until the demo unit reaches a terminal phase so its full log is
+        // persisted (deterministic — independent of connect-vs-driver timing).
+        let mut final_seq: u64 = 0;
+        for _ in 0..400 {
+            if let Ok(Some(r)) = state.store.lock().unwrap().get_unit(&unit_id) {
+                if fleet_core::TERMINAL_PHASE_STRS.contains(&r.phase.as_str()) {
+                    final_seq = r.last_seq;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(final_seq > 0, "demo unit produced a persisted event log");
+
+        // A real WebSocket client subscribes from seq 0 and drains the stream.
+        let url = format!("ws://127.0.0.1:{port}/units/{unit_id}/stream?since=0");
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.expect("ws connect");
+
+        let mut frames: Vec<String> = Vec::new();
+        // The server holds the live tail open after replay (the unit's broadcast
+        // sender is retained), so stop once we've drained the full persisted log
+        // rather than waiting for a close that won't come.
+        while (frames.len() as u64) < final_seq {
+            match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+                Ok(Some(Ok(WsMsg::Text(t)))) => frames.push(t.to_string()),
+                Ok(Some(Ok(WsMsg::Close(_)))) | Ok(None) | Err(_) => break,
+                Ok(Some(Ok(_))) => {}      // ignore ping/pong/binary frames
+                Ok(Some(Err(_))) => break, // socket error
+            }
+        }
+
+        // The client received every persisted event, each a seq-tagged envelope
+        // carrying real unit state (an `event` payload).
+        assert_eq!(
+            frames.len() as u64,
+            final_seq,
+            "WS client received the complete event log ({final_seq} events)"
+        );
+        assert!(
+            frames.iter().all(|t| {
+                let v: serde_json::Value = serde_json::from_str(t).expect("frame is JSON");
+                v.get("seq").and_then(|s| s.as_u64()).is_some() && v.get("event").is_some()
+            }),
+            "every frame is a seq-tagged event envelope: {frames:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_tick_halts_a_stranded_unit_with_no_driver() {
+        // A non-terminal unit with no live driver and no container is stranded (its
+        // driver died). The steady-state tick converges it to halted.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        store.lock().unwrap().upsert_unit(&building_row("u1"), 1).unwrap();
+        let state = AppState::new(store.clone());
+        // No driver registered for u1, no containers running.
+        let runner = FakeRunner::new(vec![]);
+
+        reconcile_tick(&state, &runner).await;
+
+        let row = store.lock().unwrap().get_unit("u1").unwrap().unwrap();
+        assert_eq!(row.phase, "halted", "stranded driver-less unit is halted");
     }
 
     #[tokio::test]

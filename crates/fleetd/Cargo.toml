@@ -17,3 +17,7 @@ rusqlite = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
+# Real WebSocket client for the /stream integration test (same versions axum
+# already resolves, so no new crates enter the lock graph).
+tokio-tungstenite = "0.24"
+futures-util = "0.3"

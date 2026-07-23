@@ -57,6 +57,13 @@ impl FakeRunner {
         self
     }
 
+    /// Unit-ids the fake reports as running containers from `list_unit_containers`
+    /// (for reconciliation tests: startup + steady-state).
+    pub fn with_unit_containers(mut self, ids: Vec<String>) -> Self {
+        self.unit_containers = ids;
+        self
+    }
+
     /// Script the results of successive `read_files` calls (consumed front-to-back).
     pub fn oracle_contents(mut self, reads: Vec<Vec<String>>) -> Self {
         self.oracle_reads = Mutex::new(reads);
