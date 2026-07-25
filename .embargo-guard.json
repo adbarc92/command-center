@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "Denylist for the embargo guard (scripts/embargo-guard.mjs), enforced by the",
+    "pre-commit + commit-msg hooks in .githooks/ and by the 'embargo' CI job.",
+    "",
+    "Entries store a SALTED SHA-256 DIGEST of a forbidden token, never the token",
+    "itself, so this file is safe to keep on a public branch. The guard finds a",
+    "token by sliding a window of `length` over normalized content and comparing",
+    "digests -- it never needs the plaintext.",
+    "",
+    "Normalization: lowercase, then delete every character outside [a-z0-9]. That",
+    "makes matching immune to case, spacing, punctuation and line wrapping, so",
+    "'Foo Bar', 'foo-bar', '**FooBar**' and a 'Foo\\nBar' line break all collide.",
+    "",
+    "To add a token without ever writing it to disk:",
+    "  EG_TOKEN='...' node scripts/embargo-guard.mjs --add-entry <id>",
+    "",
+    "There is deliberately no allowlist or ignore-file: an exemption would just be",
+    "a second committed place the token lives."
+  ],
+  "algorithm": "sha256",
+  "entries": [
+    {
+      "id": "embargoed-name",
+      "length": 11,
+      "salt": "15b95d15f12f619b345607d501623519",
+      "digest": "d57f16346d720a6718a107379830f5f86b7b2f6e40079d3b6569facf5ccd36d6"
+    }
+  ]
+}
