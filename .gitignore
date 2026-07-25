@@ -8,6 +8,11 @@
 /fleet.db
 /fleet.db-wal
 /fleet.db-shm
+
+# restart-recovery demo scratch db (scripts/demo-restart-recovery.mjs)
+/demo-*.db
+/demo-*.db-wal
+/demo-*.db-shm
 .superpowers/
 
 # runtime SQLite lives under the tauri crate, not repo root
