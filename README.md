@@ -162,6 +162,20 @@ cargo test --workspace     # 116 tests; Docker/network ITs are #[ignore]d
 | [`scripts/`](scripts) | Runnable demos (e.g. restart recovery) |
 | [`docs/`](docs) | Quickstart, architecture vision, roadmap |
 
+### Repo hooks
+
+One-time, per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This enables the embargo guard ([`scripts/embargo-guard.mjs`](scripts/embargo-guard.mjs)), which
+blocks commits whose staged content or commit message contains a forbidden token. It matches against
+salted digests in `.embargo-guard.json` rather than plaintext, so neither the guard nor its config
+names what it screens for. The same check runs as the `embargo` job in CI, so skipping the hook —
+or committing with `--no-verify` — does not skip the check.
+
 ## Status
 
 **Feature-complete and tested:**

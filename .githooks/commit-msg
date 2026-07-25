@@ -1,0 +1,16 @@
+#!/bin/sh
+# Block a commit whose MESSAGE carries an embargoed token. Commit messages on a
+# public branch are as public as the tree, and the pre-commit hook cannot see the
+# message (it does not exist yet at that point), so this needs its own hook.
+#
+# Enable (one-time, per clone):  git config core.hooksPath .githooks
+
+set -e
+
+if ! command -v node >/dev/null 2>&1; then
+	echo "embargo-guard: node not found; cannot verify the commit message." >&2
+	echo "embargo-guard: refusing the commit (fail closed)." >&2
+	exit 1
+fi
+
+exec node "$(git rev-parse --show-toplevel)/scripts/embargo-guard.mjs" --message "$1"
