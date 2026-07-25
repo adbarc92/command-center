@@ -168,13 +168,22 @@ One-time, per clone:
 
 ```bash
 git config core.hooksPath .githooks
+EG_TOKEN='<token to forbid>' node scripts/embargo-guard.mjs --add-entry <id>   # repeat per token
 ```
 
 This enables the embargo guard ([`scripts/embargo-guard.mjs`](scripts/embargo-guard.mjs)), which
-blocks commits whose staged content or commit message contains a forbidden token. It matches against
-salted digests in `.embargo-guard.json` rather than plaintext, so neither the guard nor its config
-names what it screens for. The same check runs as the `embargo` job in CI, so skipping the hook —
-or committing with `--no-verify` — does not skip the check.
+blocks commits whose staged content or commit message contains a forbidden token, matching a
+normalized sliding window so case, punctuation and line wrapping don't evade it.
+
+The denylist is **not committed**. It holds salted digests rather than plaintext, but the tokens are
+low-entropy, so a digest published next to its salt is just a slow-release copy of the token — a
+10-digit one fell to a targeted search in 22.6s on one CPU core. So it lives in
+`.embargo-guard.local.json` (gitignored) locally and in the `EMBARGO_GUARD_CONFIG` repo secret for
+CI. Nothing about the forbidden tokens is in the repository: not the plaintext, not a regex, not a
+digest, not a length.
+
+The same check runs as the `embargo` job in CI, so skipping the hook — or committing with
+`--no-verify` — does not skip the check. It fails closed when no denylist is available.
 
 ## Status
 
