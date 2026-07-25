@@ -56,6 +56,11 @@ jobs:
         with:
           node-version: 20
 
+      # Hermetic — generates throwaway tokens and their denylists at runtime, so
+      # it needs no secret and still runs on fork PRs.
+      - name: Test the guard
+        run: node --test scripts/embargo-guard.test.mjs
+
       - name: Scan tracked files
         run: node scripts/embargo-guard.mjs --all
 
