@@ -173,6 +173,7 @@ fn fresh_ctx(st: &AppState) -> RunCtx {
         resume: false,
         start_phase: Phase::Queued,
         permits: st.permits.clone(),
+        oracle_hash: None,
     }
 }
 
@@ -194,6 +195,7 @@ fn row_from_spec(spec: &UnitSpec, mode: &str) -> UnitRow {
         cost: 0.0,
         last_seq: 0,
         oracle_frozen: spec.oracle_frozen,
+        oracle_hash: None,
         terminal_reason: None,
         mode: mode.into(),
         min_review_rounds: spec.gate.min_review_rounds,
@@ -338,6 +340,7 @@ fn rehydrate(st: &AppState, unit_id: &str) {
         // (which reuses the kept volume and skips the already-frozen oracle).
         start_phase: Phase::Halted,
         permits: st.permits.clone(),
+        oracle_hash: row.oracle_hash.clone(),
     };
     // Rehydrate as the SAME runner the unit was launched with (persisted), so a
     // demo unit resumes as a demo and never attempts a real Docker provision.
@@ -397,16 +400,18 @@ fn spawn_forwarder(
     bcast: broadcast::Sender<EventEnvelope>,
     mut evt_rx: mpsc::UnboundedReceiver<EventEnvelope>,
     unit_id: String,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut cur_phase = "queued".to_string();
         let mut cur_cost = 0.0_f64;
         let mut terminal_reason: Option<String> = None;
+        let mut oracle_hash: Option<String> = None;
         while let Some(env) = evt_rx.recv().await {
             match &env.event {
                 Event::PhaseChanged { to, .. } => cur_phase = phase_str(to),
                 Event::Metric { cost_usd, .. } => cur_cost = *cost_usd,
                 Event::Done { result } => terminal_reason = Some(result.clone()),
+                Event::OracleProposed { hash, .. } => oracle_hash = Some(hash.clone()),
                 _ => {}
             }
             let json = serde_json::to_string(&env).unwrap_or_default();
@@ -414,11 +419,12 @@ fn spawn_forwarder(
             {
                 let s = store.lock().unwrap();
                 let _ = s.append_event(&unit_id, env.seq, ts, &json);
-                let _ = s.update_unit(&unit_id, &cur_phase, cur_cost, env.seq, terminal_reason.as_deref(), ts);
+                let _ = s.update_unit(&unit_id, &cur_phase, cur_cost, env.seq,
+                    terminal_reason.as_deref(), oracle_hash.as_deref(), ts);
             }
             let _ = bcast.send(env);
         }
-    });
+    })
 }
 
 #[derive(Serialize)]
@@ -722,7 +728,7 @@ fn halt_in_store(state: &AppState, id: &str) {
         };
         let ts = now_ms();
         let _ = s.append_event(id, seq, ts, &serde_json::to_string(&env).unwrap_or_default());
-        let _ = s.update_unit(id, "halted", row.cost, seq, Some("daemon restarted"), ts);
+        let _ = s.update_unit(id, "halted", row.cost, seq, Some("daemon restarted"), None, ts);
     }
 }
 
@@ -1015,11 +1021,46 @@ mod tests {
             cost: 0.2,
             last_seq: 7,
             oracle_frozen: true,
+            oracle_hash: None,
             terminal_reason: None,
             mode: "real".into(),
             min_review_rounds: 1,
             swarm_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn fold_persists_oracle_hash_and_freezes_on_oracle_proposed() {
+        // The projection fold currently ignores OracleProposed; this proves it
+        // persists the hash and flips oracle_frozen once the event is folded.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let mut r = building_row("u1");
+            r.oracle_hash = None;
+            r.oracle_frozen = false;
+            store.lock().unwrap().upsert_unit(&r, now_ms()).unwrap();
+        }
+        let (bcast_tx, _bcast_rx) = broadcast::channel(16);
+        let (evt_tx, evt_rx) = mpsc::unbounded_channel();
+        let handle = spawn_forwarder(store.clone(), bcast_tx, evt_rx, "u1".to_string());
+
+        evt_tx
+            .send(EventEnvelope {
+                unit_id: "u1".into(),
+                seq: 1,
+                event: Event::OracleProposed {
+                    test_files: vec![],
+                    hash: "h0000000000000abc".into(),
+                    summary: String::new(),
+                },
+            })
+            .expect("forwarder task alive");
+        drop(evt_tx);
+        handle.await.expect("forwarder task did not panic");
+
+        let row = store.lock().unwrap().get_unit("u1").unwrap().unwrap();
+        assert_eq!(row.oracle_hash.as_deref(), Some("h0000000000000abc"));
+        assert!(row.oracle_frozen, "oracle_frozen flips true once the fold sees OracleProposed");
     }
 
     #[tokio::test]
@@ -1262,6 +1303,58 @@ mod tests {
         }
         assert!(done, "rehydrated demo unit reached Done");
         assert!(!saw_oracle, "resume must not re-run the oracle");
+    }
+
+    #[tokio::test]
+    async fn rehydrate_reloads_oracle_hash_so_tamper_gate_rearms() {
+        // A halted DEMO unit whose persisted `oracle_hash` does NOT match what the
+        // demo runner's oracle read will produce at Checking time — standing in for
+        // a frozen-then-tampered oracle surviving a daemon restart. `demo_script`
+        // doesn't script `oracle_contents`, so `FakeRunner::read_files` always
+        // returns its constant default (`["<frozen>"]`); any hash that isn't
+        // `hash_oracle(&["<frozen>".into()])` therefore reads as tampered. This
+        // proves `rehydrate`'s `oracle_hash: row.oracle_hash.clone()` wiring
+        // actually re-arms the Checking-phase gate, not just that the field compiles.
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            let mut r = building_row("u1");
+            r.mode = "demo".into();
+            r.min_review_rounds = 1;
+            r.phase = "halted".into();
+            r.oracle_frozen = true; // frozen → resume skips the oracle
+            r.oracle_hash = Some("h_stale_pre_restart_hash".into()); // won't match "<frozen>"
+            r.last_seq = 3;
+            r.cost = 0.1;
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let state = AppState::new(store);
+        rehydrate(&state, "u1");
+
+        let (mut rx, tx) = {
+            let units = state.units.lock().unwrap();
+            let h = units.get("u1").expect("rehydrated handle present");
+            (h.bcast.subscribe(), h.cmd_tx.clone())
+        };
+        tx.send(Command::Resume { cmd_id: "r1".into() }).expect("driver alive");
+
+        let mut needs_human = false;
+        for _ in 0..200 {
+            // `AppState` keeps the broadcast sender alive for the life of the
+            // process, so this stream never closes on its own — without a
+            // timeout, a regression that fails to emit NeedsHuman hangs the
+            // whole suite instead of failing fast.
+            let env = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+                .await
+                .expect("timed out waiting for NeedsHuman: tamper gate did not re-arm on resume")
+                .expect("event stream closed before NeedsHuman");
+            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = env.event {
+                needs_human = true;
+                break;
+            }
+        }
+        assert!(needs_human, "a stale reloaded oracle_hash must re-arm the tamper gate on resume");
+        tx.send(Command::Abandon { cmd_id: "cleanup".into() }).expect("driver alive");
     }
 
     #[tokio::test]
