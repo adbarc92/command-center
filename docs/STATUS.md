@@ -63,7 +63,7 @@ launch.**
 
 ### 2026-07-24 — Publication prep (control plane → public-ready)
 - **Audit + safety:** full work-audit; **secrets scan clean** (tree + full history — `.env` never
-  tracked, live key absent); **OpenBarclay embargo clean** (tree, history, commit messages).
+  tracked, live key absent); **embargoed-name scan clean** (tree, history, commit messages).
 - **Closed the two soft resume claims (Red→Green):** added a genuine periodic **reconcile loop**
   (`reconcile_live` spares live-driver units + `reconcile_tick`, `CC_RECONCILE_SECS` default 30s) so
   "reconcile loop" is literally accurate, and an automated **WebSocket `/stream` integration test**
