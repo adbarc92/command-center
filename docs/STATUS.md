@@ -1,7 +1,7 @@
 ---
 stage: Build
 readiness: "control plane publication-ready; product shell on roadmap"
-updated: "2026-07-24"
+updated: "2026-07-25"
 name: "Command Center"
 base_branch: "main"
 test_cmd: "cargo test --workspace"
@@ -17,12 +17,13 @@ its own `STATUS.md`, so the Command Center appears on its own board as a `local:
 ## State summary
 
 **TL;DR.** The **control plane and workflow layer are feature-complete and tested**, and the repo is
-now **publication-ready**: publication prep merged (**PR #41**) — README, MIT LICENSE, a real periodic
-**reconcile loop**, an automated **WebSocket `/stream` integration test**, and a runnable
-**restart-recovery demo**. Verified from a clean clone (`cargo build --release` + `cargo test` =
-**116 passed**), restart demo runs verbatim, and the **Tauri installers build** (MSI 7.4M + NSIS 5.0M).
-The **product shell** — plugin embedding, a design pass, remote control — remains on the roadmap. The
-repo is still **private** pending the go-public decision.
+**public**. Publication prep merged (**PR #41**) — README, MIT LICENSE, a real periodic **reconcile
+loop**, an automated **WebSocket `/stream` integration test**, and a runnable **restart-recovery
+demo**. Verified from a clean clone (`cargo build --release` + `cargo test` = **116 passed**), restart
+demo runs verbatim, and the **Tauri installers build** (MSI 7.4M + NSIS 5.0M). Going public exposed a
+**leak in this very file** — the embargo attestation named the string it asserted was absent; removed
+from HEAD (**PR #44**) and made non-repeatable by a digest-based **embargo guard** (**PR #45**). The
+**product shell** — plugin embedding, a design pass, remote control — remains on the roadmap.
 
 **Vision (unchanged):** the Command Center is the operator's **one-stop shop for agentic
 engineering** — dispatch work, see every project's stage, act without alt-tabbing, host the other
@@ -36,16 +37,14 @@ launch.**
 3. **Design overhaul** (needs Claude Design output).
 4. **Remote Control** — brainstorm→spec after Phase-2 auth lands.
 
-**Open PRs.**
-- **`feat/oracle-hash-persist` → main** — the two orphaned oracle-hash follow-ups (persist +
-  reload-on-resume so the tamper gate re-arms), rebased onto main; +4 tests (120 total green).
+**Open PRs.** None. (#41, #42, #43, #44, #45 all merged.)
 
 **Known gaps / blockers.**
-- **Repo is private** — flip to public when ready (deliberate; not yet done).
-- **CI runner allocation** still gated on GitHub Actions billing (out-of-repo).
-- **Local TDD-gate hook false-positives** on inline-test Rust PRs (it detects tests by file path, so
-  it can't see `#[cfg(test)]` modules) — set `requireTestChanges: false` (or a content-based check) in
-  `.claude/tdd-gate.json`.
+- **Embargoed token remains in git history** (~193 commits) — deliberately out of scope. Removing it
+  from HEAD drops it out of code search, which was the goal; rewriting published history on a public
+  repo is a separate call. Nothing on any branch tip carries it.
+- **`main` is unprotected**, so the `embargo` CI job *reports* but does not *enforce* — nothing stops
+  a merge over a red check. Add a branch-protection rule with `embargo guard` as a required check.
 - **Optional cockpit screenshot** for the README (needs a GUI session; the architecture diagram
   stands in).
 - **Product shell is roadmap:** P3/P4 plugin-embedding spikes, cockpit design overhaul, Local-Tracker
@@ -53,13 +52,43 @@ launch.**
 - **Launch gates (out-of-repo):** code-signing certs, one signed release run, one live paid T1 mission.
   No release tag exists yet.
 
+_Resolved this session: repo went public; CI runner billing is moot (Actions is free for public repos
+— the full matrix ran green in ~4 min). The TDD-gate hook is **not** path-blind as previously recorded
+here: it is content-aware and counts `#[test]` additions. The real failure was a **stale local `main`**
+making the gate diff against an old baseline; keep it synced (`git branch -f main origin/main`)._
+
 **Next steps.**
-1. Merge the oracle-hash follow-up PR (`feat/oracle-hash-persist`).
-2. **Flip the repo public** when ready.
-3. Fix the TDD-gate config so inline-test Rust PRs stop false-flagging.
-4. Resume the roadmap: **Local-Tracker Phase 2** (keystone + auth foundation), then embedding swarms.
+1. **Enable branch protection on `main`** with `embargo guard` + `cargo test` as required checks —
+   without it the guard is advisory on the server side.
+2. Run `git config core.hooksPath .githooks` in every existing clone/worktree (the hook is per-clone
+   config, so it does **not** travel with the merge).
+3. Resume the roadmap: **Local-Tracker Phase 2** (keystone + auth foundation), then embedding swarms.
 
 ## Session log
+
+### 2026-07-25 — Closed an embargo leak on the public default branch
+- **The leak:** the 2026-07-24 entry below asserted an embargo scan was clean and **named the
+  embargoed string inline to say so**. The attestation was itself the violation, and it shipped to the
+  public default branch (and into code search) with the go-public flip.
+- **Removed from HEAD (PR #44):** restated the line with a placeholder, keeping the audit trail (that
+  the scan ran, over what surface) while dropping the name. Applied on `main`; local
+  `docs/status-refresh` — already merged via #42, zero unique commits, remote-deleted — was
+  fast-forwarded rather than given a duplicate commit, so no in-flight branch can reintroduce it.
+- **History left alone, deliberately.** No `filter-repo`, rebase, or force-push. HEAD removal is what
+  drops it from code search; rewriting 193 public commits is a separate decision.
+- **Made non-repeatable (PR #45):** a **digest-based embargo guard**. A grep-based guard would have to
+  embed the string it screens for, recreating the bug — so `.embargo-guard.json` stores only a salted
+  SHA-256 of the *normalized* token plus its length, and the guard slides a window and compares
+  digests. Normalization (lowercase, strip outside `[a-z0-9]`) defeats case, punctuation, markdown
+  emphasis and line wrapping. Runs at **pre-commit** (staged blobs), **commit-msg** (messages are as
+  public as the tree), and as the **`embargo` CI job** (all tracked files + branch commit messages),
+  since a hook is bypassable with `--no-verify`. Fails closed; no allowlist by design.
+- **Verified it fires:** blocked a real commit on the contiguous string, on a token split across a
+  line break, and on a case-mangled punctuation-separated variant; blocked a bad commit message; and
+  failed closed on missing/corrupt config. Sabotage-tested the `--all` CI path locally — deliberately
+  **not** in CI, since that would mean pushing the token to a public repo.
+- **Scope check:** swept all 7 public branches and all 12 local branches — only `docs/STATUS.md:66`
+  ever carried it. The two personal-contact patterns on the embargo list are absent from the tree.
 
 ### 2026-07-24 — Publication prep (control plane → public-ready)
 - **Audit + safety:** full work-audit; **secrets scan clean** (tree + full history — `.env` never
