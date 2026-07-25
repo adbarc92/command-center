@@ -25,6 +25,18 @@
       "length": 11,
       "salt": "15b95d15f12f619b345607d501623519",
       "digest": "d57f16346d720a6718a107379830f5f86b7b2f6e40079d3b6569facf5ccd36d6"
+    },
+    {
+      "id": "personal-email",
+      "length": 18,
+      "salt": "658c08810f5957cb9927e723194794f3",
+      "digest": "651b524fc3f4ea52a88b65670b56b959563f836cca2e5270436af1cff9224644"
+    },
+    {
+      "id": "personal-phone",
+      "length": 10,
+      "salt": "c08c69820537665cbfd52d4f33c4f268",
+      "digest": "742f4c9347c41901744edc43e87bc767e0661f0204dc7d5fd90e729b8257433a"
     }
   ]
 }
