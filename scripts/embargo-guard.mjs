@@ -8,16 +8,29 @@
 // class of mistake non-repeatable.
 //
 // THE AWKWARD PART: a guard that greps for a forbidden string has to contain the
-// forbidden string, which recreates the exact problem it is solving. So this one
-// never sees the plaintext. .embargo-guard.json stores only a SALTED SHA-256 of
-// each normalized token plus its length; the guard slides a window of that length
-// over normalized content and compares digests. Both this file and the config are
-// clean under any grep for the thing they defend against.
+// forbidden string, which recreates the exact problem it is solving.
 //
-// Normalization (lowercase, then delete everything outside [a-z0-9]) is what makes
-// the match robust: case, spacing, punctuation, markdown emphasis and a hard line
-// wrap all collapse to the same normalized form, so "Foo Bar", "foo-bar",
-// "**FooBar**" and a "Foo\nBar" line break are all caught by one digest.
+// WHY THE DIGESTS ARE NOT COMMITTED: the first cut of this guard shipped salted
+// SHA-256 digests in a tracked file, reasoning that a digest is not plaintext. It
+// is not, but that is the wrong bar. The inputs here are LOW ENTROPY — a name, an
+// email, a phone number — and the salt has to ship next to the digest for the
+// guard to work, so it stops rainbow tables and nothing else. Measured: the
+// 10-digit phone digest fell to a targeted search in 22.6 SECONDS on one CPU core
+// (~9.1M candidates, single-threaded). A committed digest of a low-entropy secret
+// is a slow-release copy of that secret.
+//
+// So the denylist lives OUTSIDE the repo, and the guard resolves it from, in order:
+//   1. $EMBARGO_GUARD_CONFIG       — inline JSON (CI injects a repo secret)
+//   2. $EMBARGO_GUARD_CONFIG_FILE  — path to a JSON file
+//   3. .embargo-guard.local.json   — untracked, gitignored (local default)
+// Nothing about the forbidden tokens is committed: not the plaintext, not a
+// regex, not a digest, not a length.
+//
+// Matching is digest-based against a window of normalized text. Normalization
+// (lowercase, then delete everything outside [a-z0-9]) is what makes it robust:
+// case, spacing, punctuation, markdown emphasis and a hard line wrap all collapse
+// to the same form, so "Foo Bar", "foo-bar", "**FooBar**" and a "Foo\nBar" line
+// break are all caught by one digest.
 //
 // Usage:
 //   node scripts/embargo-guard.mjs --staged            # pre-commit: staged blobs
@@ -26,7 +39,7 @@
 //   EG_TOKEN='...' node scripts/embargo-guard.mjs --add-entry <id>
 //
 // Exit 0 = clean, exit 1 = violation or the guard could not run. It fails CLOSED:
-// a missing or malformed config blocks the commit rather than waving it through,
+// a missing or malformed denylist blocks the commit rather than waving it through,
 // because a guard that silently disables itself is worse than no guard at all.
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -34,7 +47,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const CONFIG_NAME = '.embargo-guard.json';
+const LOCAL_CONFIG_NAME = '.embargo-guard.local.json';
 
 // Files above this size are almost certainly build output or vendored blobs. We
 // report every skip rather than passing silently — a guard that quietly declines
@@ -51,25 +64,48 @@ function git(args, opts = {}) {
 }
 
 const repoRoot = git(['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
-const configPath = join(repoRoot, CONFIG_NAME);
+const localConfigPath = join(repoRoot, LOCAL_CONFIG_NAME);
+
+const SETUP_HINT = [
+  'No denylist found. It is deliberately not committed — see the header of this',
+  'script. Provide one of:',
+  '  - $EMBARGO_GUARD_CONFIG      (inline JSON; how CI injects its secret)',
+  '  - $EMBARGO_GUARD_CONFIG_FILE (path to a JSON file)',
+  `  - ${LOCAL_CONFIG_NAME}       (untracked, gitignored)`,
+  'Seed the local one with:  EG_TOKEN=\'...\' node scripts/embargo-guard.mjs --add-entry <id>',
+].join('\n  ');
+
+/** Resolve the denylist from env or the untracked local file. Never from the tree. */
+function readRawConfig() {
+  if (process.env.EMBARGO_GUARD_CONFIG) {
+    return { text: process.env.EMBARGO_GUARD_CONFIG, source: '$EMBARGO_GUARD_CONFIG' };
+  }
+  const fromFile = process.env.EMBARGO_GUARD_CONFIG_FILE;
+  if (fromFile) {
+    if (!existsSync(fromFile)) fail(`$EMBARGO_GUARD_CONFIG_FILE points at ${fromFile}, which does not exist. Fail closed.`);
+    return { text: readFileSync(fromFile, 'utf8'), source: fromFile };
+  }
+  if (existsSync(localConfigPath)) {
+    return { text: readFileSync(localConfigPath, 'utf8'), source: LOCAL_CONFIG_NAME };
+  }
+  fail(SETUP_HINT);
+}
 
 function loadConfig() {
-  if (!existsSync(configPath)) {
-    fail(`${CONFIG_NAME} is missing. Refusing to run unguarded (fail closed).`);
-  }
+  const { text, source } = readRawConfig();
   let cfg;
   try {
-    cfg = JSON.parse(readFileSync(configPath, 'utf8'));
+    cfg = JSON.parse(text);
   } catch (err) {
-    fail(`${CONFIG_NAME} is not valid JSON (${err.message}). Fail closed.`);
+    fail(`denylist from ${source} is not valid JSON (${err.message}). Fail closed.`);
   }
   const entries = cfg.entries;
   if (!Array.isArray(entries) || entries.length === 0) {
-    fail(`${CONFIG_NAME} declares no entries. Fail closed.`);
+    fail(`denylist from ${source} declares no entries. Fail closed.`);
   }
   for (const e of entries) {
     if (!e.id || !Number.isInteger(e.length) || e.length < 1 || !/^[0-9a-f]+$/i.test(e.salt || '') || !/^[0-9a-f]{64}$/i.test(e.digest || '')) {
-      fail(`${CONFIG_NAME} entry ${JSON.stringify(e.id ?? '?')} is malformed. Fail closed.`);
+      fail(`denylist entry ${JSON.stringify(e.id ?? '?')} is malformed. Fail closed.`);
     }
   }
   return cfg;
@@ -208,6 +244,8 @@ function modeMessage(path) {
   runOverFiles([path], (f) => readFileSync(f), 'commit message');
 }
 
+// Writes to the untracked local denylist, creating it if absent. The plaintext is
+// read from the environment and never written anywhere.
 function modeAddEntry(id) {
   if (!id) fail('--add-entry needs an id.');
   const token = process.env.EG_TOKEN;
@@ -215,15 +253,18 @@ function modeAddEntry(id) {
   const norm = normalize(token);
   if (!norm) fail('EG_TOKEN normalizes to nothing.');
 
-  const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
+  const cfg = existsSync(localConfigPath)
+    ? JSON.parse(readFileSync(localConfigPath, 'utf8'))
+    : { _comment: `Untracked denylist for scripts/embargo-guard.mjs. Digests only, and NOT committed: these tokens are low-entropy, so a committed digest is a crackable copy of the token. Keep ${LOCAL_CONFIG_NAME} gitignored.`, algorithm: 'sha256', entries: [] };
+
   const salt = randomBytes(16);
   const digest = createHash('sha256').update(salt).update(Buffer.from(norm, 'latin1')).digest('hex');
   if (cfg.entries.some((e) => e.length === norm.length && e.digest === digest)) {
     fail('that token is already covered.');
   }
   cfg.entries.push({ id, length: norm.length, salt: salt.toString('hex'), digest });
-  writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
-  console.log(`embargo-guard: added entry "${id}" (digest only; plaintext not stored).`);
+  writeFileSync(localConfigPath, `${JSON.stringify(cfg, null, 2)}\n`);
+  console.log(`embargo-guard: added entry "${id}" to ${LOCAL_CONFIG_NAME} (untracked).`);
 }
 
 const [mode, arg] = process.argv.slice(2);

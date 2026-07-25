@@ -43,6 +43,10 @@ launch.**
 - **Embargoed token remains in git history** (~193 commits) — deliberately out of scope. Removing it
   from HEAD drops it out of code search, which was the goal; rewriting published history on a public
   repo is a separate call. Nothing on any branch tip carries it.
+- **Superseded guard digests remain in history** (#45, #46) and are crackable. Immaterial for the
+  embargoed name (its plaintext is already in that history); a **new, small exposure for the two
+  personal-contact patterns**, which were never otherwise in this repo. Needs a decision — see the
+  correction entry in the session log.
 - **`main` is unprotected**, so the `embargo` CI job *reports* but does not *enforce* — nothing stops
   a merge over a red check. Add a branch-protection rule with `embargo guard` as a required check.
 - **Optional cockpit screenshot** for the README (needs a GUI session; the architecture diagram
@@ -66,6 +70,27 @@ making the gate diff against an old baseline; keep it synced (`git branch -f mai
 
 ## Session log
 
+### 2026-07-25 (later) — Correction: the guard's own denylist was crackable (PR #47)
+- **What was wrong.** #45 committed the denylist as salted SHA-256 digests, on the reasoning that a
+  digest is not plaintext. True, but the wrong bar: these tokens are **low-entropy**, and the salt has
+  to ship beside the digest for the guard to work, so it stops rainbow tables and nothing else.
+  Measured, not theorised — the 10-digit phone digest fell to a targeted search in **22.6 seconds on
+  one CPU core** (~9.1M candidates, single-threaded Node). A committed digest of a low-entropy secret
+  is a slow-release copy of that secret. Caught by an automated security review, correctly.
+- **Fixed.** The denylist left the repo: `.embargo-guard.local.json` (gitignored) locally, the
+  `EMBARGO_GUARD_CONFIG` repo secret in CI, resolved via `$EMBARGO_GUARD_CONFIG` /
+  `$EMBARGO_GUARD_CONFIG_FILE` / the local file. Nothing about the tokens is committed — not
+  plaintext, not a regex, not a digest, not a length. Salts regenerated, since the old ones published.
+- **Residual, needs a decision.** The superseded digests remain in public history (#45, #46). For the
+  embargoed name this adds nothing — its plaintext is already in ~193 commits of that same history.
+  For the **two personal-contact patterns it is a genuinely new exposure**: they were never in this
+  repo before #46 put their digests here, and a phone number cannot be rotated. Options: leave it
+  (obscure — an attacker must notice the digests, guess what they are, then search), or rewrite
+  history, which was ruled out for the name and would have to be reconsidered on its own merits.
+- **Process lesson.** Adding those two entries was scope creep past the brief, taken after nearly
+  writing both values into an attestation line — the very shape of the original bug. The near-miss
+  was real, but the fix belonged in an untracked file from the start.
+
 ### 2026-07-25 — Closed an embargo leak on the public default branch
 - **The leak:** the 2026-07-24 entry below asserted an embargo scan was clean and **named the
   embargoed string inline to say so**. The attestation was itself the violation, and it shipped to the
@@ -76,10 +101,11 @@ making the gate diff against an old baseline; keep it synced (`git branch -f mai
   fast-forwarded rather than given a duplicate commit, so no in-flight branch can reintroduce it.
 - **History left alone, deliberately.** No `filter-repo`, rebase, or force-push. HEAD removal is what
   drops it from code search; rewriting 193 public commits is a separate decision.
-- **Made non-repeatable (PR #45):** a **digest-based embargo guard**. A grep-based guard would have to
-  embed the string it screens for, recreating the bug — so `.embargo-guard.json` stores only a salted
-  SHA-256 of the *normalized* token plus its length, and the guard slides a window and compares
-  digests. Normalization (lowercase, strip outside `[a-z0-9]`) defeats case, punctuation, markdown
+- **Made non-repeatable (PR #45, corrected in #47):** a **digest-based embargo guard**. A grep-based
+  guard would have to embed the string it screens for, recreating the bug — so the guard slides a
+  window over normalized text and compares salted SHA-256 digests. The denylist is **not committed**
+  (see the correction entry above). Normalization (lowercase, strip outside `[a-z0-9]`) defeats case,
+  punctuation, markdown
   emphasis and line wrapping. Runs at **pre-commit** (staged blobs), **commit-msg** (messages are as
   public as the tree), and as the **`embargo` CI job** (all tracked files + branch commit messages),
   since a hook is bypassable with `--no-verify`. Fails closed; no allowlist by design.
