@@ -64,11 +64,27 @@ making the gate diff against an old baseline; keep it synced (`git branch -f mai
 **Next steps.**
 1. **Enable branch protection on `main`** with `embargo guard` + `cargo test` as required checks —
    without it the guard is advisory on the server side.
-2. Run `git config core.hooksPath .githooks` in every existing clone/worktree (the hook is per-clone
-   config, so it does **not** travel with the merge).
+2. Run `git config core.hooksPath "$(pwd)/.githooks"` (**absolute** — see the 2026-07-26 entry) in
+   every other clone; it is per-clone config, so it does **not** travel with the merge. Worktrees of
+   this clone are already covered.
 3. Resume the roadmap: **Local-Tracker Phase 2** (keystone + auth foundation), then embedding swarms.
 
 ## Session log
+
+### 2026-07-26 — Correction: the guard was fail-open in every worktree (PR #48)
+- **Found while sweeping for leftovers.** `core.hooksPath` was set to the *relative* `.githooks`,
+  which git resolves against **each worktree's own root**. All four worktrees sit on branches that
+  predate the guard, so they have no `.githooks/` — git found no hook and committed without checking.
+  Demonstrated by committing the embargoed token in a worktree: **it went straight through.** That
+  commit was reset immediately, was never pushed, and the branch is clean.
+- **Fixed.** `core.hooksPath` is now absolute (per-clone config, documented in the README), and the
+  hooks resolve the guard by their own path rather than `git rev-parse --show-toplevel`. The guard
+  falls back to a denylist beside its own script, so an old worktree uses this checkout's denylist
+  instead of failing closed on every commit. Verified: the same probe is now **blocked in all five
+  checkouts**, and clean commits still pass.
+- **Regression test added**, plus a fix to a vacuous assertion in it — the first version only checked
+  for exit 1, which "blocked on a match" and "failed closed" both produce, so it passed even with the
+  fix reverted. Caught by a sabotage run. 13 tests, non-vacuous.
 
 ### 2026-07-25 (later) — Correction: the guard's own denylist was crackable (PR #47)
 - **What was wrong.** #45 committed the denylist as salted SHA-256 digests, on the reasoning that a
