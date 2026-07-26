@@ -45,7 +45,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const LOCAL_CONFIG_NAME = '.embargo-guard.local.json';
 
@@ -64,7 +65,15 @@ function git(args, opts = {}) {
 }
 
 const repoRoot = git(['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+
+// Where this script lives, which is NOT always the repo root: in a git worktree,
+// --show-toplevel is that worktree, and if its branch predates the guard it has
+// no scripts/ or denylist of its own. The hooks resolve this script by their own
+// path, so fall back to a denylist sitting beside it — otherwise every commit in
+// an older worktree fails closed for want of a config that is one directory away.
+const scriptRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const localConfigPath = join(repoRoot, LOCAL_CONFIG_NAME);
+const scriptConfigPath = join(scriptRoot, LOCAL_CONFIG_NAME);
 
 const SETUP_HINT = [
   'No denylist found. It is deliberately not committed — see the header of this',
@@ -85,8 +94,10 @@ function readRawConfig() {
     if (!existsSync(fromFile)) fail(`$EMBARGO_GUARD_CONFIG_FILE points at ${fromFile}, which does not exist. Fail closed.`);
     return { text: readFileSync(fromFile, 'utf8'), source: fromFile };
   }
-  if (existsSync(localConfigPath)) {
-    return { text: readFileSync(localConfigPath, 'utf8'), source: LOCAL_CONFIG_NAME };
+  for (const candidate of [localConfigPath, scriptConfigPath]) {
+    if (existsSync(candidate)) {
+      return { text: readFileSync(candidate, 'utf8'), source: candidate };
+    }
   }
   fail(SETUP_HINT);
 }

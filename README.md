@@ -167,9 +167,14 @@ cargo test --workspace     # 116 tests; Docker/network ITs are #[ignore]d
 One-time, per clone:
 
 ```bash
-git config core.hooksPath .githooks
+git config core.hooksPath "$(pwd)/.githooks"                                   # run from the repo root
 EG_TOKEN='<token to forbid>' node scripts/embargo-guard.mjs --add-entry <id>   # repeat per token
 ```
+
+**Use an absolute path.** A relative `core.hooksPath` is resolved against each
+worktree's own root, so in a worktree whose branch predates `.githooks/` git finds no hook and
+commits without checking — a silent fail-open. An absolute path points every worktree back at this
+checkout, and the hooks resolve the guard and its denylist by their own location.
 
 This enables the embargo guard ([`scripts/embargo-guard.mjs`](scripts/embargo-guard.mjs)), which
 blocks commits whose staged content or commit message contains a forbidden token, matching a

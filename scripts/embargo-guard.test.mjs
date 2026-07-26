@@ -5,16 +5,17 @@
 // property the guard itself is built around. A test that needed the real token
 // inline would reintroduce exactly the bug under test.
 //
-// Each case runs the guard inside a scratch git repo rather than this one. That
-// keeps it hermetic: the guard falls back to a local denylist file when no env
-// var is set, so running it here would silently pick up the developer's real
-// denylist and mask the fail-closed behaviour.
+// Each case runs a COPY of the guard inside a scratch git repo, never the one in
+// this checkout. That is what keeps it hermetic: the guard falls back to a local
+// denylist beside the repo root and then beside its own script, so running the
+// real script in place would silently pick up the developer's real denylist and
+// mask every fail-closed assertion.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync, mkdirSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +44,11 @@ function runGuard(content, { denylist, mode = 'staged', filename = 'subject.md' 
   const dir = mkdtempSync(join(tmpdir(), 'embargo-test-'));
   try {
     execFileSync('git', ['init', '-q'], { cwd: dir });
+    // Run a copy, so both resolution roots (repo root and script dir) land inside
+    // the scratch repo and no real denylist is reachable.
+    mkdirSync(join(dir, 'scripts'));
+    const guard = join(dir, 'scripts', 'embargo-guard.mjs');
+    copyFileSync(GUARD, guard);
     const file = join(dir, filename);
     writeFileSync(file, content);
 
@@ -54,7 +60,7 @@ function runGuard(content, { denylist, mode = 'staged', filename = 'subject.md' 
     if (mode === 'staged') execFileSync('git', ['add', filename], { cwd: dir });
 
     try {
-      const stdout = execFileSync(process.execPath, [GUARD, ...args], {
+      const stdout = execFileSync(process.execPath, [guard, ...args], {
         cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env,
       });
       return { code: 0, stdout, stderr: '' };
@@ -129,6 +135,48 @@ test('fails closed when no denylist is available', () => {
   const r = runGuard('harmless content', { denylist: undefined });
   assert.equal(r.code, 1, 'must not pass when it cannot check');
   assert.match(r.stderr, /No denylist found/);
+});
+
+test('finds a denylist beside the script when the repo root has none', () => {
+  // Regression: in a git worktree whose branch predates the guard, the toplevel
+  // has no denylist and no scripts/ — the hooks resolve the guard by their own
+  // path, so it must fall back to the denylist beside itself. Before this, the
+  // guard fell through to "no denylist" and (with a relative core.hooksPath, no
+  // hook at all) a leaking commit sailed through in every worktree.
+  const token = throwawayToken();
+  const home = mkdtempSync(join(tmpdir(), 'embargo-guardhome-'));
+  const repo = mkdtempSync(join(tmpdir(), 'embargo-worktree-'));
+  try {
+    mkdirSync(join(home, 'scripts'));
+    const guard = join(home, 'scripts', 'embargo-guard.mjs');
+    copyFileSync(GUARD, guard);
+    // Denylist lives beside the guard, NOT in the repo being scanned.
+    writeFileSync(join(home, '.embargo-guard.local.json'), denylistFor(token));
+
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    writeFileSync(join(repo, 'subject.md'), `leaking ${token} here`);
+    execFileSync('git', ['add', 'subject.md'], { cwd: repo });
+
+    const env = { ...process.env, EMBARGO_GUARD_CONFIG_FILE: '' };
+    delete env.EMBARGO_GUARD_CONFIG;
+
+    let code = 0;
+    let stderr = '';
+    try {
+      execFileSync(process.execPath, [guard, '--staged'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env });
+    } catch (err) {
+      code = err.status;
+      stderr = err.stderr ?? '';
+    }
+    assert.equal(code, 1, 'must block');
+    // Exit 1 alone proves nothing here: failing closed for want of a denylist
+    // also exits 1. It has to block because it MATCHED.
+    assert.match(stderr, /EMBARGO GUARD: blocked/, 'must block on a match, not by failing closed');
+    assert.doesNotMatch(stderr, /No denylist found/, 'must have located the denylist beside the script');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test('fails closed on a malformed denylist', () => {
