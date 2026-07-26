@@ -14,4 +14,11 @@ if ! command -v node >/dev/null 2>&1; then
 	exit 1
 fi
 
-exec node "$(git rev-parse --show-toplevel)/scripts/embargo-guard.mjs" --staged
+# Resolve the guard by THIS HOOK's location, not `git rev-parse --show-toplevel`.
+# In a worktree whose branch predates the guard, the toplevel has no scripts/ and
+# no .githooks/ — and with a relative core.hooksPath git finds no hook there at
+# all and silently commits. Set core.hooksPath to an ABSOLUTE path (see README)
+# and this resolves back to the checkout that actually holds the guard.
+GUARD_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+exec node "$GUARD_ROOT/scripts/embargo-guard.mjs" --staged
