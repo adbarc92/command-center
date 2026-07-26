@@ -13,4 +13,7 @@ if ! command -v node >/dev/null 2>&1; then
 	exit 1
 fi
 
-exec node "$(git rev-parse --show-toplevel)/scripts/embargo-guard.mjs" --message "$1"
+# Resolved by this hook's own location — see the note in pre-commit.
+GUARD_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+exec node "$GUARD_ROOT/scripts/embargo-guard.mjs" --message "$1"
