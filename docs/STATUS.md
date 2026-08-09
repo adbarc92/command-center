@@ -133,6 +133,10 @@ Ran a full work-audit after ~10 days idle and executed the results rather than j
   The two P3/P4 spike worktrees were **kept deliberately** until the smoke passes — they are the only
   working reproduction if it fails.
 - **Release tagging deferred**, with the reasoning recorded above so it stops resurfacing.
+- **All outstanding work filed as issues #51–#59.** Session handoff brief:
+  [`docs/handoffs/f168e21d-9124-4dbd-b962-11f5116d47ab.md`](handoffs/f168e21d-9124-4dbd-b962-11f5116d47ab.md)
+  — includes the history-rewrite trap (scope `filter-repo` with `--refs`, or signature-stripping
+  cascades it to 177 of 208 commits) and the unresolved questions carried out of this session.
 
 ### 2026-07-26 — Correction: the guard was fail-open in every worktree (PR #48)
 - **Found while sweeping for leftovers.** `core.hooksPath` was set to the *relative* `.githooks`,
