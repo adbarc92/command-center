@@ -71,15 +71,23 @@ The TDD-gate hook is **not** path-blind: it is content-aware and counts `#[test]
 failure was a **stale local `main`**. Resolved 2026-08-09: branch protection, the digest rewrite, and
 the branch/worktree pruning below._
 
-**Next steps.**
-1. **Run the interactive smoke for PR #49** (dev + packaged) and record PASS/FAIL in
+**Next steps.** _All open work is tracked as GitHub issues (#51–#59); this list is the ordering._
+1. **#51 — Run the interactive smoke for PR #49** (dev + packaged) and record PASS/FAIL in
    `spikes/SPIKE-RESULTS.md`. Repo is parked on `feat/plugin-runtime` with the build pre-warmed.
    Note: free port **8080** first (a `java` process holds it) or the Audience health probe is
    inconclusive, and Docker must be up for the managed lifecycle.
-2. **File the GitHub Support ticket** to GC unreachable objects — the last step of the digest removal.
-3. Run `git config core.hooksPath "<abs>/.githooks"` (**absolute**) in every other clone; it is
+2. **#52 — File the GitHub Support ticket** to GC unreachable objects. The last step of the digest
+   removal, and the only one that closes the residual exposure.
+3. **#54 — Retire the spike branches/worktrees**, but *only after* #49 merges — they are the sole
+   working reproduction if the smoke fails.
+4. Run `git config core.hooksPath "<abs>/.githooks"` (**absolute**) in every other clone; it is
    per-clone config and does **not** travel with a merge.
-4. Resume the roadmap: **Local-Tracker Phase 2** (keystone + auth foundation), then the design pass.
+5. Resume the roadmap: **#55 Local-Tracker Phase 2** (keystone + auth foundation), then **#56** the
+   design pass, then **#57** Remote Control.
+
+_Also open: **#53** (`.embargo-guard.local.json` not gitignored on `feat/plugin-runtime` — the guard
+scans for plaintext, so it would not block committing its own salts+digests), **#58** (signing certs →
+first signed release), **#59** (README screenshot)._
 
 ## Session log
 
