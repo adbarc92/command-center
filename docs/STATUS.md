@@ -1,7 +1,7 @@
 ---
 stage: Build
 readiness: "control plane publication-ready; product shell on roadmap"
-updated: "2026-07-25"
+updated: "2026-08-09"
 name: "Command Center"
 base_branch: "main"
 test_cmd: "cargo test --workspace"
@@ -16,14 +16,14 @@ its own `STATUS.md`, so the Command Center appears on its own board as a `local:
 
 ## State summary
 
-**TL;DR.** The **control plane and workflow layer are feature-complete and tested**, and the repo is
-**public**. Publication prep merged (**PR #41**) — README, MIT LICENSE, a real periodic **reconcile
-loop**, an automated **WebSocket `/stream` integration test**, and a runnable **restart-recovery
-demo**. Verified from a clean clone (`cargo build --release` + `cargo test` = **116 passed**), restart
-demo runs verbatim, and the **Tauri installers build** (MSI 7.4M + NSIS 5.0M). Going public exposed a
-**leak in this very file** — the embargo attestation named the string it asserted was absent; removed
-from HEAD (**PR #44**) and made non-repeatable by a digest-based **embargo guard** (**PR #45**). The
-**product shell** — plugin embedding, a design pass, remote control — remains on the roadmap.
+**TL;DR.** The **control plane and workflow layer are feature-complete and tested**, the repo is
+**public**, and `main` is now **branch-protected** with `embargo guard` + `cargo test (workspace)` as
+required checks, enforced for admins. The **superseded guard digests are out of public history** — a
+targeted 9-commit `filter-repo` rewrite, not the 193-commit rewrite that was correctly ruled out for
+the embargoed name. The **product shell is no longer purely roadmap**: the plugin-runtime swarm's work
+turned out to be **complete, not stranded**, and now sits in **draft PR #49** with all three automated
+gates re-verified against current `main`, blocked only on an interactive smoke that needs a GUI
+session. A design pass and remote control remain on the roadmap.
 
 **Vision (unchanged):** the Command Center is the operator's **one-stop shop for agentic
 engineering** — dispatch work, see every project's stage, act without alt-tabbing, host the other
@@ -33,43 +33,98 @@ launch.**
 **Locked build order (auth-foundation-first):**
 1. **Local-Tracker Phase 2 dispatch** — the keystone (viewer → command surface) + the loopback-auth
    foundation Remote Control reuses. Specced (Option A), **not built**.
-2. **Resolve P4 → dispatch the app-plugin + view-plugin embedding swarms.**
+2. **Embedding swarms — BUILT, in draft PR #49**, pending the interactive smoke. Not "roadmap"
+   any more; this line was wrong for three weeks.
 3. **Design overhaul** (needs Claude Design output).
 4. **Remote Control** — brainstorm→spec after Phase-2 auth lands.
 
-**Open PRs.** None. (#41, #42, #43, #44, #45 all merged.)
+**Open PRs.** **#49 (draft)** — cockpit plugin runtime (view-plugins + app-plugins). Merge-blocked on
+the interactive smoke only; see `spikes/SPIKE-RESULTS-app-plugins.md` and the Lane S human gate.
 
 **Known gaps / blockers.**
-- **Embargoed token remains in git history** (~193 commits) — deliberately out of scope. Removing it
-  from HEAD drops it out of code search, which was the goal; rewriting published history on a public
-  repo is a separate call. Nothing on any branch tip carries it.
-- **Superseded guard digests remain in history** (#45, #46) and are crackable. Immaterial for the
-  embargoed name (its plaintext is already in that history); a **new, small exposure for the two
-  personal-contact patterns**, which were never otherwise in this repo. Needs a decision — see the
-  correction entry in the session log.
-- **`main` is unprotected**, so the `embargo` CI job *reports* but does not *enforce* — nothing stops
-  a merge over a red check. Add a branch-protection rule with `embargo guard` as a required check.
+- **Embargoed token remains in git history** (~193 commits) — deliberately out of scope, unchanged.
+  Removing it from HEAD drops it out of code search, which was the goal. Nothing on any branch tip
+  carries it.
+- **Old digest objects are still fetchable from GitHub by exact SHA.** The rewrite removed them from
+  the branch, from history browsing, from code search, and from every future clone — but a force-push
+  does **not** delete unreachable objects. Verified still served: commits `6016495` / `eb832bd` and
+  blob `ee0ed06`. **Requires a GitHub Support ticket** asking them to garbage-collect unreachable
+  objects on this repo. Until then the exposure is "attacker needs the 40-char SHA", not "gone".
+- **P3's Gate 5 (app-plugin lifecycle / no orphans) was never closed**, and
+  `docs/SWARM-HANDOFF-plugin-runtime.md` nevertheless describes P3 as "GO" when its own record says
+  **LEANING GO** with packaged gates 2/4 and Gate 5 outstanding. The swarm was dispatched on the
+  stronger claim. Those gates are now folded into #49's smoke checklist.
 - **Optional cockpit screenshot** for the README (needs a GUI session; the architecture diagram
   stands in).
-- **Product shell is roadmap:** P3/P4 plugin-embedding spikes, cockpit design overhaul, Local-Tracker
-  Phase 2 dispatch, Remote Control.
+- **Roadmap remainder:** cockpit design overhaul, Local-Tracker Phase 2 dispatch, Remote Control.
 - **Launch gates (out-of-repo):** code-signing certs, one signed release run, one live paid T1 mission.
-  No release tag exists yet.
 
-_Resolved this session: repo went public; CI runner billing is moot (Actions is free for public repos
-— the full matrix ran green in ~4 min). The TDD-gate hook is **not** path-blind as previously recorded
-here: it is content-aware and counts `#[test]` additions. The real failure was a **stale local `main`**
-making the gate diff against an old baseline; keep it synced (`git branch -f main origin/main`)._
+_**Release tagging is deliberately deferred**, decided 2026-08-09 — not an oversight, and it should
+stop surfacing as an audit finding. `release.yml` fires on any `v*` tag and publishes a **public**
+GitHub Release with bundles attached; the only repo secret configured is `EMBARGO_GUARD_CONFIG`, so
+none of the seven signing secrets exist and a tag today would publish **unsigned** installers
+(SmartScreen / Gatekeeper friction). The first release should be a signed one. Revisit once certs are
+purchased._
+
+_Resolved 2026-07-25: repo went public; CI runner billing is moot (Actions is free for public repos).
+The TDD-gate hook is **not** path-blind: it is content-aware and counts `#[test]` additions; the real
+failure was a **stale local `main`**. Resolved 2026-08-09: branch protection, the digest rewrite, and
+the branch/worktree pruning below._
 
 **Next steps.**
-1. **Enable branch protection on `main`** with `embargo guard` + `cargo test` as required checks —
-   without it the guard is advisory on the server side.
-2. Run `git config core.hooksPath "$(pwd)/.githooks"` (**absolute** — see the 2026-07-26 entry) in
-   every other clone; it is per-clone config, so it does **not** travel with the merge. Worktrees of
-   this clone are already covered.
-3. Resume the roadmap: **Local-Tracker Phase 2** (keystone + auth foundation), then embedding swarms.
+1. **Run the interactive smoke for PR #49** (dev + packaged) and record PASS/FAIL in
+   `spikes/SPIKE-RESULTS.md`. Repo is parked on `feat/plugin-runtime` with the build pre-warmed.
+   Note: free port **8080** first (a `java` process holds it) or the Audience health probe is
+   inconclusive, and Docker must be up for the managed lifecycle.
+2. **File the GitHub Support ticket** to GC unreachable objects — the last step of the digest removal.
+3. Run `git config core.hooksPath "<abs>/.githooks"` (**absolute**) in every other clone; it is
+   per-clone config and does **not** travel with a merge.
+4. Resume the roadmap: **Local-Tracker Phase 2** (keystone + auth foundation), then the design pass.
 
 ## Session log
+
+### 2026-08-09 — Work audit, then worked the findings
+
+Ran a full work-audit after ~10 days idle and executed the results rather than just filing them.
+
+- **Branch protection on `main` (was next-step #1 for two weeks).** `embargo guard` +
+  `cargo test (workspace)` required, strict, **enforced for admins**, force-push and deletion off,
+  conversation resolution required. The `embargo` CI job now actually *enforces* instead of reporting.
+- **Superseded guard digests removed from public history.** The earlier framing treated this as the
+  same 193-commit rewrite that was ruled out for the embargoed name. It wasn't: the digests entered at
+  `6016495` (#45) / `eb832bd` (#46), so only **9 commits** were at or after that point, and the repo
+  had **0 forks / 0 stars / 0 watchers**. Scoped `git filter-repo --path .embargo-guard.json
+  --invert-paths --refs 6016495~1..main` in a throwaway clone; force-pushed; protection restored.
+  Verified: 208 commits before and after, **199 SHAs preserved**, HEAD tree byte-identical
+  (`b8ad776`), the 4 commits that carried the file differ only by it, the other 5 are unchanged,
+  and CI is green on the rewritten head.
+  - **First attempt was wrong and was discarded.** An unscoped `filter-repo` rewrote **177 of 208**
+    commits back to the repo's second day, because `fast-export` strips GPG signatures and 47 merge
+    commits are GitHub-signed — changing those cascades to every descendant. Caught by comparing the
+    old and new SHA sets before pushing anything. The `--refs` range fixed it; 43 of 47 signatures
+    survive (the 4 lost are the rewritten merges, unavoidable).
+  - **Still outstanding:** GitHub keeps unreachable objects. `6016495`, `eb832bd` and blob `ee0ed06`
+    are **still served by the API**. Needs a Support ticket. Recorded as a gap above.
+- **The plugin-runtime swarm was never stranded — it finished.** `feat/plugin-runtime` already
+  contained Lane V (`dc37806`) and Lane A (`e3a688f`) as ancestors plus Lane S integration, and merges
+  into current `main` **conflict-free**. Re-ran all three gates against today's `main`, not trusting
+  the 3-week-old record: `cargo test` **28 passed**, `npm test` **133 passed** (18 files),
+  `npm run check` **0 errors / 0 warnings** (352 files) — identical to what Lane S recorded.
+  Opened as **draft PR #49**.
+- **Rescued `spikes/SPIKE-RESULTS-app-plugins.md`.** It existed **only as an untracked file inside a
+  worktree** — in no commit, on no branch — while `docs/SWARM-HANDOFF-plugin-runtime.md` on `main`
+  cited it as a source. It is the provenance for #49's park-off-screen design (`hide()`/`show()`
+  forces a repaint/reload), the async-command deadlock fix, and the verbatim webview API. Committed
+  onto #49. **It also contradicts main:** it records P3 as **LEANING GO**, not GO, with packaged
+  gates 2/4 and **Gate 5 (lifecycle / no orphans)** open. Gate 5 had fallen through the gap entirely
+  and is now in the smoke checklist.
+- **Pruned.** Deleted 4 redundant branches after verifying with `git cherry` that every patch was
+  already upstream (`feat/oracle-freeze`, `feat/oracle-hash-persist`, `docs/status-refresh`,
+  `docs/status-embargo-remediation` — the last two were also the local refs keeping the removed digest
+  blobs alive). Removed the 2 agent worktrees whose commits are contained in #49, reclaiming ~1.8 GB.
+  The two P3/P4 spike worktrees were **kept deliberately** until the smoke passes — they are the only
+  working reproduction if it fails.
+- **Release tagging deferred**, with the reasoning recorded above so it stops resurfacing.
 
 ### 2026-07-26 — Correction: the guard was fail-open in every worktree (PR #48)
 - **Found while sweeping for leftovers.** `core.hooksPath` was set to the *relative* `.githooks`,
