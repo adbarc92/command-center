@@ -111,4 +111,10 @@ pub trait Runner: Send + Sync {
     /// Reap an orphan container by unit-id, keeping the volume (startup
     /// reconciliation; the runner owns the unit-id → container-name mapping).
     async fn reap_unit(&self, unit_id: &str) -> Result<(), RunnerError>;
+    /// Read files matching `glob` (e.g. "*.test.js") under WORKDIR, concatenated
+    /// deterministically. Used to fingerprint the frozen oracle. Default: nothing.
+    async fn read_files(&self, handle: &Handle, glob: &str) -> Result<Vec<String>, RunnerError> {
+        let _ = (handle, glob);
+        Ok(Vec::new())
+    }
 }

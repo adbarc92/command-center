@@ -26,6 +26,7 @@ pub struct UnitRow {
     pub cost: f64,
     pub last_seq: u64,
     pub oracle_frozen: bool,
+    pub oracle_hash: Option<String>,
     pub terminal_reason: Option<String>,
     /// Runner mode ("demo" | "real"), set once at create so rehydration picks the
     /// right runner (a demo unit doesn't attempt a real Docker provision).
@@ -53,7 +54,7 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS units(
                unit_id TEXT PRIMARY KEY, tier TEXT, task TEXT, repo_url TEXT, repo_slug TEXT,
                base_branch TEXT, branch TEXT, test_cmd TEXT, usd_cap REAL, wall_clock_secs INTEGER,
-               phase TEXT, cost REAL, last_seq INTEGER, oracle_frozen INTEGER,
+               phase TEXT, cost REAL, last_seq INTEGER, oracle_frozen INTEGER, oracle_hash TEXT,
                created_ts INTEGER, updated_ts INTEGER, terminal_reason TEXT,
                mode TEXT NOT NULL DEFAULT 'demo', min_review_rounds INTEGER NOT NULL DEFAULT 2);
              CREATE TABLE IF NOT EXISTS events(
@@ -76,6 +77,7 @@ impl Store {
             "ALTER TABLE units ADD COLUMN min_review_rounds INTEGER NOT NULL DEFAULT 2",
             "ALTER TABLE units ADD COLUMN swarm_id TEXT",
             "CREATE INDEX IF NOT EXISTS idx_units_swarm ON units(swarm_id)",
+            "ALTER TABLE units ADD COLUMN oracle_hash TEXT",
         ] {
             let _ = conn.execute(stmt, []);
         }
@@ -88,21 +90,24 @@ impl Store {
         self.conn.execute(
             "INSERT INTO units(unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,
                usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,created_ts,updated_ts,terminal_reason,
-               mode,min_review_rounds,swarm_id)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17,?18,?19)
+               mode,min_review_rounds,swarm_id,oracle_hash)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17,?18,?19,?20)
              ON CONFLICT(unit_id) DO UPDATE SET
                phase=?11, cost=?12, last_seq=?13, oracle_frozen=?14, updated_ts=?15, terminal_reason=?16",
             params![
                 r.unit_id, r.tier, r.task, r.repo_url, r.repo_slug, r.base_branch, r.branch,
                 r.test_cmd, r.usd_cap, r.wall_clock_secs, r.phase, r.cost, r.last_seq,
                 r.oracle_frozen as i64, now, r.terminal_reason, r.mode, r.min_review_rounds,
-                r.swarm_id
+                r.swarm_id, r.oracle_hash
             ],
         )?;
         Ok(())
     }
 
     /// Update the live projection columns of an existing unit (forwarder hot path).
+    /// `oracle_hash`, when present, is persisted and flips `oracle_frozen` true;
+    /// when `None` a prior hash/frozen state is left untouched (COALESCE/OR).
+    #[allow(clippy::too_many_arguments)]
     pub fn update_unit(
         &self,
         unit_id: &str,
@@ -110,12 +115,16 @@ impl Store {
         cost: f64,
         last_seq: u64,
         terminal_reason: Option<&str>,
+        oracle_hash: Option<&str>,
         now: i64,
     ) -> rusqlite::Result<()> {
         self.conn.execute(
-            "UPDATE units SET phase=?2, cost=?3, last_seq=?4, terminal_reason=?5, updated_ts=?6
+            "UPDATE units SET phase=?2, cost=?3, last_seq=?4, terminal_reason=?5,
+               oracle_hash=COALESCE(?6, oracle_hash),
+               oracle_frozen=(oracle_frozen OR (?6 IS NOT NULL)),
+               updated_ts=?7
              WHERE unit_id=?1",
-            params![unit_id, phase, cost, last_seq, terminal_reason, now],
+            params![unit_id, phase, cost, last_seq, terminal_reason, oracle_hash, now],
         )?;
         Ok(())
     }
@@ -214,16 +223,17 @@ impl Store {
             cost: r.get(11)?,
             last_seq: r.get::<_, i64>(12)? as u64,
             oracle_frozen: r.get::<_, i64>(13)? != 0,
-            terminal_reason: r.get(14)?,
-            mode: r.get(15)?,
-            min_review_rounds: r.get::<_, i64>(16)? as u32,
-            swarm_id: r.get(17)?,
+            oracle_hash: r.get(14)?,
+            terminal_reason: r.get(15)?,
+            mode: r.get(16)?,
+            min_review_rounds: r.get::<_, i64>(17)? as u32,
+            swarm_id: r.get(18)?,
         })
     }
 }
 
-const SELECT_COLS_ALL: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds,swarm_id FROM units";
-const SELECT_COLS_WHERE_ID: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,terminal_reason,mode,min_review_rounds,swarm_id FROM units WHERE unit_id=?1";
+const SELECT_COLS_ALL: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,oracle_hash,terminal_reason,mode,min_review_rounds,swarm_id FROM units";
+const SELECT_COLS_WHERE_ID: &str = "SELECT unit_id,tier,task,repo_url,repo_slug,base_branch,branch,test_cmd,usd_cap,wall_clock_secs,phase,cost,last_seq,oracle_frozen,oracle_hash,terminal_reason,mode,min_review_rounds,swarm_id FROM units WHERE unit_id=?1";
 const SELECT_SWARM_ALL: &str = "SELECT swarm_id,repo_url,repo_slug,base_branch,doc_path,tier,mode,lane_cap,usd_budget,per_lane_cap,status,planner_cost,lanes_launched,lanes_dropped,min_review_rounds,terminal_reason FROM swarms ORDER BY created_ts DESC";
 const SELECT_SWARM_WHERE_ID: &str = "SELECT swarm_id,repo_url,repo_slug,base_branch,doc_path,tier,mode,lane_cap,usd_budget,per_lane_cap,status,planner_cost,lanes_launched,lanes_dropped,min_review_rounds,terminal_reason FROM swarms WHERE swarm_id=?1";
 
@@ -394,6 +404,7 @@ mod tests {
             cost: 0.0,
             last_seq: 0,
             oracle_frozen: false,
+            oracle_hash: None,
             terminal_reason: None,
             mode: "demo".into(),
             min_review_rounds: 2,
@@ -439,6 +450,33 @@ mod tests {
         assert_eq!(got.mode, "real", "mode is set-once at create");
         assert_eq!(got.min_review_rounds, 3, "review floor is set-once at create");
         assert_eq!(got.phase, "building", "projection columns still update");
+    }
+
+    #[test]
+    fn oracle_hash_round_trips_and_freezes_on_update() {
+        // The oracle fingerprint round-trips through upsert_unit, and update_unit
+        // (the fold's hot path) persists a later hash and flips oracle_frozen.
+        let s = Store::open_memory().unwrap();
+        let mut r = row("u1");
+        r.oracle_hash = Some("h0000000000000abc".into());
+        s.upsert_unit(&r, 1000).unwrap();
+        let got = s.get_unit("u1").unwrap().unwrap();
+        assert_eq!(got.oracle_hash.as_deref(), Some("h0000000000000abc"), "oracle_hash round-trips");
+        assert!(!got.oracle_frozen, "upsert_unit alone does not flip oracle_frozen");
+
+        s.update_unit("u1", "checking", got.cost, got.last_seq + 1, None,
+            Some("h0000000000000abc"), 1001).unwrap();
+        let got2 = s.get_unit("u1").unwrap().unwrap();
+        assert_eq!(got2.oracle_hash.as_deref(), Some("h0000000000000abc"));
+        assert!(got2.oracle_frozen, "oracle_frozen flips true once update_unit sees a hash");
+
+        // A later update_unit call with oracle_hash=None (the common case — most
+        // phase transitions don't carry a fresh hash) must NOT clobber the
+        // already-persisted hash/frozen state (COALESCE / OR are no-ops on None).
+        s.update_unit("u1", "reviewing", got2.cost, got2.last_seq + 1, None, None, 1002).unwrap();
+        let got3 = s.get_unit("u1").unwrap().unwrap();
+        assert_eq!(got3.oracle_hash.as_deref(), Some("h0000000000000abc"), "None must not wipe a prior hash");
+        assert!(got3.oracle_frozen, "None must not un-freeze");
     }
 
     #[test]

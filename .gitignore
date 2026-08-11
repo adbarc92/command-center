@@ -8,6 +8,11 @@
 /fleet.db
 /fleet.db-wal
 /fleet.db-shm
+
+# restart-recovery demo scratch db (scripts/demo-restart-recovery.mjs)
+/demo-*.db
+/demo-*.db-wal
+/demo-*.db-shm
 .superpowers/
 
 # runtime SQLite lives under the tauri crate, not repo root
@@ -24,3 +29,7 @@
 
 # ContextCurator local store (user's product data, not ours to track)
 /.context-curator/
+
+# embargo guard denylist — digests of low-entropy tokens are crackable, so the
+# denylist is never committed (see scripts/embargo-guard.mjs)
+/.embargo-guard.local.json
