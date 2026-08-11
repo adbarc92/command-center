@@ -168,3 +168,59 @@ an automated run. Steps:
    `ccplugin://` scheme + child webview both work in the packaged build (no dev server).
 
 Record PASS/FAIL here once run on the target machine.
+
+### Smoke run 1 — 2026-08-10 (dev, partial) → **1.5 FAIL, fixed; rest not yet run**
+
+Run on the target machine against `feat/plugin-runtime` merged up to `main` (`725b630`). Ended
+early: the first app-plugin activation exposed a blocking defect that made the rest of the
+app-plugin checklist unmeasurable until fixed.
+
+**Environment note.** `cockpit/ui/node_modules` was empty at session start (collateral from the
+2026-08-09 cleanup), so `npm run check` / `npm test` failed with `'vitest' is not recognized` —
+a toolchain failure, not a code failure. `npm ci` restored it. Port 8080 was held by an unrelated
+`purposefull` Spring Boot process which exited on its own before launch.
+
+| Item | Result |
+|---|---|
+| 1.1 switcher renders | not run |
+| 1.2 fleet regression canary | not run |
+| 1.3 REFERENCE view-plugin | not run |
+| 1.4 command policy round-trip | not run |
+| **1.5 AUDIENCE activation** | **FAIL — UI froze on tab click (root-caused + fixed, see below)** |
+| 1.6 rect glue on resize | not run |
+| 1.7 park-on-overlay | not run |
+| 1.8 no leak on switch | not run |
+| **1.9 Gate 5 — container teardown** | **PASS — `docker ps` empty after quit (baseline was 0)** |
+| 1.9 Gate 5 — process exit | **ANOMALY — see below** |
+| 1.10 HMR under host CSP | not run |
+| Part 2 packaged | not run |
+
+**1.5 FAIL — root cause.** `plugin_launch` was a *synchronous* `#[tauri::command]`, so it ran on
+the main event-loop thread (the same P3 finding that forced the embedding commands to be `async`)
+and blocked there on `docker compose build` plus the health/ready probe budgets. The whole UI was
+frozen from the tab click until the stack came up. The code carried a standing note predicting
+exactly this ("may block up to the probe timeout (~180 s) … can move to a background task") — the
+smoke is what came due.
+
+**Fix (this session).** `plugin_launch` now dispatches `run_start_sequence` to a dedicated OS
+thread and returns immediately; a plain thread rather than an async-runtime worker because every
+seam in the sequence is blocking (`Command::status`, `ureq`, `thread::sleep`), so a runtime worker
+would only relocate the stall. `Ok` now means *dispatched*, not *healthy* — so `App.svelte`
+stopped fabricating `pluginState[id]='healthy'` and stopped calling `plugin_show` directly; the
+existing compositing `$effect` composites on the `plugin://state` `healthy` event instead. That
+second half is load-bearing: with launch returning early, the old code would have pointed the
+child webview at a URL that is not serving yet. Pinned by `src/App.appPlugin.test.ts` (2 tests,
+verified red→green).
+
+**Gate 5 — split result.** Container teardown **PASS**: `docker ps` empty after a graceful quit,
+against a verified 0-container baseline; `fleetd-serve` exited and 8787/5173/8080 all released.
+**Process exit ANOMALY**: the `app` process survived the window close (pid 13396, no window, 23
+threads, still responding 15 s later, 41 MB). Teardown clearly ran — the containers came down —
+but the process did not exit after it. Not diagnosed; **carry into the next smoke** and decide
+whether it is a dev-only artifact of `tauri dev` supervision or a real shutdown defect.
+
+**Automated gates re-verified after the fix:** `cargo test` 28 passed · `npm test` **135 passed**
+(19 files, +2 new) · `npm run check` **353 files, 0 errors / 0 warnings**.
+
+**Still merge-blocking:** everything marked "not run" above, plus the whole packaged pass. The fix
+is verified only at the automated level — it has **not** been confirmed in a watched window.

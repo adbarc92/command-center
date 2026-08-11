@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 /// One launched plugin's runtime record.
 pub struct Running {
@@ -124,6 +124,22 @@ pub fn plugins_list(mgr: State<'_, PluginManager>) -> Vec<serde_json::Value> {
     out
 }
 
+/// Dispatch a plugin's start sequence onto a background thread and return immediately.
+///
+/// PHASE-6 SMOKE FINDING (checklist 1.5). This used to call `run_start_sequence` inline, with
+/// a standing note that it "may block up to the probe timeout (~180 s)". The smoke proved it
+/// out: a *synchronous* Tauri command runs on the main event-loop thread — the same P3 finding
+/// that forced the embedding commands to be `async` (see `embedding.rs`) — and the sequence
+/// blocks on `docker compose build` (a 20-minute budget for Audience) plus the health and
+/// ready probe budgets. The entire UI froze from the tab click until the stack came up.
+///
+/// A dedicated OS thread, deliberately not an async-runtime worker: every seam in the sequence
+/// is blocking (`Command::status`, `ureq`, `thread::sleep`), so handing it to the runtime would
+/// starve a worker and merely relocate the stall.
+///
+/// **Ok means "dispatched", not "healthy".** Lifecycle truth reaches the shell only through the
+/// `plugin://state` events the sink emits, which `App.svelte` already subscribes to; it must not
+/// treat this returning as readiness. Pinned by `src/App.appPlugin.test.ts`.
 #[tauri::command]
 pub fn plugin_launch(
     app: AppHandle,
@@ -142,33 +158,35 @@ pub fn plugin_launch(
         return Err(format!("unknown plugin {id}"));
     };
 
-    let probe = HttpProbe;
-    let clock = RealClock::new();
-    let sink = TauriEventSink { app: app.clone() };
-    let images_present = probe.probe(&disc.manifest.lifecycle.health.url).is_some();
+    // `mgr` is borrowed from this invocation and cannot cross the thread boundary; the handle
+    // can, so the worker re-acquires the manager from it.
+    std::thread::spawn(move || {
+        let mgr = app.state::<PluginManager>();
+        let probe = HttpProbe;
+        let clock = RealClock::new();
+        let sink = TauriEventSink { app: app.clone() };
+        let images_present = probe.probe(&disc.manifest.lifecycle.health.url).is_some();
 
-    // NOTE: this call is synchronous and may block up to the probe timeout (~180 s).
-    // If that proves problematic in the Phase-6 smoke it can move to a background task.
-    let outcome = run_start_sequence(
-        &disc.manifest,
-        &disc.dir,
-        &probe,
-        &mgr.spawner,
-        &clock,
-        &sink,
-        images_present,
-    );
-    match outcome {
-        StartOutcome::Healthy { owned, child_id } => {
+        let outcome = run_start_sequence(
+            &disc.manifest,
+            &disc.dir,
+            &probe,
+            &mgr.spawner,
+            &clock,
+            &sink,
+            images_present,
+        );
+        if let StartOutcome::Healthy { owned, child_id } = outcome {
             mgr.running
                 .lock()
                 .unwrap()
-                .insert(id, Running { child_id, owned });
-            // Phase 6 shows the webview here (once healthy).
-            Ok(())
+                .insert(disc.manifest.id.clone(), Running { child_id, owned });
         }
-        StartOutcome::Error(e) => Err(e),
-    }
+        // On Error the sink has already emitted `error`; the shell reacts to that event. There
+        // is no caller left to return it to.
+    });
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -106,23 +106,25 @@
     activeViewPlugin = id;
   }
 
-  // Select an app-plugin: drop any view-plugin, keep the in-DOM base mounted, launch the
-  // plugin if it isn't healthy yet, then show its child webview over the reserved rect.
+  // Select an app-plugin: drop any view-plugin, keep the in-DOM base mounted, and dispatch the
+  // plugin's start sequence if it isn't up yet.
+  //
+  // `plugin_launch` returns as soon as the sequence is dispatched — it runs on a Rust background
+  // thread, because doing it inline froze the whole UI for the length of `docker compose build`
+  // (smoke checklist 1.5). So it is NOT a readiness signal and this must not mark the plugin
+  // healthy. Lifecycle truth arrives as `plugin://state` events, and the compositing `$effect`
+  // below shows the webview the moment the state reaches `healthy`.
   async function selectApp(id: string) {
     if (activeApp && activeApp !== id) await invoke('plugin_hide', { id: activeApp });
     activeViewPlugin = null;
     activeApp = id;
-    await tick(); // let the reserved rect mount so we can measure it
-    if (pluginState[id] !== 'healthy') {
-      try {
-        await invoke('plugin_launch', { id });
-        pluginState = { ...pluginState, [id]: 'healthy' };
-      } catch (e) {
-        pluginState = { ...pluginState, [id]: 'error' };
-        return;
-      }
+    await tick(); // let the reserved rect mount so the compositing effect can measure it
+    if (pluginState[id] === 'healthy') return; // already up — the effect composites it
+    try {
+      await invoke('plugin_launch', { id });
+    } catch {
+      pluginState = { ...pluginState, [id]: 'error' };
     }
-    if (rectEl) await invoke('plugin_show', { id, rect: toRect(rectEl.getBoundingClientRect()) });
   }
 
   function onSwitch(id: string) {
