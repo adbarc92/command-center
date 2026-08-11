@@ -1,7 +1,7 @@
 ---
 stage: Build
 readiness: "control plane publication-ready; product shell on roadmap"
-updated: "2026-08-09"
+updated: "2026-08-10"
 name: "Command Center"
 base_branch: "main"
 test_cmd: "cargo test --workspace"
@@ -17,13 +17,16 @@ its own `STATUS.md`, so the Command Center appears on its own board as a `local:
 ## State summary
 
 **TL;DR.** The **control plane and workflow layer are feature-complete and tested**, the repo is
-**public**, and `main` is now **branch-protected** with `embargo guard` + `cargo test (workspace)` as
-required checks, enforced for admins. The **superseded guard digests are out of public history** — a
-targeted 9-commit `filter-repo` rewrite, not the 193-commit rewrite that was correctly ruled out for
-the embargoed name. The **product shell is no longer purely roadmap**: the plugin-runtime swarm's work
-turned out to be **complete, not stranded**, and now sits in **draft PR #49** with all three automated
-gates re-verified against current `main`, blocked only on an interactive smoke that needs a GUI
-session. A design pass and remote control remain on the roadmap.
+**public**, and `main` is **branch-protected** with `embargo guard` + `cargo test (workspace)` as
+required checks, enforced for admins. The **superseded guard digests are out of public history**
+(targeted 9-commit `filter-repo` rewrite). **The interactive smoke for PR #49 finally ran on
+2026-08-10 — and it earned its keep: it caught a real UI-freezing defect on the very first
+app-plugin activation.** `plugin_launch` was a *synchronous* Tauri command, so the whole
+`docker compose build` + probe sequence ran on the main event-loop thread and froze the window.
+Root-caused, fixed, regression-tested, committed (`db74a47`). **#49 is `MERGEABLE`/`CLEAN` and no
+longer behind `main`, but it is still draft and still merge-blocked** — the smoke is only ~2 of 11
+items deep, and the fix itself has been verified *only* by automated gates, never in a watched
+window.
 
 **Vision (unchanged):** the Command Center is the operator's **one-stop shop for agentic
 engineering** — dispatch work, see every project's stage, act without alt-tabbing, host the other
@@ -38,8 +41,11 @@ launch.**
 3. **Design overhaul** (needs Claude Design output).
 4. **Remote Control** — brainstorm→spec after Phase-2 auth lands.
 
-**Open PRs.** **#49 (draft)** — cockpit plugin runtime (view-plugins + app-plugins). Merge-blocked on
-the interactive smoke only; see `spikes/SPIKE-RESULTS-app-plugins.md` and the Lane S human gate.
+**Open PRs.** **#49 (draft)** — cockpit plugin runtime (view-plugins + app-plugins). `MERGEABLE` /
+`CLEAN` (merged up to `main` on 2026-08-10, conflict-free). Merge-blocked on **finishing** the
+interactive smoke: 1.5 failed and was fixed, Gate 5's container half passed, and **nine of eleven
+dev items plus the entire packaged pass have never been run**. Results table in
+`spikes/SPIKE-RESULTS.md` → "Smoke run 1".
 
 **Known gaps / blockers.**
 - **Embargoed token remains in git history** (~193 commits) — deliberately out of scope, unchanged.
@@ -50,10 +56,18 @@ the interactive smoke only; see `spikes/SPIKE-RESULTS-app-plugins.md` and the La
   does **not** delete unreachable objects. Verified still served: commits `6016495` / `eb832bd` and
   blob `ee0ed06`. **Requires a GitHub Support ticket** asking them to garbage-collect unreachable
   objects on this repo. Until then the exposure is "attacker needs the 40-char SHA", not "gone".
-- **P3's Gate 5 (app-plugin lifecycle / no orphans) was never closed**, and
-  `docs/SWARM-HANDOFF-plugin-runtime.md` nevertheless describes P3 as "GO" when its own record says
-  **LEANING GO** with packaged gates 2/4 and Gate 5 outstanding. The swarm was dispatched on the
-  stronger claim. Those gates are now folded into #49's smoke checklist.
+- **Gate 5 is half-closed.** Container teardown **PASSES** — `docker ps` empty after a graceful quit
+  against a verified 0-container baseline, `fleetd-serve` exited, all ports released. But the **`app`
+  process survived the window close** (no window, 23 threads, still responding 15 s later). Teardown
+  ran; the process just didn't exit after it. **Not diagnosed** — decide next smoke whether it's a
+  `tauri dev` supervision artifact or a real shutdown defect. `docs/SWARM-HANDOFF-plugin-runtime.md`
+  still overstates P3 as "GO" when its own record says LEANING GO; unchanged.
+- **The 2026-08-10 fix is unverified in a GUI.** `cargo test` / `npm test` / `npm run check` /
+  `clippy` all pass, and `src/App.appPlugin.test.ts` pins the contract, but nobody has watched the
+  AUDIENCE tab actually stay responsive. That is the single highest-value next action.
+- **Audience's `video` service busy-polls at ~100% of a core while idle** (last log line is just
+  `video worker started, listening on …`). Different repo, not a #49 blocker, but it skews any
+  performance observation made while the Audience stack is up. Worth filing against Audience.
 - **Optional cockpit screenshot** for the README (needs a GUI session; the architecture diagram
   stands in).
 - **Roadmap remainder:** cockpit design overhaul, Local-Tracker Phase 2 dispatch, Remote Control.
@@ -72,24 +86,75 @@ failure was a **stale local `main`**. Resolved 2026-08-09: branch protection, th
 the branch/worktree pruning below._
 
 **Next steps.** _All open work is tracked as GitHub issues (#51–#59); this list is the ordering._
-1. **#51 — Run the interactive smoke for PR #49** (dev + packaged) and record PASS/FAIL in
-   `spikes/SPIKE-RESULTS.md`. Repo is parked on `feat/plugin-runtime` with the build pre-warmed.
-   Note: free port **8080** first (a `java` process holds it) or the Audience health probe is
-   inconclusive, and Docker must be up for the managed lifecycle.
-2. **#52 — File the GitHub Support ticket** to GC unreachable objects. The last step of the digest
-   removal, and the only one that closes the residual exposure.
-3. **#54 — Retire the spike branches/worktrees**, but *only after* #49 merges — they are the sole
-   working reproduction if the smoke fails.
-4. Run `git config core.hooksPath "<abs>/.githooks"` (**absolute**) in every other clone; it is
-   per-clone config and does **not** travel with a merge.
-5. Resume the roadmap: **#55 Local-Tracker Phase 2** (keystone + auth foundation), then **#56** the
-   design pass, then **#57** Remote Control.
+1. **#51 — Finish the interactive smoke** (it is ~2/11 done). Start cold: `cd cockpit/ui &&
+   npm run desktop`, or use the staged launcher (see the session log below for its path). **Run
+   1.1–1.4 and 1.6–1.10, then the whole packaged Part 2.** The pivotal one is **1.5 re-run**: with
+   the fix, the AUDIENCE tab must show the chip walk `starting → health-probing → healthy` **with the
+   window responsive throughout**. A frozen window means the fix didn't take. Audience images are
+   already built, so activation skips the 20-minute build. Record in `spikes/SPIKE-RESULTS.md` under
+   "Smoke run 2".
+2. **Decide the lingering-`app`-process anomaly** (Gate 5's second half) — dev artifact or real bug.
+3. **#52 — File the GitHub Support ticket** to GC unreachable objects. Needs no build and no GUI;
+   it is the cheapest open item and the only one closing a real exposure.
+4. **#54 — Retire the spike branches/worktrees**, but *only after* #49 merges — still the sole
+   working reproduction.
+5. **Reconcile `docs/ROADMAP.md`** (last touched 2026-07-16, `cf92aec`). It still calls P3/P4
+   unresolved spikes and the embedding swarms "blocked / dispatch-ready", which this file contradicts
+   outright, and it carries a stale "verify CI billing" note. It is now the misleading doc — the same
+   role it played in the three-week stranded-swarm misread. Not yet done; deliberately deferred until
+   #49 merges so it is written against reality.
+6. Run `git config core.hooksPath "<abs>/.githooks"` (**absolute**) in every other clone; per-clone
+   config, does **not** travel with a merge.
+7. Resume the roadmap: **#55 Local-Tracker Phase 2** (keystone + auth foundation), then **#56** the
+   design pass, then **#57** Remote Control. Sequence Phase 2 **after** #49 merges — it must touch
+   `App.svelte` and `store.svelte.ts`, the two files #49 rewrites most.
 
-_Also open: **#53** (`.embargo-guard.local.json` not gitignored on `feat/plugin-runtime` — the guard
-scans for plaintext, so it would not block committing its own salts+digests), **#58** (signing certs →
-first signed release), **#59** (README screenshot)._
+_Also open: **#58** (signing certs → first signed release), **#59** (README screenshot). **#53 is
+resolved** — merging `main` into `feat/plugin-runtime` on 2026-08-10 brought the `.gitignore` entry
+across from #47; close it._
 
 ## Session log
+
+### 2026-08-10 — The smoke finally ran, and caught a real one
+
+Audit → executed the audit's own prep steps → ran the smoke → it failed on the first app-plugin
+activation → root-caused and fixed it. **Branch `feat/plugin-runtime`, HEAD `db74a47`.**
+
+- **Prep (all of it turned out to be load-bearing).** Merged `main` into `feat/plugin-runtime`
+  conflict-free (`725b630`) — #49 went `BEHIND` → **`CLEAN`**, and that merge **resolved #53 for
+  free** by bringing #47's `.gitignore` entry across. Found `cockpit/ui/node_modules` **empty**
+  (collateral from the 2026-08-09 cleanup): both JS gates were failing with `'vitest' is not
+  recognized`, a toolchain failure that would have read as a code failure mid-smoke. `npm ci` fixed
+  it. The port-8080 holder turned out to be an unrelated `purposefull` Spring Boot server in an agent
+  worktree, which **exited on its own** — never killed anything.
+- **The bug (smoke checklist 1.5).** Clicking AUDIENCE froze the entire UI. `plugin_launch` was a
+  **synchronous** `#[tauri::command]`, so it ran on the main event-loop thread — the *same* P3
+  finding that had already forced the embedding commands to be `async` — and blocked there on
+  `docker compose build` plus the health/ready probe budgets. The code had predicted this in a
+  standing comment ("may block up to the probe timeout (~180 s) … can move to a background task").
+  The Phase-6 smoke it named is exactly what came due.
+- **The fix (`db74a47`).** Dispatch the start sequence to a dedicated OS thread; return immediately.
+  A plain thread, *not* an async-runtime worker — every seam is blocking (`Command::status`, `ureq`,
+  `thread::sleep`), so the runtime would just relocate the stall. The contract change matters more
+  than the threading: **`Ok` now means "dispatched", not "healthy"**, so `App.svelte` stopped
+  fabricating `pluginState[id]='healthy'` and stopped calling `plugin_show` directly. Without that
+  half, the early return would have pointed the child webview at a URL that isn't serving yet. The
+  existing compositing `$effect` already composites on the `plugin://state` `healthy` event, so the
+  frontend fix was mostly deletion. Pinned by **`src/App.appPlugin.test.ts`**, written red first
+  (it caught `plugin_show` firing **twice** before any state event) then green.
+- **Gates after the fix:** `cargo test` 28 · `npm test` **135** (19 files, +2) · `npm run check`
+  **353 files, 0/0** · `clippy` **exit 0**. Clippy initially failed `PermissionDenied` — not a code
+  problem: `tauri-build` copies the sidecar every build and couldn't overwrite
+  `target/debug/fleetd-serve.exe` **because that file was the running sidecar**. Worth remembering:
+  **a running dev app blocks any rebuild of this crate.**
+- **Gate 5, split.** Containers: **PASS** (0 after graceful quit, against a verified 0 baseline).
+  Process exit: **ANOMALY** — the `app` process outlived its window. Recorded, not diagnosed.
+- **Found but not ours:** Audience's `video` container busy-polls at ~100% of a core while idle.
+- **Deliberately not done:** the `docs/ROADMAP.md` reconcile (next-step 5) — it is stale and
+  contradicts this file, but it should be rewritten against a merged #49, not a pending one.
+- Session artifacts (launcher + full 11-item checklist) were staged in the session scratchpad; the
+  checklist content is reproduced in `spikes/SPIKE-RESULTS.md`, so **nothing depends on the
+  scratchpad surviving**.
 
 ### 2026-08-09 — Work audit, then worked the findings
 
