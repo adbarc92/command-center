@@ -208,9 +208,18 @@ mod tests {
 
     #[test]
     fn keeps_absolute_cwd_as_is() {
-        let m = Manifest::from_json(AUDIENCE_JSON).unwrap(); // cwd is absolute D:/...
+        // `Path::is_absolute` is platform-specific: the fixture's "D:/…" drive path
+        // is absolute only on Windows, and elsewhere gets joined to the manifest dir.
+        // Pick a path the host actually agrees is absolute so the intent holds on both.
+        let abs = if cfg!(windows) {
+            "D:/MajorProjects/CURRENT/audience"
+        } else {
+            "/srv/audience"
+        };
+        let mut m = Manifest::from_json(AUDIENCE_JSON).unwrap();
+        m.lifecycle.cwd = Some(abs.into());
         let resolved = m.resolved_cwd(Path::new("/plugins/audience"));
-        assert_eq!(resolved, Path::new("D:/MajorProjects/CURRENT/audience"));
+        assert_eq!(resolved, Path::new(abs));
     }
 
     #[test]
