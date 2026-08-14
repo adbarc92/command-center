@@ -2,6 +2,9 @@ use crate::plugins::manifest::{Manifest, Probe as ProbeCfg};
 use crate::plugins::seams::{Clock, EventSink, Probe, Spawner};
 use std::path::Path;
 
+// The initial state of the §4 state machine. Nothing emits it yet — the machine
+// only reports transitions away from rest — but it belongs with its siblings.
+#[allow(dead_code)]
 pub const STOPPED: &str = "stopped";
 pub const BUILDING: &str = "building";
 pub const STARTING: &str = "starting";
@@ -108,6 +111,9 @@ pub fn run_start_sequence(
 
 /// If the owned child has exited, emit `error` and return true. The caller is
 /// responsible for destroying the kept-alive webview on a true return (§4).
+// Unit-tested but not yet called from production: the crash watcher that polls it
+// arrives with the Phase-6 embedding layer, which owns the webview it must destroy.
+#[allow(dead_code)]
 pub fn check_crash(
     plugin_id: &str,
     child_id: u64,
@@ -364,7 +370,7 @@ mod tests {
         };
         let sink = RecordingSink::default();
         // Given an owned, healthy plugin whose child has exited, the watcher flips to error.
-        let flipped = check_crash(&"audience".to_string(), 7, &spawner, &sink);
+        let flipped = check_crash("audience", 7, &spawner, &sink);
         assert!(flipped);
         assert_eq!(sink.states.lock().unwrap().last().unwrap().1, "error");
     }
@@ -377,7 +383,7 @@ mod tests {
             exited: Mutex::new(false),
         };
         let sink = RecordingSink::default();
-        let flipped = check_crash(&"audience".to_string(), 7, &spawner, &sink);
+        let flipped = check_crash("audience", 7, &spawner, &sink);
         assert!(!flipped);
         assert!(sink.states.lock().unwrap().is_empty());
     }

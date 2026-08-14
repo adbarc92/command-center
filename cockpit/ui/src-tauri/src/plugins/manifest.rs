@@ -12,12 +12,18 @@ pub struct Manifest {
     pub icon: String,
     pub url: String,
     pub lifecycle: Lifecycle,
+    // Parsed and validated here; consumed by the Phase-6 embedding layer that
+    // creates the webview these settings configure.
+    #[allow(dead_code)]
     #[serde(default)]
     pub webview: WebviewCfg,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Lifecycle {
+    // Manifest surface that is accepted today but not yet acted on: every plugin
+    // is treated as managed until adopt-only stacks are wired up.
+    #[allow(dead_code)]
     #[serde(default)]
     pub managed: bool,
     #[serde(default)]
@@ -65,6 +71,9 @@ fn default_probe_interval() -> u64 {
     1_000
 }
 
+// Every field is manifest surface for the not-yet-landed Phase-6 webview; the
+// struct is deserialized and round-tripped in tests, just never read from prod code.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct WebviewCfg {
     #[serde(default)]
@@ -104,6 +113,8 @@ impl Manifest {
         serde_json::from_str(s)
     }
     /// Effective window title (defaults to `name`).
+    // Called by the Phase-6 embedding layer when it creates the window.
+    #[allow(dead_code)]
     pub fn window_title(&self) -> String {
         self.webview
             .title

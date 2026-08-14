@@ -75,8 +75,8 @@ fn discover(root: &Path, max_depth: usize, excludes: &[String], out: &mut Vec<Pa
         .into_iter()
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
-            !(e.file_type().is_dir() && PRUNE.contains(&name.as_ref()))
-                && !is_excluded(&normalize(e.path()), excludes)
+            let pruned = e.file_type().is_dir() && PRUNE.contains(&name.as_ref());
+            !pruned && !is_excluded(&normalize(e.path()), excludes)
         });
     for entry in walker.flatten() {
         if entry.file_type().is_dir() && entry.path().join("docs/STATUS.md").is_file() {

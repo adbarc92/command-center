@@ -23,8 +23,14 @@ pub trait Spawner: Send + Sync {
     /// Spawn a long-running command (start). Returns a child id.
     fn spawn(&self, cmd: &str, cwd: &Path, env: &BTreeMap<String, String>) -> u64;
     /// Has the spawned child exited? (drives crash→error)
+    // Only reached through `state::check_crash`, which the Phase-6 crash watcher
+    // will call; both impls (real + fake) already satisfy it.
+    #[allow(dead_code)]
     fn has_exited(&self, child_id: u64) -> bool;
     /// Force-kill a child (teardown fallback).
+    // Teardown currently goes through the manifest's `lifecycle.stop` command
+    // (see manager::stop_one); this stays as the documented force-kill fallback.
+    #[allow(dead_code)]
     fn kill(&self, child_id: u64);
 }
 
