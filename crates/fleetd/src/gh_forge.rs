@@ -37,7 +37,11 @@ impl GhForge {
         if self.host_clone.join(".git").is_dir() {
             return Ok(());
         }
-        run("git", &["clone", &self.repo_url, &self.host_clone.to_string_lossy()]).await?;
+        run(
+            "git",
+            &["clone", &self.repo_url, &self.host_clone.to_string_lossy()],
+        )
+        .await?;
         Ok(())
     }
 
@@ -55,11 +59,25 @@ impl Forge for GhForge {
         let bundle = bundle.to_string_lossy().into_owned();
 
         // Import the agent branch from the bundle and refresh the base.
-        run("git", &["-C", &dir, "fetch", &bundle, &format!("{branch}:{branch}")]).await?;
+        run(
+            "git",
+            &["-C", &dir, "fetch", &bundle, &format!("{branch}:{branch}")],
+        )
+        .await?;
         run("git", &["-C", &dir, "fetch", "origin", &self.base_branch]).await?;
 
         // Trial-merge the agent branch onto a fresh base; clean exit == mergeable.
-        run("git", &["-C", &dir, "checkout", "-f", &format!("origin/{}", self.base_branch)]).await?;
+        run(
+            "git",
+            &[
+                "-C",
+                &dir,
+                "checkout",
+                "-f",
+                &format!("origin/{}", self.base_branch),
+            ],
+        )
+        .await?;
         let merged = run_status(
             "git",
             &["-C", &dir, "merge", "--no-commit", "--no-ff", branch],
@@ -68,13 +86,21 @@ impl Forge for GhForge {
         // Always abort/clean the trial, regardless of outcome.
         let _ = run_status("git", &["-C", &dir, "merge", "--abort"]).await;
 
-        Ok(if merged { MergeResult::Clean } else { MergeResult::Conflict })
+        Ok(if merged {
+            MergeResult::Clean
+        } else {
+            MergeResult::Conflict
+        })
     }
 
     async fn open_pr(&self, branch: &str) -> Result<String, ForgeError> {
         guard_branch(branch)?;
         let dir = self.git_dir();
-        run("git", &["-C", &dir, "push", "origin", &format!("{branch}:{branch}")]).await?;
+        run(
+            "git",
+            &["-C", &dir, "push", "origin", &format!("{branch}:{branch}")],
+        )
+        .await?;
         let url = run(
             "gh",
             &[
@@ -97,7 +123,19 @@ impl Forge for GhForge {
     }
 
     async fn poll_mergeable(&self, pr_url: &str) -> Result<Mergeability, ForgeError> {
-        let out = run("gh", &["pr", "view", pr_url, "--json", "mergeable", "-q", ".mergeable"]).await?;
+        let out = run(
+            "gh",
+            &[
+                "pr",
+                "view",
+                pr_url,
+                "--json",
+                "mergeable",
+                "-q",
+                ".mergeable",
+            ],
+        )
+        .await?;
         Ok(map_mergeable(out.trim()))
     }
 }
@@ -116,7 +154,8 @@ fn guard_branch(b: &str) -> Result<(), ForgeError> {
     let ok = !b.is_empty()
         && !b.starts_with('-')
         && !b.contains("..")
-        && b.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'));
+        && b.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'));
     if ok {
         Ok(())
     } else {

@@ -41,7 +41,9 @@ pub struct BuildStep {
     #[serde(default = "default_build_timeout")]
     pub timeout: u64,
 }
-fn default_build_timeout() -> u64 { 1_200_000 }
+fn default_build_timeout() -> u64 {
+    1_200_000
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Probe {
@@ -53,9 +55,15 @@ pub struct Probe {
     #[serde(default = "default_probe_interval")]
     pub interval: u64,
 }
-fn default_ok_status() -> Vec<u16> { vec![200] }
-fn default_probe_timeout() -> u64 { 180_000 }
-fn default_probe_interval() -> u64 { 1_000 }
+fn default_ok_status() -> Vec<u16> {
+    vec![200]
+}
+fn default_probe_timeout() -> u64 {
+    180_000
+}
+fn default_probe_interval() -> u64 {
+    1_000
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct WebviewCfg {
@@ -69,11 +77,19 @@ pub struct WebviewCfg {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum Popups { #[default] Allow, Block }
+pub enum Popups {
+    #[default]
+    Allow,
+    Block,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
-pub enum ExternalLinks { #[default] InApp, SystemBrowser }
+pub enum ExternalLinks {
+    #[default]
+    InApp,
+    SystemBrowser,
+}
 
 pub const SUPPORTED_API_VERSIONS: &[u32] = &[1];
 
@@ -89,7 +105,10 @@ impl Manifest {
     }
     /// Effective window title (defaults to `name`).
     pub fn window_title(&self) -> String {
-        self.webview.title.clone().unwrap_or_else(|| self.name.clone())
+        self.webview
+            .title
+            .clone()
+            .unwrap_or_else(|| self.name.clone())
     }
     pub fn validate(&self) -> Result<(), ManifestError> {
         if !SUPPORTED_API_VERSIONS.contains(&self.api_version) {
@@ -104,7 +123,11 @@ impl Manifest {
             None => manifest_dir.to_path_buf(),
             Some(c) => {
                 let p = Path::new(c);
-                if p.is_absolute() { p.to_path_buf() } else { manifest_dir.join(p) }
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    manifest_dir.join(p)
+                }
             }
         }
     }
@@ -152,7 +175,10 @@ mod tests {
     fn rejects_unknown_api_version() {
         let json = AUDIENCE_JSON.replace("\"apiVersion\": 1", "\"apiVersion\": 99");
         let m = Manifest::from_json(&json).unwrap();
-        assert!(matches!(m.validate(), Err(ManifestError::UnsupportedApiVersion(99))));
+        assert!(matches!(
+            m.validate(),
+            Err(ManifestError::UnsupportedApiVersion(99))
+        ));
     }
 
     #[test]
@@ -180,6 +206,9 @@ mod tests {
     fn uses_manifest_dir_when_cwd_is_absent() {
         let mut m = Manifest::from_json(AUDIENCE_JSON).unwrap();
         m.lifecycle.cwd = None;
-        assert_eq!(m.resolved_cwd(Path::new("/plugins/audience")), Path::new("/plugins/audience"));
+        assert_eq!(
+            m.resolved_cwd(Path::new("/plugins/audience")),
+            Path::new("/plugins/audience")
+        );
     }
 }

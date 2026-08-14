@@ -96,11 +96,7 @@ pub trait Runner: Send + Sync {
         branch: &str,
     ) -> Result<bool, RunnerError>;
     /// `git bundle` the branch and `docker cp` it to a host path (Spike 1).
-    async fn export_bundle(
-        &self,
-        handle: &Handle,
-        branch: &str,
-    ) -> Result<PathBuf, RunnerError>;
+    async fn export_bundle(&self, handle: &Handle, branch: &str) -> Result<PathBuf, RunnerError>;
     /// Unit-ids of currently-running containers labeled `cc.unit_id` (for startup
     /// reconciliation of orphans after a daemon restart).
     async fn list_unit_containers(&self) -> Result<Vec<String>, RunnerError>;

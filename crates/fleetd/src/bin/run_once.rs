@@ -39,7 +39,10 @@ async fn main() {
             .to_string()
     });
 
-    let millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     let unit_id = format!("u{millis}");
     let branch = format!("agent/{unit_id}");
 
@@ -86,7 +89,14 @@ async fn main() {
     drop(cmd_tx); // T1 run: no interactive commands
 
     println!("== run-once: unit {unit_id} on {branch} (cap ${usd_cap}) ==");
-    let driver = tokio::spawn(run(runner, forge, spec, RunCtx::standalone(), cmd_rx, evt_tx));
+    let driver = tokio::spawn(run(
+        runner,
+        forge,
+        spec,
+        RunCtx::standalone(),
+        cmd_rx,
+        evt_tx,
+    ));
 
     while let Some(env) = evt_rx.recv().await {
         print_event(&env);
@@ -100,21 +110,44 @@ async fn main() {
 
 fn print_event(env: &EventEnvelope) {
     match &env.event {
-        Event::PhaseChanged { from, to, reason, .. } => {
-            let why = reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default();
+        Event::PhaseChanged {
+            from, to, reason, ..
+        } => {
+            let why = reason
+                .as_deref()
+                .map(|r| format!(" ({r})"))
+                .unwrap_or_default();
             println!("[{:>3}] {from:?} -> {to:?}{why}", env.seq);
         }
         Event::Iteration { kind, n } => println!("[{:>3}] iteration {kind:?} #{n}", env.seq),
-        Event::Metric { cost_usd, tokens_in, tokens_out, .. } => {
-            println!("[{:>3}] $ {cost_usd:.4}  (in {tokens_in} / out {tokens_out})", env.seq)
+        Event::Metric {
+            cost_usd,
+            tokens_in,
+            tokens_out,
+            ..
+        } => {
+            println!(
+                "[{:>3}] $ {cost_usd:.4}  (in {tokens_in} / out {tokens_out})",
+                env.seq
+            )
         }
-        Event::Finding { round, title, .. } => println!("[{:>3}] review r{round}: {title}", env.seq),
-        Event::Artifact { kind, reference } => println!("[{:>3}] artifact {kind:?}: {reference}", env.seq),
+        Event::Finding { round, title, .. } => {
+            println!("[{:>3}] review r{round}: {title}", env.seq)
+        }
+        Event::Artifact { kind, reference } => {
+            println!("[{:>3}] artifact {kind:?}: {reference}", env.seq)
+        }
         Event::OracleProposed { test_files, .. } => {
-            println!("[{:>3}] oracle proposed {} test line(s)", env.seq, test_files.len())
+            println!(
+                "[{:>3}] oracle proposed {} test line(s)",
+                env.seq,
+                test_files.len()
+            )
         }
         Event::Blocked { reason, .. } => println!("[{:>3}] BLOCKED: {reason}", env.seq),
-        Event::Error { scope, detail, .. } => println!("[{:>3}] ERROR {scope:?}: {detail}", env.seq),
+        Event::Error { scope, detail, .. } => {
+            println!("[{:>3}] ERROR {scope:?}: {detail}", env.seq)
+        }
         Event::Done { result } => println!("[{:>3}] DONE: {result}", env.seq),
         Event::Log { stream, line } => println!("[{:>3}] {stream:?}| {line}", env.seq),
     }

@@ -22,7 +22,10 @@ const URL: &str = "https://github.com/adbarc92/command-center-agent-sandbox";
 #[tokio::test]
 #[ignore = "requires Docker + cc-agent:dev + authed gh; opens a real PR"]
 async fn full_pipeline_opens_a_real_mergeable_pr() {
-    let millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     let unit_id = format!("preflight-{millis}");
     let branch = format!("agent/{unit_id}");
 
@@ -42,7 +45,10 @@ async fn full_pipeline_opens_a_real_mergeable_pr() {
     };
 
     let runner = LocalDockerRunner::new("cc-agent:dev");
-    let handle = runner.provision(&spec).await.expect("provision (clone sandbox + branch)");
+    let handle = runner
+        .provision(&spec)
+        .await
+        .expect("provision (clone sandbox + branch)");
 
     // ── stub the agent: write impl + its test (what oracle+build would do) ──
     let work = "set -e; cd /work/repo; \
@@ -51,30 +57,60 @@ async fn full_pipeline_opens_a_real_mergeable_pr() {
         printf 'const test=require(\"node:test\");const assert=require(\"node:assert\");\
 const {sum}=require(\"./src/index.js\");\
 test(\"sum adds\",()=>assert.strictEqual(sum(2,3),5));\\n' > sum.test.js";
-    let w = runner.exec(&handle, "/work/repo", &["sh".into(), "-c".into(), work.into()]).await
+    let w = runner
+        .exec(
+            &handle,
+            "/work/repo",
+            &["sh".into(), "-c".into(), work.into()],
+        )
+        .await
         .expect("write stub files");
     assert_eq!(w.exit_code, 0, "stub write failed: {:?}", w.stdout);
 
     // ── daemon commits the work ──
-    let committed = runner.commit_all(&handle, "feat: implement sum").await.expect("commit_all");
+    let committed = runner
+        .commit_all(&handle, "feat: implement sum")
+        .await
+        .expect("commit_all");
     assert!(committed, "expected a commit to be created");
 
     // ── checks (the objective signal) ──
-    let check = runner.exec(&handle, "/work/repo", &["node".into(), "--test".into()]).await
+    let check = runner
+        .exec(&handle, "/work/repo", &["node".into(), "--test".into()])
+        .await
         .expect("run checks");
     assert_eq!(check.exit_code, 0, "checks should pass: {:?}", check.stdout);
 
     // ── non-empty diff vs base ──
-    let diff = runner.has_diff(&handle, "main", &branch).await.expect("has_diff");
+    let diff = runner
+        .has_diff(&handle, "main", &branch)
+        .await
+        .expect("has_diff");
     assert!(diff, "expected a non-empty diff vs main");
 
     // ── escape the branch + open a real PR via GhForge ──
-    let bundle = runner.export_bundle(&handle, &branch).await.expect("export bundle");
+    let bundle = runner
+        .export_bundle(&handle, &branch)
+        .await
+        .expect("export bundle");
     let host_clone = std::env::temp_dir().join(format!("cc-preflight-{millis}"));
-    let forge = GhForge::new(URL, SLUG, "main", host_clone.clone(), format!("pre-flight: {unit_id}"));
+    let forge = GhForge::new(
+        URL,
+        SLUG,
+        "main",
+        host_clone.clone(),
+        format!("pre-flight: {unit_id}"),
+    );
 
-    let merge = forge.trial_merge(&bundle, &branch).await.expect("trial merge");
-    assert_eq!(merge, MergeResult::Clean, "branch should merge cleanly onto main");
+    let merge = forge
+        .trial_merge(&bundle, &branch)
+        .await
+        .expect("trial merge");
+    assert_eq!(
+        merge,
+        MergeResult::Clean,
+        "branch should merge cleanly onto main"
+    );
 
     let pr = forge.open_pr(&branch).await.expect("open PR");
     println!("PR: {pr}");
@@ -89,7 +125,11 @@ test(\"sum adds\",()=>assert.strictEqual(sum(2,3),5));\\n' > sum.test.js";
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    assert_eq!(verdict, Mergeability::Mergeable, "GitHub should report the PR mergeable");
+    assert_eq!(
+        verdict,
+        Mergeability::Mergeable,
+        "GitHub should report the PR mergeable"
+    );
 
     // ── cleanup the container + host clone (leave the PR as proof) ──
     runner.teardown(&handle).await.expect("teardown");

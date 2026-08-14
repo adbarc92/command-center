@@ -114,18 +114,28 @@ pub enum ErrorScope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
-    Halt { cmd_id: String },
-    Resume { cmd_id: String },
-    Abandon { cmd_id: String },
+    Halt {
+        cmd_id: String,
+    },
+    Resume {
+        cmd_id: String,
+    },
+    Abandon {
+        cmd_id: String,
+    },
     /// The T3 final gate: human ships the PR from `NeedsHuman`.
-    Ship { cmd_id: String },
+    Ship {
+        cmd_id: String,
+    },
     /// Approve the frozen test set; may carry an edited set (T2/T3).
     ApproveOracle {
         cmd_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         edited_test_files: Option<Vec<String>>,
     },
-    RejectOracle { cmd_id: String },
+    RejectOracle {
+        cmd_id: String,
+    },
 }
 
 impl Command {
@@ -188,7 +198,12 @@ mod tests {
 
     #[test]
     fn metric_roundtrips() {
-        let e = Event::Metric { tokens_in: 9457, tokens_out: 4, cost_usd: 0.207, elapsed_ms: 6734 };
+        let e = Event::Metric {
+            tokens_in: 9457,
+            tokens_out: 4,
+            cost_usd: 0.207,
+            elapsed_ms: 6734,
+        };
         let json = serde_json::to_string(&e).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
@@ -203,7 +218,10 @@ mod tests {
 
     #[test]
     fn approve_oracle_optional_edits_omitted_when_none() {
-        let c = Command::ApproveOracle { cmd_id: "x".into(), edited_test_files: None };
+        let c = Command::ApproveOracle {
+            cmd_id: "x".into(),
+            edited_test_files: None,
+        };
         let v = serde_json::to_value(&c).unwrap();
         assert_eq!(v["command"], "approve_oracle");
         assert!(v.get("edited_test_files").is_none());

@@ -22,7 +22,11 @@ pub struct AdmissionConfig {
 /// Per-lane admission verdict. `DropOverGlobalCap` is set later by the fan-out
 /// loop (a runtime re-check), never by `admit_lanes`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LaneDecision { Admit, DropOverLaneCap, DropOverBudget }
+pub enum LaneDecision {
+    Admit,
+    DropOverLaneCap,
+    DropOverBudget,
+}
 
 /// Walk lanes in order; admit while BOTH the count cap and the
 /// (usd_budget − planner_cost) envelope hold. Conservative: each admitted lane
@@ -30,17 +34,21 @@ pub enum LaneDecision { Admit, DropOverLaneCap, DropOverBudget }
 pub fn admit_lanes(lanes: &[Lane], cfg: &AdmissionConfig) -> Vec<(usize, LaneDecision)> {
     let envelope = (cfg.usd_budget - cfg.planner_cost).max(0.0);
     let mut admitted = 0usize;
-    lanes.iter().enumerate().map(|(i, _)| {
-        let decision = if admitted >= cfg.lane_cap {
-            LaneDecision::DropOverLaneCap
-        } else if (admitted as f64 + 1.0) * cfg.per_lane_cap > envelope {
-            LaneDecision::DropOverBudget
-        } else {
-            admitted += 1;
-            LaneDecision::Admit
-        };
-        (i, decision)
-    }).collect()
+    lanes
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let decision = if admitted >= cfg.lane_cap {
+                LaneDecision::DropOverLaneCap
+            } else if (admitted as f64 + 1.0) * cfg.per_lane_cap > envelope {
+                LaneDecision::DropOverBudget
+            } else {
+                admitted += 1;
+                LaneDecision::Admit
+            };
+            (i, decision)
+        })
+        .collect()
 }
 
 /// Sanitize a planner-chosen lane title into a git-ref-safe, length-bounded
@@ -61,7 +69,11 @@ pub fn slug(title: &str) -> String {
     }
     let trimmed: String = out.trim_matches('-').chars().take(32).collect();
     let trimmed = trimmed.trim_matches('-').to_string();
-    if trimmed.is_empty() { "lane".into() } else { trimmed }
+    if trimmed.is_empty() {
+        "lane".into()
+    } else {
+        trimmed
+    }
 }
 
 #[cfg(test)]
@@ -72,19 +84,37 @@ mod tests {
     fn slug_sanitizes_charset_length_and_empty() {
         assert_eq!(slug("Add Auth!!"), "add-auth");
         assert_eq!(slug("  spaced  out  "), "spaced-out");
-        assert_eq!(slug("🚀🚀🚀"), "lane");          // non-ascii → fallback
+        assert_eq!(slug("🚀🚀🚀"), "lane"); // non-ascii → fallback
         assert_eq!(slug(""), "lane");
         assert_eq!(slug(&"x".repeat(100)).len(), 32); // truncated
     }
 
     fn lanes(n: usize) -> Vec<Lane> {
-        (0..n).map(|i| Lane { title: format!("l{i}"), task: "t".into(), rationale: "r".into() }).collect()
+        (0..n)
+            .map(|i| Lane {
+                title: format!("l{i}"),
+                task: "t".into(),
+                rationale: "r".into(),
+            })
+            .collect()
     }
-    fn cfg(lane_cap: usize, usd_budget: f64, per_lane_cap: f64, planner_cost: f64) -> AdmissionConfig {
-        AdmissionConfig { lane_cap, usd_budget, per_lane_cap, planner_cost }
+    fn cfg(
+        lane_cap: usize,
+        usd_budget: f64,
+        per_lane_cap: f64,
+        planner_cost: f64,
+    ) -> AdmissionConfig {
+        AdmissionConfig {
+            lane_cap,
+            usd_budget,
+            per_lane_cap,
+            planner_cost,
+        }
     }
     fn admits(d: &[(usize, LaneDecision)]) -> usize {
-        d.iter().filter(|(_, x)| matches!(x, LaneDecision::Admit)).count()
+        d.iter()
+            .filter(|(_, x)| matches!(x, LaneDecision::Admit))
+            .count()
     }
 
     #[test]
@@ -114,7 +144,9 @@ mod tests {
     fn planner_over_budget_admits_zero() {
         let d = admit_lanes(&lanes(4), &cfg(8, 4.0, 5.0, 5.0));
         assert_eq!(admits(&d), 0);
-        assert!(d.iter().all(|(_, x)| matches!(x, LaneDecision::DropOverBudget)));
+        assert!(d
+            .iter()
+            .all(|(_, x)| matches!(x, LaneDecision::DropOverBudget)));
     }
 
     #[test]
