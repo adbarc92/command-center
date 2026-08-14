@@ -111,8 +111,11 @@ pub fn run_start_sequence(
 
 /// If the owned child has exited, emit `error` and return true. The caller is
 /// responsible for destroying the kept-alive webview on a true return (§4).
-// Unit-tested but not yet called from production: the crash watcher that polls it
-// arrives with the Phase-6 embedding layer, which owns the webview it must destroy.
+// UNWIRED FEATURE — no caller anywhere. Not on main, not on any in-flight branch;
+// the two unit tests below are the only things that exercise it. The crash watcher
+// described above has not been written, so nothing destroys the webview of a plugin
+// whose process dies. Kept because the behavior is still wanted, but this allow is
+// hiding missing work, not a caller that is about to arrive.
 #[allow(dead_code)]
 pub fn check_crash(
     plugin_id: &str,

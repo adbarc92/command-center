@@ -12,8 +12,9 @@ pub struct Manifest {
     pub icon: String,
     pub url: String,
     pub lifecycle: Lifecycle,
-    // Parsed and validated here; consumed by the Phase-6 embedding layer that
-    // creates the webview these settings configure.
+    // UNWIRED FEATURE — deserialized, then read by nothing but test assertions, on
+    // main and on every in-flight branch alike. The manifest advertises these keys
+    // and the app currently ignores them. See WebviewCfg below.
     #[allow(dead_code)]
     #[serde(default)]
     pub webview: WebviewCfg,
@@ -71,8 +72,11 @@ fn default_probe_interval() -> u64 {
     1_000
 }
 
-// Every field is manifest surface for the not-yet-landed Phase-6 webview; the
-// struct is deserialized and round-tripped in tests, just never read from prod code.
+// UNWIRED FEATURE — `popups`, `external_links` and `title` are parsed from the
+// manifest and asserted on in tests, and that is the whole of their use. No
+// production code reads any of them on any current branch, so a plugin author who
+// sets `popups: block` gets no blocking. The allow keeps the parsed shape around;
+// it does not mean someone is about to honor it.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct WebviewCfg {
@@ -113,7 +117,8 @@ impl Manifest {
         serde_json::from_str(s)
     }
     /// Effective window title (defaults to `name`).
-    // Called by the Phase-6 embedding layer when it creates the window.
+    // UNWIRED FEATURE — the only call is a test assertion; no production caller
+    // exists on any current branch. Nothing creates a window from this yet.
     #[allow(dead_code)]
     pub fn window_title(&self) -> String {
         self.webview

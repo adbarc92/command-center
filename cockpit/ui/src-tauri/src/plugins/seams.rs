@@ -23,8 +23,9 @@ pub trait Spawner: Send + Sync {
     /// Spawn a long-running command (start). Returns a child id.
     fn spawn(&self, cmd: &str, cwd: &Path, env: &BTreeMap<String, String>) -> u64;
     /// Has the spawned child exited? (drives crash→error)
-    // Only reached through `state::check_crash`, which the Phase-6 crash watcher
-    // will call; both impls (real + fake) already satisfy it.
+    // Reachable only through `state::check_crash`, which itself has no caller on any
+    // current branch — so this seam is dead for the same reason, and the real impl in
+    // seams_impl.rs has never run outside a test. See the note on check_crash.
     #[allow(dead_code)]
     fn has_exited(&self, child_id: u64) -> bool;
     /// Force-kill a child (teardown fallback).
