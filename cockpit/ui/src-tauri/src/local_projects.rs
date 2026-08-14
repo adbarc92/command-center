@@ -116,7 +116,12 @@ mod tests {
     use std::fs;
 
     fn tmp() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("cc-scan-{}", std::process::id()));
+        // Unique per call. Keying only on the pid gave every test in this binary the
+        // same directory, and they run concurrently — one test's `remove_dir_all`
+        // raced another's `create_dir_all` and failed the run about 1 time in 4.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("cc-scan-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
