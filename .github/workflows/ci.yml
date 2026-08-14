@@ -2,10 +2,10 @@ name: CI
 
 # First CI for command-center (Lane C / roadmap C8).
 # On every push and PR: run the embargo guard, the lint/type gates (rustfmt,
-# clippy, svelte-check + tsc), the Rust tests for both cargo workspaces, then
-# build the frontend + fleetd sidecar and produce Tauri bundles on all three target
-# OSes. Bundles are uploaded as workflow artifacts so a reviewer can smoke-test a
-# real build.
+# clippy, svelte-check + tsc), the Rust tests for both cargo workspaces and the
+# frontend's vitest suite, then build the frontend + fleetd sidecar and produce
+# Tauri bundles on all three target OSes. Bundles are uploaded as workflow
+# artifacts so a reviewer can smoke-test a real build.
 #
 # TWO CARGO WORKSPACES: the root one (crates/fleet-core, crates/fleetd) and the
 # standalone cockpit/ui/src-tauri crate. Nothing run from the repo root reaches
@@ -184,6 +184,39 @@ jobs:
 
       - name: Type-check the frontend
         run: npm run check
+
+  # ---------------------------------------------------------------------------
+  # Frontend unit tests (vitest + jsdom). Same shape as the type gate above: no
+  # Rust, no system deps.
+  #
+  # This is half of a pair. The regression pin for the plugin_launch main-thread
+  # freeze is split across two suites — a Rust test, gated by `cargo test
+  # (cockpit)` below, and cockpit/ui/src/App.appPlugin.test.ts, gated here. That
+  # file arrives with the plugin-runtime work and is not on main yet; wiring the
+  # job now means the JS half is covered the moment it lands, instead of the pin
+  # being half-enforced and quietly rotting.
+  # ---------------------------------------------------------------------------
+  test-ui:
+    name: vitest (cockpit/ui)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cockpit/ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cockpit/ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend unit tests
+        run: npm test
 
   # ---------------------------------------------------------------------------
   # Rust workspace tests. Fast, OS-independent gate — runs once on Linux.
