@@ -60,16 +60,9 @@ impl PluginManager {
         let discovered = self.discovered.lock().unwrap().clone();
         let deadline = Instant::now() + Duration::from_millis(total_deadline_ms);
 
-        let handles: Vec<_> = running
+        let handles: Vec<_> = teardown_targets(&running, &discovered)
             .into_iter()
-            .filter(|(_, r)| r.owned)
-            .filter_map(|(id, _r)| {
-                let found = discovered
-                    .iter()
-                    .find(|d| d.manifest.id == id)
-                    .map(|d| (d.manifest.clone(), d.dir.clone()))?;
-                Some(std::thread::spawn(move || stop_one(&found.0, &found.1)))
-            })
+            .map(|(m, dir)| std::thread::spawn(move || stop_one(&m, &dir)))
             .collect();
 
         for h in handles {
@@ -79,6 +72,29 @@ impl PluginManager {
             let _ = h.join(); // best-effort within the budget
         }
     }
+}
+
+/// Which plugins a teardown pass must stop: OWNED entries resolved against discovery.
+/// Adopted (not-owned) stacks are excluded — the user started those by hand — and a running
+/// id with no surviving discovery record is skipped rather than panicking.
+///
+/// Split out of `stop_all_owned` so the *selection* half of Gate 5 is unit-testable. The
+/// *execution* half (`stop_one`, which shells out to the manifest's `docker compose down`)
+/// needs a Docker daemon; CI has none, so that half stays a human smoke gate.
+fn teardown_targets(
+    running: &HashMap<String, Running>,
+    discovered: &[DiscoveredPlugin],
+) -> Vec<(Manifest, PathBuf)> {
+    running
+        .iter()
+        .filter(|(_, r)| r.owned)
+        .filter_map(|(id, _r)| {
+            discovered
+                .iter()
+                .find(|d| &d.manifest.id == id)
+                .map(|d| (d.manifest.clone(), d.dir.clone()))
+        })
+        .collect()
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -249,5 +265,135 @@ mod tests {
         let found = discover(&[tmp.as_path()]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].manifest.id, "audience");
+    }
+
+    // ---- Gate 5: teardown selection -------------------------------------------------
+    //
+    // Gate 5 ("quit the app, confirm `docker ps` is clean") is the one merge blocker on the
+    // plugin runtime that had no automated coverage at all. It splits in two: WHICH stacks a
+    // teardown pass picks, and WHETHER `docker compose down` actually brings them down. Only
+    // the first half can be tested without a Docker daemon — CI has none — so that is what
+    // these pin. The execution half stays a human smoke item.
+
+    /// A manifest with no `stop` command, so `stop_one` is a no-op and these tests never
+    /// shell out to anything.
+    fn manifest(id: &str) -> Manifest {
+        let text = serde_json::json!({
+            "id": id, "name": id, "apiVersion": 1,
+            "url": "http://localhost:3000",
+            "lifecycle": {
+                "cwd": "/x", "start": "up", "env": {},
+                "health": { "url": "h", "okStatus": [200], "timeout": 5000, "interval": 1000 },
+                "ready":  { "url": "r", "okStatus": [200], "timeout": 5000, "interval": 1000 }
+            }
+        })
+        .to_string();
+        Manifest::from_json(&text).expect("fixture manifest parses")
+    }
+
+    fn discovered(ids: &[&str]) -> Vec<DiscoveredPlugin> {
+        ids.iter()
+            .map(|id| DiscoveredPlugin {
+                dir: PathBuf::from(format!("/plugins/{id}")),
+                manifest: manifest(id),
+            })
+            .collect()
+    }
+
+    fn running(entries: &[(&str, bool)]) -> HashMap<String, Running> {
+        entries
+            .iter()
+            .map(|(id, owned)| {
+                (
+                    (*id).to_string(),
+                    Running { child_id: Some(1), owned: *owned },
+                )
+            })
+            .collect()
+    }
+
+    /// Only OWNED stacks are torn down. An adopted stack — one that was already up when the
+    /// start sequence ran, so the user owns it — must be left running on quit.
+    #[test]
+    fn teardown_selects_owned_and_leaves_adopted_running() {
+        let targets = teardown_targets(
+            &running(&[("audience", true), ("adopted", false)]),
+            &discovered(&["audience", "adopted"]),
+        );
+        let ids: Vec<&str> = targets.iter().map(|(m, _)| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["audience"]);
+    }
+
+    /// A running id whose discovery record has vanished (plugin dir deleted or renamed while
+    /// the app was up) is skipped, not panicked on. Teardown runs inside the shutdown handler,
+    /// where a panic would strand every container that had not been reached yet.
+    #[test]
+    fn teardown_skips_running_id_with_no_discovery_record() {
+        let targets = teardown_targets(
+            &running(&[("audience", true), ("vanished", true)]),
+            &discovered(&["audience"]),
+        );
+        let ids: Vec<&str> = targets.iter().map(|(m, _)| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["audience"]);
+    }
+
+    /// EVERY owned stack is selected, not just the first — a partial teardown is precisely the
+    /// orphaned-container failure Gate 5 exists to catch.
+    #[test]
+    fn teardown_selects_every_owned_stack() {
+        let targets = teardown_targets(
+            &running(&[("a", true), ("b", true), ("c", true)]),
+            &discovered(&["a", "b", "c"]),
+        );
+        let mut ids: Vec<&str> = targets.iter().map(|(m, _)| m.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["a", "b", "c"]);
+    }
+
+    /// The resolved teardown cwd is the manifest's, not the process's — `docker compose down`
+    /// only finds the right stack if it runs where the compose file lives.
+    #[test]
+    fn teardown_target_carries_the_plugins_own_directory() {
+        let targets = teardown_targets(&running(&[("audience", true)]), &discovered(&["audience"]));
+        let (m, dir) = &targets[0];
+        assert_eq!(dir, &PathBuf::from("/plugins/audience"));
+        assert_eq!(m.resolved_cwd(dir), PathBuf::from("/x")); // absolute cwd wins over the dir
+    }
+
+    /// `stop_all_owned` empties the running map — including adopted entries, which are
+    /// forgotten rather than stopped. Documents the `mem::take`: after one pass the manager
+    /// tracks nothing.
+    #[test]
+    fn stop_all_owned_clears_the_running_map_including_adopted() {
+        let mgr = PluginManager::default();
+        *mgr.discovered.lock().unwrap() = discovered(&["audience", "adopted"]);
+        *mgr.running.lock().unwrap() = running(&[("audience", true), ("adopted", false)]);
+
+        mgr.stop_all_owned(5_000);
+
+        assert!(mgr.running.lock().unwrap().is_empty());
+    }
+
+    /// Shutdown re-entrancy. `stop_all_owned` is called from the `ExitRequested` handler on the
+    /// main event-loop thread (`lib.rs`) with a 30 s budget, so a second pass must not re-spend
+    /// it. Bears on the open Gate-5 process-exit anomaly (the `app` process outliving the
+    /// window): whatever holds the process open, this test rules out a teardown pass blocking
+    /// the loop a second time.
+    #[test]
+    fn stop_all_owned_is_idempotent_and_the_second_pass_is_immediate() {
+        let mgr = PluginManager::default();
+        *mgr.discovered.lock().unwrap() = discovered(&["audience"]);
+        *mgr.running.lock().unwrap() = running(&[("audience", true)]);
+
+        mgr.stop_all_owned(5_000);
+        let t = Instant::now();
+        mgr.stop_all_owned(5_000);
+
+        assert!(
+            t.elapsed() < Duration::from_millis(250),
+            "second teardown pass took {:?}; it should find nothing to do",
+            t.elapsed()
+        );
+        assert!(mgr.running.lock().unwrap().is_empty());
     }
 }
