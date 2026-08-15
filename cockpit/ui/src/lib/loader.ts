@@ -91,15 +91,32 @@ export function negotiateCapabilities(
   return hostCaps.filter((c) => manifest.capabilities.includes(c));
 }
 
+/** Windows/WebView2 serves a custom scheme at `http://<scheme>.localhost` (see `pluginSrc`). */
+function runningOnWindows(): boolean {
+  return typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
+}
+
 /**
  * The sandboxed-iframe `src` for a plugin entry. All packaged plugins share the opaque
  * `http://ccplugin.localhost` origin (isolation is the sandbox, not the URL); `<id>` is
  * only a path. Under plain Vite there is no Tauri scheme, so a static route is used.
+ *
+ * The packaged URL is platform-shaped. On Windows/WebView2 — the primary target — a custom
+ * scheme is reachable only as `http://<scheme>.localhost/…`; the literal `ccplugin://…` form
+ * is an EXTERNAL protocol, and `sandbox="allow-scripts"` forbids navigating to one, so the
+ * frame silently stays blank. `view_plugins.rs` and the host `frame-src` CSP already name the
+ * `http://ccplugin.localhost` origin — this is what actually produces it.
  */
-export function pluginSrc(env: PluginEnv, id: string, entry: string): string {
-  return env === 'packaged'
-    ? `ccplugin://localhost/${id}/${entry}`
-    : `/plugins/${id}/${entry}`;
+export function pluginSrc(
+  env: PluginEnv,
+  id: string,
+  entry: string,
+  isWindows: boolean = runningOnWindows(),
+): string {
+  if (env !== 'packaged') return `/plugins/${id}/${entry}`;
+  return isWindows
+    ? `http://ccplugin.localhost/${id}/${entry}`
+    : `ccplugin://localhost/${id}/${entry}`;
 }
 
 /** Validate + negotiate + resolve a batch of raw manifests, partitioning valid/rejected. */

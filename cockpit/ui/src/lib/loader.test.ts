@@ -47,9 +47,23 @@ describe('negotiateCapabilities', () => {
 });
 
 describe('pluginSrc', () => {
-  it('resolves the dev static route and the packaged scheme URL', () => {
+  it('resolves the dev static route', () => {
     expect(pluginSrc('dev', 'reference', 'index.html')).toBe('/plugins/reference/index.html');
-    expect(pluginSrc('packaged', 'reference', 'index.html')).toBe('ccplugin://localhost/reference/index.html');
+  });
+
+  // Windows/WebView2 (the primary target) serves a custom scheme at `http://<scheme>.localhost`.
+  // A literal `ccplugin://` URL is an EXTERNAL protocol there, and a sandboxed iframe refuses to
+  // navigate to one ("Navigation to external protocol blocked by sandbox") — the frame stays blank.
+  it('resolves the packaged URL to the http://ccplugin.localhost origin on Windows', () => {
+    expect(pluginSrc('packaged', 'reference', 'index.html', true)).toBe(
+      'http://ccplugin.localhost/reference/index.html',
+    );
+  });
+
+  it('resolves the packaged URL to the ccplugin:// scheme off Windows', () => {
+    expect(pluginSrc('packaged', 'reference', 'index.html', false)).toBe(
+      'ccplugin://localhost/reference/index.html',
+    );
   });
 });
 
