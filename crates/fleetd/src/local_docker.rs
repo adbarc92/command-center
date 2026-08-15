@@ -17,7 +17,9 @@ pub struct LocalDockerRunner {
 
 impl LocalDockerRunner {
     pub fn new(image: impl Into<String>) -> Self {
-        Self { image: image.into() }
+        Self {
+            image: image.into(),
+        }
     }
 
     fn container_name(unit_id: &str) -> String {
@@ -31,7 +33,12 @@ impl LocalDockerRunner {
 
 /// `docker exec -w <workdir> <name> <argv...>`, failing on non-zero exit.
 async fn exec_in(name: &str, workdir: &str, argv: &[&str]) -> Result<(), RunnerError> {
-    let mut a = vec!["exec".to_string(), "-w".to_string(), workdir.to_string(), name.to_string()];
+    let mut a = vec![
+        "exec".to_string(),
+        "-w".to_string(),
+        workdir.to_string(),
+        name.to_string(),
+    ];
     a.extend(argv.iter().map(|s| s.to_string()));
     docker_ok(a).await.map(|_| ())
 }
@@ -52,13 +59,20 @@ fn valid_git_branch(b: &str) -> bool {
     !b.is_empty()
         && !b.starts_with('-')
         && !b.contains("..")
-        && b.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'))
+        && b.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'))
 }
 
 /// Keep only docker-name-safe characters.
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -80,7 +94,9 @@ async fn docker(args: Vec<String>) -> Result<(i32, String, String), RunnerError>
 async fn docker_ok(args: Vec<String>) -> Result<String, RunnerError> {
     let (code, out, err) = docker(args.clone()).await?;
     if code != 0 {
-        return Err(RunnerError::Failed(format!("docker {args:?} exited {code}: {err}")));
+        return Err(RunnerError::Failed(format!(
+            "docker {args:?} exited {code}: {err}"
+        )));
     }
     Ok(out)
 }
@@ -114,14 +130,19 @@ impl Runner for LocalDockerRunner {
 
         // Validate inputs that flow into git as args (no shell is used).
         if !valid_repo_url(&spec.repo_url) {
-            return Err(RunnerError::Failed(format!("unsafe repo url: {:?}", spec.repo_url)));
+            return Err(RunnerError::Failed(format!(
+                "unsafe repo url: {:?}",
+                spec.repo_url
+            )));
         }
         if !valid_git_branch(&spec.base_branch) || !valid_git_branch(&spec.branch) {
             return Err(RunnerError::Failed("unsafe branch name".into()));
         }
 
         // Reuse detection: a persisted volume already has the repo (true resume).
-        let reused = exec_in(&name, "/work", &["test", "-d", "repo/.git"]).await.is_ok();
+        let reused = exec_in(&name, "/work", &["test", "-d", "repo/.git"])
+            .await
+            .is_ok();
 
         if !reused {
             exec_in(&name, "/work", &["git", "clone", &spec.repo_url, "repo"]).await?;
@@ -139,10 +160,20 @@ impl Runner for LocalDockerRunner {
             // Continue the persisted work: clear a crash-left lock and reset the
             // branch ref over the existing (possibly dirty) tree. `-b` would fail.
             let _ = exec_in(&name, "/work/repo", &["rm", "-f", ".git/index.lock"]).await;
-            exec_in(&name, "/work/repo", &["git", "checkout", "-B", &spec.branch]).await?;
+            exec_in(
+                &name,
+                "/work/repo",
+                &["git", "checkout", "-B", &spec.branch],
+            )
+            .await?;
         } else {
             exec_in(&name, "/work/repo", &["git", "checkout", &spec.base_branch]).await?;
-            exec_in(&name, "/work/repo", &["git", "checkout", "-b", &spec.branch]).await?;
+            exec_in(
+                &name,
+                "/work/repo",
+                &["git", "checkout", "-b", &spec.branch],
+            )
+            .await?;
         }
 
         Ok(Handle { id: name })
@@ -154,7 +185,12 @@ impl Runner for LocalDockerRunner {
         workdir: &str,
         argv: &[String],
     ) -> Result<ExecOutput, RunnerError> {
-        let mut args = vec!["exec".to_string(), "-w".to_string(), workdir.to_string(), handle.id.clone()];
+        let mut args = vec![
+            "exec".to_string(),
+            "-w".to_string(),
+            workdir.to_string(),
+            handle.id.clone(),
+        ];
         args.extend(argv.iter().cloned());
         let (code, out, err) = docker(args).await?;
         Ok(ExecOutput {
@@ -173,7 +209,11 @@ impl Runner for LocalDockerRunner {
             handle.id.clone(),
         ])
         .await?;
-        Ok(if code == 0 && out.trim() == "true" { Liveness::Alive } else { Liveness::Stalled })
+        Ok(if code == 0 && out.trim() == "true" {
+            Liveness::Alive
+        } else {
+            Liveness::Stalled
+        })
     }
 
     async fn commit_all(&self, handle: &Handle, message: &str) -> Result<bool, RunnerError> {
@@ -194,7 +234,12 @@ impl Runner for LocalDockerRunner {
         Ok(code == 0)
     }
 
-    async fn has_diff(&self, handle: &Handle, base: &str, branch: &str) -> Result<bool, RunnerError> {
+    async fn has_diff(
+        &self,
+        handle: &Handle,
+        base: &str,
+        branch: &str,
+    ) -> Result<bool, RunnerError> {
         if !valid_git_branch(base) || !valid_git_branch(branch) {
             return Err(RunnerError::Failed("unsafe ref name".into()));
         }
@@ -218,7 +263,9 @@ impl Runner for LocalDockerRunner {
         // pass it as its own argv element (no `sh -c` interpolation) to avoid
         // command/option injection once `branch` becomes unit-derived.
         if !valid_git_branch(branch) {
-            return Err(RunnerError::Failed(format!("unsafe branch name: {branch:?}")));
+            return Err(RunnerError::Failed(format!(
+                "unsafe branch name: {branch:?}"
+            )));
         }
         // Complete, self-contained bundle (Spike 1: no prerequisites).
         docker_ok(vec![
@@ -257,7 +304,12 @@ impl Runner for LocalDockerRunner {
         if code != 0 {
             return Ok(vec![]);
         }
-        Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+        Ok(out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect())
     }
 
     async fn teardown(&self, handle: &Handle) -> Result<(), RunnerError> {
@@ -276,7 +328,12 @@ impl Runner for LocalDockerRunner {
 
     async fn reap_unit(&self, unit_id: &str) -> Result<(), RunnerError> {
         // Reap by unit-id, keeping the volume (resume after restart).
-        let _ = docker(vec!["rm".into(), "-f".into(), Self::container_name(unit_id)]).await;
+        let _ = docker(vec![
+            "rm".into(),
+            "-f".into(),
+            Self::container_name(unit_id),
+        ])
+        .await;
         Ok(())
     }
 

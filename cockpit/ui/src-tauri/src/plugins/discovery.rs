@@ -22,19 +22,37 @@ pub fn discover(roots: &[&Path]) -> Vec<DiscoveredPlugin> {
             let mani_path = entry.path().join("app-plugin.json");
             let text = match std::fs::read_to_string(&mani_path) {
                 Ok(t) => t,
-                Err(e) => { log::warn!("app-plugins: skipping {} — unreadable: {e}", mani_path.display()); continue }
+                Err(e) => {
+                    log::warn!(
+                        "app-plugins: skipping {} — unreadable: {e}",
+                        mani_path.display()
+                    );
+                    continue;
+                }
             };
             let manifest = match Manifest::from_json(&text) {
                 Ok(m) => m,
-                Err(e) => { log::warn!("app-plugins: skipping {} — parse error: {e}", mani_path.display()); continue }
+                Err(e) => {
+                    log::warn!(
+                        "app-plugins: skipping {} — parse error: {e}",
+                        mani_path.display()
+                    );
+                    continue;
+                }
             };
             if let Err(e) = manifest.validate() {
-                log::warn!("app-plugins: skipping {} — validation failed: {e}", mani_path.display());
+                log::warn!(
+                    "app-plugins: skipping {} — validation failed: {e}",
+                    mani_path.display()
+                );
                 continue;
             }
             by_id.insert(
                 manifest.id.clone(),
-                DiscoveredPlugin { dir: entry.path(), manifest },
+                DiscoveredPlugin {
+                    dir: entry.path(),
+                    manifest,
+                },
             );
         }
     }
@@ -57,8 +75,16 @@ mod tests {
         // both define id "audience"; user dir should win
         let base = r#"{"id":"audience","name":"NAME","apiVersion":1,"url":"http://localhost:3000",
             "lifecycle":{"start":"x","health":{"url":"h"},"ready":{"url":"r"}}}"#;
-        fs::write(packaged.join("audience/app-plugin.json"), base.replace("NAME", "Packaged")).unwrap();
-        fs::write(user.join("audience/app-plugin.json"), base.replace("NAME", "User")).unwrap();
+        fs::write(
+            packaged.join("audience/app-plugin.json"),
+            base.replace("NAME", "Packaged"),
+        )
+        .unwrap();
+        fs::write(
+            user.join("audience/app-plugin.json"),
+            base.replace("NAME", "User"),
+        )
+        .unwrap();
 
         let found = discover(&[packaged.as_path(), user.as_path()]);
         assert_eq!(found.len(), 1);
@@ -78,7 +104,13 @@ mod tests {
         fs::write(root.join("good/app-plugin.json"), valid).unwrap();
         fs::write(root.join("garbage/app-plugin.json"), "{ not json").unwrap();
         // parses fine but validate() refuses the unsupported apiVersion → skipped
-        fs::write(root.join("badversion/app-plugin.json"), valid.replace("\"apiVersion\":1", "\"apiVersion\":99").replace("\"id\":\"good\"", "\"id\":\"bad\"")).unwrap();
+        fs::write(
+            root.join("badversion/app-plugin.json"),
+            valid
+                .replace("\"apiVersion\":1", "\"apiVersion\":99")
+                .replace("\"id\":\"good\"", "\"id\":\"bad\""),
+        )
+        .unwrap();
         // "nomanifest" dir has no app-plugin.json at all → skipped
 
         let found = discover(&[root.as_path()]);

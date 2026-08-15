@@ -36,7 +36,10 @@ impl Phase {
     /// Phases in which the agent/container is actively running, so cost/stall
     /// caps and oracle-tampering apply.
     pub fn is_agent_active(self) -> bool {
-        matches!(self, Phase::Spec | Phase::Building | Phase::Checking | Phase::Reviewing)
+        matches!(
+            self,
+            Phase::Spec | Phase::Building | Phase::Checking | Phase::Reviewing
+        )
     }
 
     /// Non-terminal phases can always be halted or fail fatally.
@@ -73,9 +76,16 @@ mod tests {
             Phase::NeedsHuman,
             Phase::Halted,
         ] {
-            let s = serde_json::to_value(p).unwrap().as_str().unwrap().to_string();
-            assert_eq!(TERMINAL_PHASE_STRS.contains(&s.as_str()), p.is_terminal(),
-                "{s} membership must equal is_terminal()");
+            let s = serde_json::to_value(p)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                TERMINAL_PHASE_STRS.contains(&s.as_str()),
+                p.is_terminal(),
+                "{s} membership must equal is_terminal()"
+            );
         }
     }
 }

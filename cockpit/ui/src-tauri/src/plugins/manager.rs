@@ -11,6 +11,9 @@ use tauri::{AppHandle, Manager, State};
 
 /// One launched plugin's runtime record.
 pub struct Running {
+    // Recorded at launch so the Phase-6 crash watcher can poll this child; teardown
+    // itself goes through `lifecycle.stop`, so nothing reads it back yet.
+    #[allow(dead_code)]
     pub child_id: Option<u64>,
     pub owned: bool,
 }
@@ -41,6 +44,8 @@ impl PluginManager {
     }
 
     /// The head URL for a discovered plugin (used by the Phase-6 embedding layer).
+    // That layer is the only caller and has not landed yet.
+    #[allow(dead_code)]
     pub fn url_for(&self, id: &str) -> Option<String> {
         self.discovered
             .lock()

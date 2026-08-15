@@ -80,9 +80,7 @@ pub fn run() {
                 // LANE-B → HOST: stop the fleetd-serve sidecar first so the
                 // supervisor doesn't respawn it as we tear down, and no
                 // orphaned process is left behind.
-                app_handle
-                    .state::<sidecar::SidecarSupervisor>()
-                    .shutdown();
+                app_handle.state::<sidecar::SidecarSupervisor>().shutdown();
                 let mgr = app_handle.state::<plugins::manager::PluginManager>();
                 mgr.stop_all_owned(30_000); // total budget; kept under the OS force-kill ceiling
                 app_handle.exit(0);

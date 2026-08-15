@@ -27,8 +27,15 @@ pub fn parse_usage(stdout: &[String]) -> Option<Usage> {
             .and_then(|u| u.get("output_tokens"))
             .and_then(|n| n.as_u64())
             .unwrap_or(0);
-        let cost_usd = v.get("total_cost_usd").and_then(|c| c.as_f64()).unwrap_or(0.0);
-        return Some(Usage { tokens_in, tokens_out, cost_usd });
+        let cost_usd = v
+            .get("total_cost_usd")
+            .and_then(|c| c.as_f64())
+            .unwrap_or(0.0);
+        return Some(Usage {
+            tokens_in,
+            tokens_out,
+            cost_usd,
+        });
     }
     None
 }

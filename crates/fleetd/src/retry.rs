@@ -21,8 +21,14 @@ pub enum StepOutcome {
 /// Case-insensitive substrings that mark an Anthropic throttle (Task-1 spike may
 /// extend these). Only consulted on a NON-ZERO exit, so a clean run is never a
 /// false positive.
-const RL_PATTERNS: &[&str] =
-    &["rate limit", "rate_limit", "overloaded", "429", "529", "usage limit"];
+const RL_PATTERNS: &[&str] = &[
+    "rate limit",
+    "rate_limit",
+    "overloaded",
+    "429",
+    "529",
+    "usage limit",
+];
 
 /// Classify an exec output. Conservative: `Ok` unless a non-zero exit carries a
 /// recognized rate-limit signal on stdout or stderr.
@@ -30,14 +36,10 @@ pub fn classify(out: &ExecOutput) -> StepOutcome {
     if out.exit_code == 0 {
         return StepOutcome::Ok;
     }
-    let hit = out
-        .stdout
-        .iter()
-        .chain(out.stderr.iter())
-        .any(|line| {
-            let l = line.to_lowercase();
-            RL_PATTERNS.iter().any(|p| l.contains(p))
-        });
+    let hit = out.stdout.iter().chain(out.stderr.iter()).any(|line| {
+        let l = line.to_lowercase();
+        RL_PATTERNS.iter().any(|p| l.contains(p))
+    });
     if hit {
         StepOutcome::RateLimited
     } else {
@@ -55,7 +57,11 @@ pub struct Backoff {
 
 impl Backoff {
     pub fn new(base_secs: u64, cap_secs: u64) -> Self {
-        Self { attempt: 0, base_secs, cap_secs }
+        Self {
+            attempt: 0,
+            base_secs,
+            cap_secs,
+        }
     }
 
     pub fn next_delay(&mut self) -> Duration {
@@ -73,19 +79,28 @@ pub fn wall_clock_exceeded(elapsed: Duration, rl_elapsed: Duration, cap_secs: u6
 }
 
 fn env_secs(key: &str, default: u64) -> u64 {
-    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 /// Backoff/envelope knobs (env-tunable; defaults chosen for SP1).
-pub fn rl_base_secs() -> u64 { env_secs("CC_RL_BASE_SECS", 2) }
-pub fn rl_cap_secs() -> u64 { env_secs("CC_RL_CAP_SECS", 300) }
-pub fn rl_max_wait_secs() -> u64 { env_secs("CC_RL_MAX_WAIT_SECS", 3600) }
+pub fn rl_base_secs() -> u64 {
+    env_secs("CC_RL_BASE_SECS", 2)
+}
+pub fn rl_cap_secs() -> u64 {
+    env_secs("CC_RL_CAP_SECS", 300)
+}
+pub fn rl_max_wait_secs() -> u64 {
+    env_secs("CC_RL_MAX_WAIT_SECS", 3600)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
     use crate::runner::Usage;
+    use std::time::Duration;
 
     fn out(code: i32, stdout: &[&str], stderr: &[&str]) -> ExecOutput {
         ExecOutput {
@@ -110,24 +125,42 @@ mod tests {
 
     #[test]
     fn overloaded_on_stdout_is_detected() {
-        assert_eq!(classify(&out(1, &["Error: Overloaded (529)"], &[])), StepOutcome::RateLimited);
+        assert_eq!(
+            classify(&out(1, &["Error: Overloaded (529)"], &[])),
+            StepOutcome::RateLimited
+        );
     }
 
     #[test]
     fn unrelated_nonzero_exit_is_ok() {
         // e.g. a timeout-kill (124) or a normal agent failure — preserved as today.
-        assert_eq!(classify(&out(124, &["compilation failed"], &[])), StepOutcome::Ok);
+        assert_eq!(
+            classify(&out(124, &["compilation failed"], &[])),
+            StepOutcome::Ok
+        );
     }
 
     #[test]
     fn wall_clock_exempts_rate_limit_time() {
         let cap = 30; // 30s cap
-        // 100s elapsed but 80s of it was rate-limit waiting => 20s effective <= 30s.
-        assert!(!wall_clock_exceeded(Duration::from_secs(100), Duration::from_secs(80), cap));
+                      // 100s elapsed but 80s of it was rate-limit waiting => 20s effective <= 30s.
+        assert!(!wall_clock_exceeded(
+            Duration::from_secs(100),
+            Duration::from_secs(80),
+            cap
+        ));
         // Same elapsed, no exemption => 100s > 30s => exceeded.
-        assert!(wall_clock_exceeded(Duration::from_secs(100), Duration::ZERO, cap));
+        assert!(wall_clock_exceeded(
+            Duration::from_secs(100),
+            Duration::ZERO,
+            cap
+        ));
         // cap 0 disables the check entirely.
-        assert!(!wall_clock_exceeded(Duration::from_secs(9999), Duration::ZERO, 0));
+        assert!(!wall_clock_exceeded(
+            Duration::from_secs(9999),
+            Duration::ZERO,
+            0
+        ));
     }
 
     #[test]

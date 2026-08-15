@@ -102,7 +102,10 @@ mod tests {
         let actions = reconcile(&["x".into(), "y".into()], &[]);
         assert_eq!(
             actions,
-            vec![Action::HaltNoContainer("x".into()), Action::HaltNoContainer("y".into())]
+            vec![
+                Action::HaltNoContainer("x".into()),
+                Action::HaltNoContainer("y".into())
+            ]
         );
     }
 
@@ -116,9 +119,19 @@ mod tests {
             &["u1".into()],              // live drivers
             &["u1".into(), "u3".into()], // running containers
         );
-        assert_eq!(actions.len(), 2, "healthy u1 must produce no action: {actions:?}");
-        assert!(actions.contains(&Action::HaltNoContainer("u2".into())), "stranded u2 halted");
-        assert!(actions.contains(&Action::ReapStray("u3".into())), "stray u3 reaped");
+        assert_eq!(
+            actions.len(),
+            2,
+            "healthy u1 must produce no action: {actions:?}"
+        );
+        assert!(
+            actions.contains(&Action::HaltNoContainer("u2".into())),
+            "stranded u2 halted"
+        );
+        assert!(
+            actions.contains(&Action::ReapStray("u3".into())),
+            "stray u3 reaped"
+        );
         assert!(
             !actions.iter().any(|a| matches!(a,
                 Action::HaltWithContainer(x) | Action::HaltNoContainer(x) | Action::ReapStray(x)
@@ -137,8 +150,14 @@ mod tests {
     #[test]
     fn steady_state_no_drift_is_a_no_op() {
         // Every non-terminal unit is live and has its container; nothing to do.
-        let actions =
-            reconcile_live(&["u1".into(), "u2".into()], &["u1".into(), "u2".into()], &["u1".into(), "u2".into()]);
-        assert!(actions.is_empty(), "steady state with no drift yields no actions: {actions:?}");
+        let actions = reconcile_live(
+            &["u1".into(), "u2".into()],
+            &["u1".into(), "u2".into()],
+            &["u1".into(), "u2".into()],
+        );
+        assert!(
+            actions.is_empty(),
+            "steady state with no drift yields no actions: {actions:?}"
+        );
     }
 }

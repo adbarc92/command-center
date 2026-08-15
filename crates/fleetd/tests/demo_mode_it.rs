@@ -41,7 +41,10 @@ fn demo_script(spec: &UnitSpec) -> Vec<ExecOutput> {
     for remaining in (0..floor).rev() {
         s.push(FakeRunner::ok(0.03, &["implementing the change"]));
         s.push(FakeRunner::ok(0.0, &["tests: 1 passing"]));
-        s.push(FakeRunner::ok(0.04, &[&format!("review done\nBLOCKERS={remaining}")]));
+        s.push(FakeRunner::ok(
+            0.04,
+            &[&format!("review done\nBLOCKERS={remaining}")],
+        ));
     }
     s
 }
@@ -55,7 +58,9 @@ fn demo_spec(floor: u32) -> UnitSpec {
         task: "add a sum() helper".into(),
         usd_cap: 5.0,
         wall_clock_secs: 1800,
-        gate: GateConfig { min_review_rounds: floor.max(1) },
+        gate: GateConfig {
+            min_review_rounds: floor.max(1),
+        },
         repo_url: "https://github.com/adbarc92/command-center-agent-sandbox".into(),
         repo_slug: "adbarc92/command-center-agent-sandbox".into(),
         base_branch: "main".into(),
@@ -128,24 +133,37 @@ async fn demo_mission_reaches_terminal_on_fakes_no_docker_no_real_pr() {
         Phase::PrOpen,
         Phase::Done,
     ] {
-        assert!(seq.contains(&required), "missing phase {required:?} in {seq:?}");
+        assert!(
+            seq.contains(&required),
+            "missing phase {required:?} in {seq:?}"
+        );
     }
     // T1 freezes the oracle automatically — never parks for human approval in demo.
     assert!(
         !seq.contains(&Phase::AwaitingOracleApproval),
         "T1 demo auto-freezes the oracle; no human gate"
     );
-    assert!(!seq.contains(&Phase::Failed), "demo happy path never fails: {seq:?}");
+    assert!(
+        !seq.contains(&Phase::Failed),
+        "demo happy path never fails: {seq:?}"
+    );
 
     // 3. No REAL PR: the only PR artifact is FakeForge's faked url, never github.com.
     let pr_refs: Vec<&str> = events
         .iter()
         .filter_map(|e| match &e.event {
-            Event::Artifact { kind: fleet_core::ArtifactKind::Pr, reference } => Some(reference.as_str()),
+            Event::Artifact {
+                kind: fleet_core::ArtifactKind::Pr,
+                reference,
+            } => Some(reference.as_str()),
             _ => None,
         })
         .collect();
-    assert_eq!(pr_refs, vec![FAKE_PR_URL], "demo opens only a FAKED PR, never a real one");
+    assert_eq!(
+        pr_refs,
+        vec![FAKE_PR_URL],
+        "demo opens only a FAKED PR, never a real one"
+    );
     assert!(
         !pr_refs.iter().any(|r| r.contains("github.com")),
         "no real github.com PR may be opened in demo: {pr_refs:?}"
@@ -162,13 +180,21 @@ async fn demo_mission_reaches_terminal_on_fakes_no_docker_no_real_pr() {
             _ => None,
         })
         .fold(0.0_f64, f64::max);
-    assert!((final_cost - 0.16).abs() < 1e-9, "demo metered fake cost is 0.16, got {final_cost}");
-    assert!(final_cost < 5.0, "demo never approaches the usd cap — no real spend");
+    assert!(
+        (final_cost - 0.16).abs() < 1e-9,
+        "demo metered fake cost is 0.16, got {final_cost}"
+    );
+    assert!(
+        final_cost < 5.0,
+        "demo never approaches the usd cap — no real spend"
+    );
 
     // 5. The event stream emitted normally (the cockpit has something to render):
     //    iterations, logs, findings, a terminal Done.
     assert!(
-        events.iter().any(|e| matches!(e.event, Event::Iteration { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e.event, Event::Iteration { .. })),
         "demo emits Iteration events"
     );
     assert!(
@@ -176,12 +202,17 @@ async fn demo_mission_reaches_terminal_on_fakes_no_docker_no_real_pr() {
         "demo emits Log events"
     );
     assert!(
-        events.iter().any(|e| matches!(&e.event, Event::Done { result } if result == "done")),
+        events
+            .iter()
+            .any(|e| matches!(&e.event, Event::Done { result } if result == "done")),
         "demo emits a terminal Done(done)"
     );
     // Seqs are strictly increasing — a coherent stream for the WS replay/dedup.
     let seqs: Vec<u64> = events.iter().map(|e| e.seq).collect();
-    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "event seqs strictly increase: {seqs:?}");
+    assert!(
+        seqs.windows(2).all(|w| w[0] < w[1]),
+        "event seqs strictly increase: {seqs:?}"
+    );
 }
 
 /// The review gate opens exactly on the floor: floor=3 runs three review rounds
@@ -195,7 +226,10 @@ async fn demo_runs_full_review_rounds_to_the_floor() {
         .iter()
         .filter(|e| matches!(e.event, Event::Iteration { kind: fleet_core::IterationKind::Review, n } if n >= 1))
         .count();
-    assert_eq!(review_rounds, 3, "floor=3 demo runs three review rounds before the gate opens");
+    assert_eq!(
+        review_rounds, 3,
+        "floor=3 demo runs three review rounds before the gate opens"
+    );
 }
 
 /// Guard against drift: this test's mirrored `demo_script` must match the daemon's

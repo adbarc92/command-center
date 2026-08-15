@@ -11,7 +11,7 @@ impl Probe for HttpProbe {
         match ureq::get(url).timeout(Duration::from_millis(2000)).call() {
             Ok(resp) => Some(resp.status()),
             Err(ureq::Error::Status(code, _)) => Some(code), // 3xx/4xx still a status
-            Err(_) => None,                                   // connection refused etc.
+            Err(_) => None,                                  // connection refused etc.
         }
     }
 }
@@ -74,9 +74,7 @@ impl Spawner for ShellSpawner {
         for (k, v) in vars {
             c.arg("--build-arg").arg(format!("{k}={v}"));
         }
-        c.status()
-            .map(|s| s.code().unwrap_or(-1))
-            .unwrap_or(-1)
+        c.status().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1)
     }
 
     /// Used for the START step: `env` are runtime env vars applied to the process.

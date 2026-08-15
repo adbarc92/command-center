@@ -25,7 +25,9 @@ pub enum Trigger {
     EmptyDiff,
     /// A review round finished; `gate_met` is the evidence-based gate verdict
     /// (green + no unresolved blockers + non-increasing + round floor).
-    ReviewFinished { gate_met: bool },
+    ReviewFinished {
+        gate_met: bool,
+    },
     /// Trial merge into a fresh base succeeded.
     MergeClean,
     /// Trial merge hit conflicts.
@@ -189,36 +191,55 @@ mod tests {
 
     #[test]
     fn checks_fail_loops_back_to_building() {
-        assert_eq!(transition(Checking, Tier::T1, Trigger::ChecksFailed), Some(Building));
+        assert_eq!(
+            transition(Checking, Tier::T1, Trigger::ChecksFailed),
+            Some(Building)
+        );
     }
 
     #[test]
     fn review_not_met_loops_back_to_building() {
         assert_eq!(
-            transition(Reviewing, Tier::T1, Trigger::ReviewFinished { gate_met: false }),
+            transition(
+                Reviewing,
+                Tier::T1,
+                Trigger::ReviewFinished { gate_met: false }
+            ),
             Some(Building)
         );
     }
 
     #[test]
     fn empty_diff_is_no_change_not_failure() {
-        assert_eq!(transition(Checking, Tier::T1, Trigger::EmptyDiff), Some(NoChange));
+        assert_eq!(
+            transition(Checking, Tier::T1, Trigger::EmptyDiff),
+            Some(NoChange)
+        );
     }
 
     #[test]
     fn merge_conflict_needs_human() {
-        assert_eq!(transition(MergeCheck, Tier::T1, Trigger::MergeConflict), Some(NeedsHuman));
+        assert_eq!(
+            transition(MergeCheck, Tier::T1, Trigger::MergeConflict),
+            Some(NeedsHuman)
+        );
     }
 
     #[test]
     fn pr_dirty_after_open_needs_human() {
-        assert_eq!(transition(PrOpen, Tier::T1, Trigger::PrDirty), Some(NeedsHuman));
+        assert_eq!(
+            transition(PrOpen, Tier::T1, Trigger::PrDirty),
+            Some(NeedsHuman)
+        );
     }
 
     #[test]
     fn cap_breach_only_interrupts_agent_active_phases() {
         // Active phase: interrupted.
-        assert_eq!(transition(Building, Tier::T1, Trigger::CapBreach), Some(NeedsHuman));
+        assert_eq!(
+            transition(Building, Tier::T1, Trigger::CapBreach),
+            Some(NeedsHuman)
+        );
         // Daemon-only phase: cap breach is not meaningful → invalid.
         assert_eq!(transition(MergeCheck, Tier::T1, Trigger::CapBreach), None);
     }
@@ -230,7 +251,15 @@ mod tests {
 
     #[test]
     fn fatal_error_from_any_active_phase_fails() {
-        for p in [Provisioning, Spec, Building, Checking, Reviewing, MergeCheck, PrOpen] {
+        for p in [
+            Provisioning,
+            Spec,
+            Building,
+            Checking,
+            Reviewing,
+            MergeCheck,
+            PrOpen,
+        ] {
             assert_eq!(transition(p, Tier::T1, Trigger::FatalError), Some(Failed));
         }
     }
@@ -239,25 +268,46 @@ mod tests {
     fn halt_and_resume_round_trip() {
         assert_eq!(transition(Building, Tier::T1, Trigger::Halt), Some(Halted));
         // Resume re-provisions (reuses the volume) before re-entering the loop.
-        assert_eq!(transition(Halted, Tier::T1, Trigger::Resume), Some(Provisioning));
+        assert_eq!(
+            transition(Halted, Tier::T1, Trigger::Resume),
+            Some(Provisioning)
+        );
     }
 
     #[test]
     fn resume_goes_to_provisioning_not_building() {
-        assert_eq!(transition(NeedsHuman, Tier::T1, Trigger::Resume), Some(Provisioning));
-        assert_eq!(transition(Halted, Tier::T1, Trigger::Resume), Some(Provisioning));
+        assert_eq!(
+            transition(NeedsHuman, Tier::T1, Trigger::Resume),
+            Some(Provisioning)
+        );
+        assert_eq!(
+            transition(Halted, Tier::T1, Trigger::Resume),
+            Some(Provisioning)
+        );
     }
 
     #[test]
     fn abandon_from_needs_human_fails() {
-        assert_eq!(transition(NeedsHuman, Tier::T1, Trigger::Abandon), Some(Failed));
+        assert_eq!(
+            transition(NeedsHuman, Tier::T1, Trigger::Abandon),
+            Some(Failed)
+        );
     }
 
     #[test]
     fn terminal_phases_reject_everything() {
         for p in [Done, NoChange, Failed] {
-            for t in [Trigger::Resume, Trigger::Start, Trigger::Halt, Trigger::FatalError] {
-                assert_eq!(transition(p, Tier::T1, t), None, "{p:?} should reject {t:?}");
+            for t in [
+                Trigger::Resume,
+                Trigger::Start,
+                Trigger::Halt,
+                Trigger::FatalError,
+            ] {
+                assert_eq!(
+                    transition(p, Tier::T1, t),
+                    None,
+                    "{p:?} should reject {t:?}"
+                );
             }
         }
     }
@@ -273,9 +323,15 @@ mod tests {
     #[test]
     fn retries_exhausted_parks_agent_phases_at_needs_human() {
         for p in [Spec, Building, Reviewing] {
-            assert_eq!(transition(p, Tier::T1, Trigger::RetriesExhausted), Some(NeedsHuman));
+            assert_eq!(
+                transition(p, Tier::T1, Trigger::RetriesExhausted),
+                Some(NeedsHuman)
+            );
         }
         // Not meaningful from a daemon-only phase → invalid.
-        assert_eq!(transition(MergeCheck, Tier::T1, Trigger::RetriesExhausted), None);
+        assert_eq!(
+            transition(MergeCheck, Tier::T1, Trigger::RetriesExhausted),
+            None
+        );
     }
 }

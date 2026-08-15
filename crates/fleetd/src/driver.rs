@@ -3,7 +3,9 @@
 //! contract and honoring inbound commands. Fully exercisable against the fakes.
 
 use crate::forge::{Forge, MergeResult, Mergeability};
-use crate::retry::{classify, rl_base_secs, rl_cap_secs, rl_max_wait_secs, Backoff, StepOutcome, RL_REASON};
+use crate::retry::{
+    classify, rl_base_secs, rl_cap_secs, rl_max_wait_secs, Backoff, StepOutcome, RL_REASON,
+};
 use crate::runner::{ExecOutput, Handle, Runner, UnitSpec};
 use crate::{claude_meter, steps};
 use fleet_core::{
@@ -152,7 +154,12 @@ impl<R: Runner, F: Forge> Run<R, F> {
         match transition(from, self.spec.tier, trigger) {
             Some(next) => {
                 self.phase = next;
-                self.emit(Event::PhaseChanged { from, to: next, reason, cmd_id });
+                self.emit(Event::PhaseChanged {
+                    from,
+                    to: next,
+                    reason,
+                    cmd_id,
+                });
             }
             None => {
                 self.emit(Event::Error {
@@ -262,7 +269,10 @@ impl<R: Runner, F: Forge> Run<R, F> {
                 }
             };
             for line in &out.stdout {
-                self.emit(Event::Log { stream, line: line.clone() });
+                self.emit(Event::Log {
+                    stream,
+                    line: line.clone(),
+                });
             }
             if out.usage.is_none() {
                 out.usage = claude_meter::parse_usage(&out.stdout);
@@ -316,7 +326,8 @@ impl<R: Runner, F: Forge> Run<R, F> {
                                 retryable: false,
                                 detail: format!(
                                     "command {} not valid in {:?}",
-                                    other.cmd_id(), self.phase
+                                    other.cmd_id(),
+                                    self.phase
                                 ),
                             }), // keep waiting on the same `until`
                             // Channel closed (no interactive commands, e.g. run_once):
@@ -340,7 +351,10 @@ impl<R: Runner, F: Forge> Run<R, F> {
     async fn read_oracle_files(&mut self) -> Option<Vec<String>> {
         // Scope the immutable field borrows so they end before the &mut self emit/goto.
         let result = {
-            let handle = self.handle.as_ref().expect("handle present in agent-active phase");
+            let handle = self
+                .handle
+                .as_ref()
+                .expect("handle present in agent-active phase");
             self.runner.read_files(handle, "*.test.js").await
         };
         match result {
@@ -351,7 +365,11 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     retryable: false,
                     detail: format!("oracle read failed: {e}"),
                 });
-                self.goto(Trigger::OracleTampering, Some("oracle unreadable".into()), None);
+                self.goto(
+                    Trigger::OracleTampering,
+                    Some("oracle unreadable".into()),
+                    None,
+                );
                 None
             }
         }
@@ -392,8 +410,13 @@ impl<R: Runner, F: Forge> Run<R, F> {
                             cap: None,
                             detail: String::new(),
                         });
-                        self.permit =
-                            Some(self.permits.clone().acquire_owned().await.expect("semaphore"));
+                        self.permit = Some(
+                            self.permits
+                                .clone()
+                                .acquire_owned()
+                                .await
+                                .expect("semaphore"),
+                        );
                     }
                     match self.runner.provision(&self.spec).await {
                         Ok(h) => {
@@ -416,19 +439,26 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     // On resume the test set is already frozen in the reused volume;
                     // don't re-run/re-charge the oracle or re-trigger approval.
                     if self.resume && self.spec.oracle_frozen {
-                        self.goto(Trigger::OracleFrozen, Some("oracle already frozen".into()), None);
+                        self.goto(
+                            Trigger::OracleFrozen,
+                            Some("oracle already frozen".into()),
+                            None,
+                        );
                         continue;
                     }
                     if self.check_halt() {
                         continue;
                     }
                     let argv = steps::oracle(&self.spec, self.remaining());
-                    let Some(out) =
-                        self.agent_exec(IterationKind::Review, 0, LogStream::Agent, true, &argv).await
+                    let Some(out) = self
+                        .agent_exec(IterationKind::Review, 0, LogStream::Agent, true, &argv)
+                        .await
                     else {
                         continue;
                     };
-                    let Some(frozen) = self.read_oracle_files().await else { continue };
+                    let Some(frozen) = self.read_oracle_files().await else {
+                        continue;
+                    };
                     if frozen.is_empty() {
                         self.emit(Event::Error {
                             scope: ErrorScope::System,
@@ -464,14 +494,15 @@ impl<R: Runner, F: Forge> Run<R, F> {
                             Command::RejectOracle { .. } => {
                                 self.goto(Trigger::OracleRejected, None, Some(cid))
                             }
-                            Command::Abandon { .. } => {
-                                self.goto(Trigger::Abandon, None, Some(cid))
-                            }
+                            Command::Abandon { .. } => self.goto(Trigger::Abandon, None, Some(cid)),
                             Command::Halt { .. } => self.goto(Trigger::Halt, None, Some(cid)),
                             other => self.emit(Event::Error {
                                 scope: ErrorScope::System,
                                 retryable: false,
-                                detail: format!("{} not valid while awaiting oracle", other.cmd_id()),
+                                detail: format!(
+                                    "{} not valid while awaiting oracle",
+                                    other.cmd_id()
+                                ),
                             }),
                         }
                     }
@@ -489,8 +520,9 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         _ => "none".into(),
                     };
                     let argv = steps::build(&self.spec, &findings, self.remaining());
-                    let Some(out) =
-                        self.agent_exec(IterationKind::Build, n, LogStream::Agent, true, &argv).await
+                    let Some(out) = self
+                        .agent_exec(IterationKind::Build, n, LogStream::Agent, true, &argv)
+                        .await
                     else {
                         continue;
                     };
@@ -501,7 +533,11 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     // The daemon commits the agent's work (agents edit but don't commit),
                     // so the branch carries the change into the bundle/PR.
                     let handle = self.handle.clone().expect("commit without a handle");
-                    if let Err(e) = self.runner.commit_all(&handle, &format!("wip: build {n}")).await {
+                    if let Err(e) = self
+                        .runner
+                        .commit_all(&handle, &format!("wip: build {n}"))
+                        .await
+                    {
                         self.emit(Event::Error {
                             scope: ErrorScope::System,
                             retryable: false,
@@ -516,22 +552,29 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         continue;
                     }
                     if let Some(frozen_hash) = self.oracle_hash.clone() {
-                        let Some(current) = self.read_oracle_files().await else { continue };
+                        let Some(current) = self.read_oracle_files().await else {
+                            continue;
+                        };
                         if hash_oracle(&current) != frozen_hash {
                             self.emit(Event::Blocked {
                                 reason: "frozen oracle tests were modified".into(),
                                 cap: None,
                                 detail: String::new(),
                             });
-                            self.goto(Trigger::OracleTampering, Some("oracle tampering".into()), None);
+                            self.goto(
+                                Trigger::OracleTampering,
+                                Some("oracle tampering".into()),
+                                None,
+                            );
                             continue;
                         }
                     }
                     self.n_check += 1;
                     let n = self.n_check;
                     let argv = steps::check(&self.spec);
-                    let Some(out) =
-                        self.agent_exec(IterationKind::Check, n, LogStream::Check, false, &argv).await
+                    let Some(out) = self
+                        .agent_exec(IterationKind::Check, n, LogStream::Check, false, &argv)
+                        .await
                     else {
                         continue;
                     };
@@ -549,7 +592,9 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     let base = self.spec.base_branch.clone();
                     let branch = self.spec.branch.clone();
                     match self.runner.has_diff(&handle, &base, &branch).await {
-                        Ok(false) => self.goto(Trigger::EmptyDiff, Some("no changes vs base".into()), None),
+                        Ok(false) => {
+                            self.goto(Trigger::EmptyDiff, Some("no changes vs base".into()), None)
+                        }
                         Ok(true) => self.goto(Trigger::ChecksPassed, None, None),
                         Err(e) => {
                             // On a diff-check error, proceed rather than stall.
@@ -570,8 +615,9 @@ impl<R: Runner, F: Forge> Run<R, F> {
                     self.n_review += 1;
                     let round = self.n_review;
                     let argv = steps::review(self.remaining(), self.spec.wall_clock_secs);
-                    let Some(out) =
-                        self.agent_exec(IterationKind::Review, round, LogStream::Agent, true, &argv).await
+                    let Some(out) = self
+                        .agent_exec(IterationKind::Review, round, LogStream::Agent, true, &argv)
+                        .await
                     else {
                         continue;
                     };
@@ -694,8 +740,14 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         let _ = self.runner.discard(&h).await;
                     }
                     self.permit = None;
-                    let result = if self.phase == Phase::Done { "done" } else { "no_change" };
-                    self.emit(Event::Done { result: result.into() });
+                    let result = if self.phase == Phase::Done {
+                        "done"
+                    } else {
+                        "no_change"
+                    };
+                    self.emit(Event::Done {
+                        result: result.into(),
+                    });
                     return self.phase;
                 }
                 Phase::Failed => {
@@ -704,7 +756,9 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         let _ = self.runner.teardown(&h).await;
                     }
                     self.permit = None;
-                    self.emit(Event::Done { result: "failed".into() });
+                    self.emit(Event::Done {
+                        result: "failed".into(),
+                    });
                     return self.phase;
                 }
             }
@@ -738,7 +792,11 @@ impl<R: Runner, F: Forge> Run<R, F> {
             cap: None,
             detail: format!("after {MAX_MERGEABLE_POLLS} polls"),
         });
-        self.goto(Trigger::PrDirty, Some("mergeable poll timeout".into()), None);
+        self.goto(
+            Trigger::PrDirty,
+            Some("mergeable poll timeout".into()),
+            None,
+        );
     }
 
     fn fail_closed(&mut self) {
@@ -784,7 +842,9 @@ mod tests {
             task: "do a thing".into(),
             usd_cap,
             wall_clock_secs: 0,
-            gate: GateConfig { min_review_rounds: floor },
+            gate: GateConfig {
+                min_review_rounds: floor,
+            },
             repo_url: "https://github.com/x/y".into(),
             repo_slug: "x/y".into(),
             base_branch: "main".into(),
@@ -826,8 +886,15 @@ mod tests {
         let (ctx, crx) = mpsc::unbounded_channel();
         let (etx, mut erx) = mpsc::unbounded_channel();
         drop(ctx);
-        let _final_phase =
-            run(runner, FakeForge::default(), spec, RunCtx::standalone(), crx, etx).await;
+        let _final_phase = run(
+            runner,
+            FakeForge::default(),
+            spec,
+            RunCtx::standalone(),
+            crx,
+            etx,
+        )
+        .await;
         drain(&mut erx)
     }
 
@@ -897,8 +964,16 @@ mod tests {
         )
         .await;
         assert_eq!(phase, Phase::Done);
-        assert_eq!(discards.load(std::sync::atomic::Ordering::Relaxed), 1, "Done discards the volume");
-        assert_eq!(teardowns.load(std::sync::atomic::Ordering::Relaxed), 0, "Done keeps no volume");
+        assert_eq!(
+            discards.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "Done discards the volume"
+        );
+        assert_eq!(
+            teardowns.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "Done keeps no volume"
+        );
     }
 
     #[tokio::test]
@@ -934,11 +1009,15 @@ mod tests {
         let evs = drain(&mut erx);
         // (a) the oracle was NOT re-run on resume
         assert!(
-            !evs.iter().any(|e| matches!(e.event, Event::OracleProposed { .. })),
+            !evs.iter()
+                .any(|e| matches!(e.event, Event::OracleProposed { .. })),
             "resume must not re-run the oracle"
         );
         // (b) seq continues from start_seq (first emitted event has seq > 5)
-        assert!(evs.first().unwrap().seq > 5, "seq must continue from start_seq");
+        assert!(
+            evs.first().unwrap().seq > 5,
+            "seq must continue from start_seq"
+        );
         // (c) cost continues from start_cost (a metric reflects >= 0.5)
         let max_cost = evs
             .iter()
@@ -947,9 +1026,16 @@ mod tests {
                 _ => None,
             })
             .fold(0.0, f64::max);
-        assert!(max_cost >= 0.5, "cost must continue from start_cost, got {max_cost}");
+        assert!(
+            max_cost >= 0.5,
+            "cost must continue from start_cost, got {max_cost}"
+        );
         // (d) the permit is released once the unit finishes
-        assert_eq!(permits.available_permits(), 1, "permit released at terminal");
+        assert_eq!(
+            permits.available_permits(),
+            1,
+            "permit released at terminal"
+        );
     }
 
     #[tokio::test]
@@ -963,8 +1049,8 @@ mod tests {
         // re-arms on resume without a live Spec phase.
         let good = vec!["test('x', () => assert(sum(2,3)===5))".to_string()];
         let tampered = vec!["test('x', () => assert(true))".to_string()]; // gutted at build time
-        // Resumed unit: the oracle is already frozen, so the script has NO oracle
-        // call — just one build/check/review cycle (floor 1 opens the gate).
+                                                                          // Resumed unit: the oracle is already frozen, so the script has NO oracle
+                                                                          // call — just one build/check/review cycle (floor 1 opens the gate).
         let script = cycle(0);
         // Only ONE scripted read: the Checking-phase read (Spec is skipped on resume).
         let runner = FakeRunner::new(script).oracle_contents(vec![tampered]);
@@ -993,13 +1079,20 @@ mod tests {
 
         let phase = loop {
             let e = erx.recv().await.expect("stream closed before NeedsHuman");
-            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = e.event {
+            if let Event::PhaseChanged {
+                to: Phase::NeedsHuman,
+                ..
+            } = e.event
+            {
                 break Phase::NeedsHuman;
             }
         };
         assert_eq!(phase, Phase::NeedsHuman);
 
-        ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
+        ctx.send(Command::Abandon {
+            cmd_id: "cleanup".into(),
+        })
+        .unwrap();
         let _ = handle.await;
     }
 
@@ -1035,11 +1128,18 @@ mod tests {
         // Provisioning (no container/cost) while the only slot is held.
         loop {
             let e = erx.recv().await.unwrap();
-            if matches!(&e.event, Event::Blocked { reason, .. } if reason == "awaiting concurrency slot") {
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == "awaiting concurrency slot")
+            {
                 break;
             }
             assert!(
-                !matches!(e.event, Event::PhaseChanged { from: Phase::Provisioning, .. }),
+                !matches!(
+                    e.event,
+                    Event::PhaseChanged {
+                        from: Phase::Provisioning,
+                        ..
+                    }
+                ),
                 "must not leave Provisioning before acquiring a slot"
             );
         }
@@ -1048,7 +1148,11 @@ mod tests {
         // Free the slot → the driver acquires it and runs to completion.
         drop(held);
         assert_eq!(h.await.unwrap(), Phase::Done);
-        assert_eq!(permits.available_permits(), 1, "permit released at terminal");
+        assert_eq!(
+            permits.available_permits(),
+            1,
+            "permit released at terminal"
+        );
     }
 
     #[tokio::test]
@@ -1094,14 +1198,27 @@ mod tests {
         // Wait until the unit parks at AwaitingOracleApproval, accumulating events.
         let mut all = vec![];
         loop {
-            let e = erx.recv().await.expect("stream closed before approval gate");
-            let park = matches!(e.event, Event::PhaseChanged { to: Phase::AwaitingOracleApproval, .. });
+            let e = erx
+                .recv()
+                .await
+                .expect("stream closed before approval gate");
+            let park = matches!(
+                e.event,
+                Event::PhaseChanged {
+                    to: Phase::AwaitingOracleApproval,
+                    ..
+                }
+            );
             all.push(e);
             if park {
                 break;
             }
         }
-        ctx.send(Command::ApproveOracle { cmd_id: "c1".into(), edited_test_files: None }).unwrap();
+        ctx.send(Command::ApproveOracle {
+            cmd_id: "c1".into(),
+            edited_test_files: None,
+        })
+        .unwrap();
 
         let final_phase = handle.await.unwrap();
         assert_eq!(final_phase, Phase::Done);
@@ -1126,7 +1243,10 @@ mod tests {
     #[tokio::test]
     async fn cap_breach_routes_to_needs_human() {
         // oracle is cheap; the first build blows the $0.5 cap.
-        let script = vec![FakeRunner::ok(0.1, &["test_a.rs"]), FakeRunner::ok(1.0, &["built"])];
+        let script = vec![
+            FakeRunner::ok(0.1, &["test_a.rs"]),
+            FakeRunner::ok(1.0, &["built"]),
+        ];
 
         let (ctx, crx) = mpsc::unbounded_channel();
         let (etx, mut erx) = mpsc::unbounded_channel();
@@ -1143,11 +1263,20 @@ mod tests {
         // It should park at NeedsHuman; then we abandon to terminate.
         loop {
             let e = erx.recv().await.expect("stream closed before cap breach");
-            if matches!(e.event, Event::PhaseChanged { to: Phase::NeedsHuman, .. }) {
+            if matches!(
+                e.event,
+                Event::PhaseChanged {
+                    to: Phase::NeedsHuman,
+                    ..
+                }
+            ) {
                 break;
             }
         }
-        ctx.send(Command::Abandon { cmd_id: "c2".into() }).unwrap();
+        ctx.send(Command::Abandon {
+            cmd_id: "c2".into(),
+        })
+        .unwrap();
 
         let final_phase = handle.await.unwrap();
         assert_eq!(final_phase, Phase::Failed);
@@ -1160,7 +1289,10 @@ mod tests {
         let (etx, mut erx) = mpsc::unbounded_channel();
 
         // Pre-queue a halt; the first agent-active phase (Spec) will pick it up.
-        ctx.send(Command::Halt { cmd_id: "h1".into() }).unwrap();
+        ctx.send(Command::Halt {
+            cmd_id: "h1".into(),
+        })
+        .unwrap();
 
         let handle = tokio::spawn(run(
             FakeRunner::new(script),
@@ -1173,11 +1305,20 @@ mod tests {
 
         loop {
             let e = erx.recv().await.expect("stream closed before halt");
-            if matches!(e.event, Event::PhaseChanged { to: Phase::Halted, .. }) {
+            if matches!(
+                e.event,
+                Event::PhaseChanged {
+                    to: Phase::Halted,
+                    ..
+                }
+            ) {
                 break;
             }
         }
-        ctx.send(Command::Abandon { cmd_id: "a1".into() }).unwrap();
+        ctx.send(Command::Abandon {
+            cmd_id: "a1".into(),
+        })
+        .unwrap();
         assert_eq!(handle.await.unwrap(), Phase::Failed);
     }
 
@@ -1190,7 +1331,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn rate_limited_step_retries_then_succeeds() {
         // Oracle rate-limits once (signal on stderr), then succeeds; floor-1 cycle.
-        let mut script = vec![FakeRunner::rate_limited(), FakeRunner::ok(0.01, &["test_a.rs"])];
+        let mut script = vec![
+            FakeRunner::rate_limited(),
+            FakeRunner::ok(0.01, &["test_a.rs"]),
+        ];
         script.extend(cycle(0));
         let (ctx, crx) = mpsc::unbounded_channel();
         let (etx, mut erx) = mpsc::unbounded_channel();
@@ -1204,7 +1348,11 @@ mod tests {
             etx,
         )
         .await;
-        assert_eq!(final_phase, Phase::Done, "a single rate-limit is retried, not fatal");
+        assert_eq!(
+            final_phase,
+            Phase::Done,
+            "a single rate-limit is retried, not fatal"
+        );
         let evs = drain(&mut erx);
         // The retry surfaced a "rate limited" Blocked.
         assert!(
@@ -1213,9 +1361,22 @@ mod tests {
             "a rate-limit retry emits a Blocked(\"rate limited\")"
         );
         // The oracle Iteration{Review,0} was emitted exactly once (not per retry).
-        let oracle_iters = evs.iter().filter(|e|
-            matches!(e.event, Event::Iteration { kind: IterationKind::Review, n: 0 })).count();
-        assert_eq!(oracle_iters, 1, "Iteration emitted once, before the retry loop");
+        let oracle_iters = evs
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.event,
+                    Event::Iteration {
+                        kind: IterationKind::Review,
+                        n: 0
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            oracle_iters, 1,
+            "Iteration emitted once, before the retry loop"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1242,12 +1403,22 @@ mod tests {
         // Drive virtual time forward until it parks at NeedsHuman.
         loop {
             let e = erx.recv().await.expect("stream closed before NeedsHuman");
-            if matches!(e.event, Event::PhaseChanged { to: Phase::NeedsHuman, .. }) {
+            if matches!(
+                e.event,
+                Event::PhaseChanged {
+                    to: Phase::NeedsHuman,
+                    ..
+                }
+            ) {
                 break;
             }
         }
         // Entry cleanup released the permit when parking.
-        assert_eq!(permits.available_permits(), 1, "permit released at NeedsHuman");
+        assert_eq!(
+            permits.available_permits(),
+            1,
+            "permit released at NeedsHuman"
+        );
         ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
         let _ = h.await;
     }
@@ -1260,7 +1431,11 @@ mod tests {
             exit_code: 1,
             stdout: vec![],
             stderr: vec!["API Error: 429 rate limit exceeded".into()],
-            usage: Some(crate::runner::Usage { tokens_in: 0, tokens_out: 0, cost_usd: 1.0 }),
+            usage: Some(crate::runner::Usage {
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_usd: 1.0,
+            }),
         };
         let (ctx, crx) = mpsc::unbounded_channel();
         let (etx, mut erx) = mpsc::unbounded_channel();
@@ -1275,15 +1450,28 @@ mod tests {
         let mut saw_rl_blocked = false;
         loop {
             let e = erx.recv().await.expect("stream closed before NeedsHuman");
-            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON) {
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON)
+            {
                 saw_rl_blocked = true;
             }
-            if let Event::PhaseChanged { to: Phase::NeedsHuman, reason, .. } = &e.event {
-                assert_eq!(reason.as_deref(), Some("usd cap"), "parked via CapBreach, not RetriesExhausted");
+            if let Event::PhaseChanged {
+                to: Phase::NeedsHuman,
+                reason,
+                ..
+            } = &e.event
+            {
+                assert_eq!(
+                    reason.as_deref(),
+                    Some("usd cap"),
+                    "parked via CapBreach, not RetriesExhausted"
+                );
                 break;
             }
         }
-        assert!(!saw_rl_blocked, "cap breach short-circuits before any backoff Blocked");
+        assert!(
+            !saw_rl_blocked,
+            "cap breach short-circuits before any backoff Blocked"
+        );
         ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
         let _ = h.await;
     }
@@ -1303,14 +1491,21 @@ mod tests {
         // Wait until it's backing off, then halt mid-wait.
         loop {
             let e = erx.recv().await.expect("closed before backoff");
-            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON) {
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON)
+            {
                 break;
             }
         }
         ctx.send(Command::Halt { cmd_id: "h".into() }).unwrap();
         loop {
             let e = erx.recv().await.expect("closed before Halted");
-            if matches!(e.event, Event::PhaseChanged { to: Phase::Halted, .. }) {
+            if matches!(
+                e.event,
+                Event::PhaseChanged {
+                    to: Phase::Halted,
+                    ..
+                }
+            ) {
                 break;
             }
         }
@@ -1333,7 +1528,8 @@ mod tests {
         // Wait for the first backoff, then send a NON-Halt command into the wait.
         loop {
             let e = erx.recv().await.expect("closed before backoff");
-            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON) {
+            if matches!(&e.event, Event::Blocked { reason, .. } if reason == crate::retry::RL_REASON)
+            {
                 break;
             }
         }
@@ -1345,11 +1541,20 @@ mod tests {
             if matches!(&e.event, Event::Error { detail, .. } if detail.contains("not valid")) {
                 saw_invalid = true;
             }
-            if matches!(e.event, Event::PhaseChanged { to: Phase::NeedsHuman, .. }) {
+            if matches!(
+                e.event,
+                Event::PhaseChanged {
+                    to: Phase::NeedsHuman,
+                    ..
+                }
+            ) {
                 break;
             }
         }
-        assert!(saw_invalid, "a non-Halt command during backoff emits a 'not valid' error");
+        assert!(
+            saw_invalid,
+            "a non-Halt command during backoff emits a 'not valid' error"
+        );
         ctx.send(Command::Abandon { cmd_id: "a".into() }).unwrap();
         let _ = h.await;
     }
@@ -1377,7 +1582,7 @@ mod tests {
         let tampered = vec!["test('x', () => assert(true))".to_string()]; // gutted at build time
         let mut script = vec![FakeRunner::ok(0.01, &["lru.test.js"])]; // oracle step
         script.extend(cycle(0)); // one clean build/check/review round (floor 1)
-        // oracle read #1 (Spec freeze) = good; read #2 (Checking) = tampered
+                                 // oracle read #1 (Spec freeze) = good; read #2 (Checking) = tampered
         let runner = FakeRunner::new(script).oracle_contents(vec![good, tampered]);
         let (ctx, crx) = mpsc::unbounded_channel();
         let (etx, mut erx) = mpsc::unbounded_channel();
@@ -1393,13 +1598,20 @@ mod tests {
 
         let phase = loop {
             let e = erx.recv().await.expect("stream closed before NeedsHuman");
-            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = e.event {
+            if let Event::PhaseChanged {
+                to: Phase::NeedsHuman,
+                ..
+            } = e.event
+            {
                 break Phase::NeedsHuman;
             }
         };
         assert_eq!(phase, Phase::NeedsHuman);
 
-        ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
+        ctx.send(Command::Abandon {
+            cmd_id: "cleanup".into(),
+        })
+        .unwrap();
         let _ = handle.await;
     }
 
@@ -1450,13 +1662,20 @@ mod tests {
 
         let phase = loop {
             let e = erx.recv().await.expect("stream closed before NeedsHuman");
-            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = e.event {
+            if let Event::PhaseChanged {
+                to: Phase::NeedsHuman,
+                ..
+            } = e.event
+            {
                 break Phase::NeedsHuman;
             }
         };
         assert_eq!(phase, Phase::NeedsHuman);
 
-        ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
+        ctx.send(Command::Abandon {
+            cmd_id: "cleanup".into(),
+        })
+        .unwrap();
         let _ = handle.await;
     }
 
@@ -1495,14 +1714,24 @@ mod tests {
                     saw_empty_error = true;
                 }
             }
-            if let Event::PhaseChanged { to: Phase::NeedsHuman, .. } = e.event {
+            if let Event::PhaseChanged {
+                to: Phase::NeedsHuman,
+                ..
+            } = e.event
+            {
                 break Phase::NeedsHuman;
             }
         };
         assert_eq!(phase, Phase::NeedsHuman);
-        assert!(saw_empty_error, "expected an empty-oracle Error event before parking");
+        assert!(
+            saw_empty_error,
+            "expected an empty-oracle Error event before parking"
+        );
 
-        ctx.send(Command::Abandon { cmd_id: "cleanup".into() }).unwrap();
+        ctx.send(Command::Abandon {
+            cmd_id: "cleanup".into(),
+        })
+        .unwrap();
         let _ = handle.await;
     }
 }
