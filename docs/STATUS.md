@@ -92,6 +92,9 @@ failure was a **stale local `main`**. Resolved 2026-08-09: branch protection, th
 the branch/worktree pruning below._
 
 **Next steps.** _All open work is tracked as GitHub issues (#51–#59); this list is the ordering._
+_For #51 specifically, work from the handoff brief:_
+[`docs/handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md`](handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md)
+_— it is self-contained and supersedes the abbreviated instructions in this list._
 1. **#51 — Finish the interactive smoke** (it is ~2/11 done). Start cold: `cd cockpit/ui &&
    npm run desktop`, or use the staged launcher (see the session log below for its path). **Run
    1.1–1.4 and 1.6–1.10, then the whole packaged Part 2.** The pivotal one is **1.5 re-run**: with
@@ -145,6 +148,10 @@ Work-audit → executed the findings. **Branch `feat/plugin-runtime`, HEAD `42e2
   survives under `%TEMP%\claude\…\ci-lint` — git-deregistered, undeletable via long paths, harmless.
 - **Not done:** #52 (GitHub Support GC ticket) needs the operator's account. The interactive smoke
   (#51) is still the sole merge blocker on #49.
+- **Handoff written** for the smoke itself:
+  [`docs/handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md`](handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md)
+  — self-contained; carries the dev-seam env vars, the full 11-item checklist, the Gate-5 baseline,
+  and the 1.9b anomaly as an open question rather than a known issue.
 
 ### 2026-08-10 — The smoke finally ran, and caught a real one
 
