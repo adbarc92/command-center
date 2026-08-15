@@ -114,7 +114,11 @@ pub fn respond(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
     if id == ".." || id.contains('/') || id.contains('\\') {
         return not_found();
     }
-    if sub.split('/').any(|c| c.is_empty() || c == "." || c == "..") || sub.contains('\\') {
+    if sub
+        .split('/')
+        .any(|c| c.is_empty() || c == "." || c == "..")
+        || sub.contains('\\')
+    {
         return not_found();
     }
 

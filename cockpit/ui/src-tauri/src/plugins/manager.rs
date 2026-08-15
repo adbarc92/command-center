@@ -222,8 +222,8 @@ mod tests {
     /// digest): fake providers baked as BUILD args, and devAuth selected at runtime env.
     #[test]
     fn shipped_audience_manifest_is_credential_free_dev() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("app-plugins/audience/app-plugin.json");
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("app-plugins/audience/app-plugin.json");
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         let m = Manifest::from_json(&text).expect("audience manifest parses");
@@ -235,13 +235,25 @@ mod tests {
         // Fake providers are BUILD args (baked into the image — a runtime env can't flip a
         // prod-built Next image to devAuth/fake; spec §2 "build vs runtime env").
         let build = lc.build.as_ref().expect("audience has a build step");
-        assert_eq!(build.args.get("NODE_ENV").map(String::as_str), Some("development"));
-        assert_eq!(build.args.get("AI_PROVIDER").map(String::as_str), Some("fake"));
-        assert_eq!(build.args.get("MEDIA_PROVIDER").map(String::as_str), Some("fake"));
+        assert_eq!(
+            build.args.get("NODE_ENV").map(String::as_str),
+            Some("development")
+        );
+        assert_eq!(
+            build.args.get("AI_PROVIDER").map(String::as_str),
+            Some("fake")
+        );
+        assert_eq!(
+            build.args.get("MEDIA_PROVIDER").map(String::as_str),
+            Some("fake")
+        );
 
         // devAuth is selected at runtime (NODE_ENV) and fabricates an identity from
         // DEV_WORKSPACE_ID/DEV_USER_ID (audience digest) — so no Clerk cookie is needed.
-        assert_eq!(lc.env.get("NODE_ENV").map(String::as_str), Some("development"));
+        assert_eq!(
+            lc.env.get("NODE_ENV").map(String::as_str),
+            Some("development")
+        );
         assert!(lc.env.contains_key("DEV_WORKSPACE_ID"));
         assert!(lc.env.contains_key("DEV_USER_ID"));
 
@@ -311,7 +323,10 @@ mod tests {
             .map(|(id, owned)| {
                 (
                     (*id).to_string(),
-                    Running { child_id: Some(1), owned: *owned },
+                    Running {
+                        child_id: Some(1),
+                        owned: *owned,
+                    },
                 )
             })
             .collect()

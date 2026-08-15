@@ -118,11 +118,7 @@ fn the_debt_list_has_no_stale_entries() {
     let stale: Vec<&str> = MAIN_THREAD_DEBT
         .iter()
         .map(|(name, _)| *name)
-        .filter(|name| {
-            !commands
-                .iter()
-                .any(|c| c.name == *name && !c.is_safe())
-        })
+        .filter(|name| !commands.iter().any(|c| c.name == *name && !c.is_safe()))
         .collect();
 
     assert!(

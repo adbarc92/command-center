@@ -61,7 +61,10 @@ impl WebviewPool {
     /// Mark `label` most-recently-used and evict past the warm cap (destroying the LRU
     /// victim's webview so memory is bounded — the next show recreates it).
     fn touch_and_evict(&self, app: &AppHandle, label: &str, rect: Rect) {
-        self.last_rect.lock().unwrap().insert(label.to_string(), rect);
+        self.last_rect
+            .lock()
+            .unwrap()
+            .insert(label.to_string(), rect);
         let mut lru = self.lru.lock().unwrap();
         lru.retain(|l| l != label);
         lru.insert(0, label.to_string());
