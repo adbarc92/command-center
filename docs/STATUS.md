@@ -22,10 +22,12 @@ added rustfmt, clippy, `svelte-check + tsc`, vitest and — critically — `carg
 had **never run in CI at all** because `cockpit/ui/src-tauri` is a standalone cargo workspace the
 root `--workspace` never reached. Five of seven test tiers were advisory until that landed. The
 **superseded guard digests are out of public history** (targeted 9-commit `filter-repo` rewrite).
-**#49 is `MERGEABLE`, and as of 2026-08-15 it passes all six fast gates under the new CI**, but it
-is still draft and still merge-blocked on one thing only: **the interactive smoke**, which is ~2 of
-11 items deep. The `db74a47` main-thread fix is now pinned from both sides (a Rust ratchet test and
-`App.appPlugin.test.ts`) but has **still never been watched in a real window**.
+**Smoke run 2 (2026-08-15) executed Part 1 of the interactive smoke and changed the picture
+substantially.** The headline is good: **`db74a47` is CONFIRMED** — responsiveness was *measured*,
+1,127 samples at 1 Hz with **zero unresponsive**, spanning a live `compose build` and a 0→3→10
+container ramp. But the smoke also found **four defects that every automated gate had passed**, two
+of which are now fixed and verified (`55b0a5b`, `2ab1b49`), and it is now clear that **#49 is
+blocked on more than "finish the checklist"**.
 
 **Vision (unchanged):** the Command Center is the operator's **one-stop shop for agentic
 engineering** — dispatch work, see every project's stage, act without alt-tabbing, host the other
@@ -40,12 +42,16 @@ launch.**
 3. **Design overhaul** (needs Claude Design output).
 4. **Remote Control** — brainstorm→spec after Phase-2 auth lands.
 
-**Open PRs.** **#49 (draft)** — cockpit plugin runtime (view-plugins + app-plugins), HEAD `42e290e`.
-`MERGEABLE`; `main` merged up on 2026-08-15 **conflict-free** (`ort` auto-resolved both shared files
-despite a `merge-tree` dry run predicting conflicts). All six fast CI gates pass. Merge-blocked on
-**finishing** the interactive smoke: 1.5 failed and was fixed, Gate 5's container half passed, and
-**nine of eleven dev items plus the entire packaged pass have never been run**. Results table in
-`spikes/SPIKE-RESULTS.md` → "Smoke run 1".
+**Open PRs.** **#49 (draft)** — cockpit plugin runtime (view-plugins + app-plugins), HEAD `44ee6ad`.
+`MERGEABLE`. Part 1 of the smoke is now largely done (results: `spikes/SPIKE-RESULTS.md` → **"Smoke
+run 2"**). **Merge-blocked on three things:** (1) **D-2** — capability negotiation is dead code at
+runtime, so every view-plugin is granted every host capability regardless of its manifest;
+(2) **D-7** — view-plugins receive **no state at all** (`DataCloneError` posting Svelte 5 `$state`
+proxies through `postMessage`), agreed as the next fix; (3) **the entire packaged pass (Part 2) has
+still never been run**. Items 1.2 / 1.4a / 1.7 are **BLOCKED** behind **D-3**, a *pre-existing*
+`main` defect — fleetd serves no CORS headers, so every browser `fetch` from the cockpit to the
+daemon fails. That last one is not a #49 regression but it does make the FLEET ops grid
+non-functional today.
 
 **Testing plan.** `docs/testing/PLAN.md` (first run 2026-08-13) ranks **131 gaps** by likelihood ×
 impact across seven tiers, with a trust verdict per runner. Six items **await human ratification**
@@ -62,15 +68,27 @@ all three.
   does **not** delete unreachable objects. Verified still served: commits `6016495` / `eb832bd` and
   blob `ee0ed06`. **Requires a GitHub Support ticket** asking them to garbage-collect unreachable
   objects on this repo. Until then the exposure is "attacker needs the 40-char SHA", not "gone".
-- **Gate 5 is half-closed.** Container teardown **PASSES** — `docker ps` empty after a graceful quit
-  against a verified 0-container baseline, `fleetd-serve` exited, all ports released. But the **`app`
-  process survived the window close** (no window, 23 threads, still responding 15 s later). Teardown
-  ran; the process just didn't exit after it. **Not diagnosed** — decide next smoke whether it's a
-  `tauri dev` supervision artifact or a real shutdown defect. `docs/SWARM-HANDOFF-plugin-runtime.md`
-  still overstates P3 as "GO" when its own record says LEANING GO; unchanged.
-- **The 2026-08-10 fix is unverified in a GUI.** `cargo test` / `npm test` / `npm run check` /
-  `clippy` all pass, and `src/App.appPlugin.test.ts` pins the contract, but nobody has watched the
-  AUDIENCE tab actually stay responsive. That is the single highest-value next action.
+- **Gate 5 is now CLOSED, and 1.9b was a real defect.** Root-caused in Smoke run 2: the
+  `ExitRequested` handler called `api.prevent_exit()` unconditionally then `app_handle.exit(0)`,
+  which re-emits `ExitRequested` — an **infinite exit loop**. Measured: no window, `Responding=True`,
+  **spinning at 93.9% of a core, 309 s of CPU burned**. **Not** a `tauri dev` artifact (`cargo` was
+  blocked *on* the app, not holding it open). Fixed by a `ShutdownGuard` (`2ab1b49`) and **verified
+  in a watched window**: exits in ~1 s, 0.19 s total CPU. Note `0d05f55` made this *worse* while
+  appearing to rule it out — idempotent teardown turned a slow loop into a hot one. This also
+  explains the standing "don't rebuild the tauri crate while the app runs" trap.
+  **Still open:** `stop_all_owned(30_000)` runs synchronously inside the `RunEvent` callback, so exit
+  is blocked for as long as teardown takes (~2.5 min with 10 containers up).
+  `docs/SWARM-HANDOFF-plugin-runtime.md` still overstates P3 as "GO"; unchanged.
+- **Gate 5's success criterion used the wrong instrument.** Run 1 recorded PASS on "`docker ps`
+  empty". `docker ps` shows only *running* containers and cannot see the `Created`/`Exited` residue
+  teardown left — residue which then broke run 2's first launch with a container-name conflict.
+  Assert on **`docker ps -a`** scoped to the project. Run 2's teardown genuinely does better: 27→17
+  total, i.e. ten containers **removed**, not merely stopped.
+- **The systemic pattern behind three of the four new defects.** D-1, D-2 and D-7 are one shape: a
+  **unit test passes on a function whose output is never wired to anything** (`pluginSrc` was tested
+  against the broken string; `negotiateCapabilities`' result is discarded; `bridge.test.ts` drives
+  fakes, so the real `$state` proxies are never exercised). All passed every gate. The coverage gap
+  is at **integration boundaries**, not units — feed this into `docs/testing/PLAN.md`.
 - **Audience's `video` service busy-polls at ~100% of a core while idle** (last log line is just
   `video worker started, listening on …`). Different repo, not a #49 blocker, but it skews any
   performance observation made while the Audience stack is up. Worth filing against Audience.
@@ -95,13 +113,20 @@ the branch/worktree pruning below._
 _For #51 specifically, work from the handoff brief:_
 [`docs/handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md`](handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md)
 _— it is self-contained and supersedes the abbreviated instructions in this list._
-1. **#51 — Finish the interactive smoke** (it is ~2/11 done). Start cold: `cd cockpit/ui &&
-   npm run desktop`, or use the staged launcher (see the session log below for its path). **Run
-   1.1–1.4 and 1.6–1.10, then the whole packaged Part 2.** The pivotal one is **1.5 re-run**: with
-   the fix, the AUDIENCE tab must show the chip walk `starting → health-probing → healthy` **with the
-   window responsive throughout**. A frozen window means the fix didn't take. Audience images are
-   already built, so activation skips the 20-minute build. Record in `spikes/SPIKE-RESULTS.md` under
-   "Smoke run 2".
+1. **Fix D-7 — view-plugins receive no state** (agreed as the next action). `sendFullState` throws
+   `DataCloneError` posting Svelte 5 `$state` proxies over `postMessage`; because it throws inside
+   `onReady` *before* the tick timer starts, the plugin gets no state **and** no ticks. Fix with
+   `$state.snapshot()` or a structural clone, and write the test against **real proxies**, not the
+   fakes in `bridge.test.ts` — the fakes are why 137 tests missed it.
+2. **Decide D-2 — capability negotiation is inert.** `grantedCapabilities` is computed
+   (`loader.ts:140`) and read only by a test; `App.svelte:237` never passes it to `PluginBridge`, so
+   `bridge.ts:594` ships the full host set. Security-relevant in a capability system.
+3. **#51 — Part 2, the packaged smoke.** Never executed. `npm run bundle`, run the release exe,
+   repeat 1.1–1.9. Budget real time: the cold `app` crate build took **16m22s** this session.
+   Note the handoff's "prebuilt images skip the build" premise is **wrong** — `compose build` runs
+   regardless. Record under "Smoke run 2 — Part 2".
+4. **File D-3 upstream** — fleetd has no CORS layer (`OPTIONS /missions` → 405, no ACAO on any
+   response). Pre-existing on `main`, blocks 1.2 / 1.4a / 1.7 and the whole FLEET ops grid.
 2. **Decide the lingering-`app`-process anomaly** (Gate 5's second half) — dev artifact or real bug.
 3. **#52 — File the GitHub Support ticket** to GC unreachable objects. Needs no build and no GUI;
    it is the cheapest open item and the only one closing a real exposure.
@@ -123,6 +148,39 @@ resolved** — merging `main` into `feat/plugin-runtime` on 2026-08-10 brought t
 across from #47; close it._
 
 ## Session log
+
+### 2026-08-15 (later) — Smoke run 2: `db74a47` confirmed, four hidden defects found
+
+Ran Part 1 of the PR #49 interactive smoke, operator-driven with a checkpoint per item.
+**Branch `feat/plugin-runtime`, HEAD `44ee6ad`.** Nine of eleven items had never been executed.
+
+- **The pivotal result is a PASS, and it is measured, not judged.** `db74a47` holds: sampling
+  `Process.Responding` at 1 Hz gave **1,127 samples with zero unresponsive**, across a full
+  `compose build`, a failed `up`, and a clean 0→3→10 container ramp. The workload that froze the
+  window in run 1 no longer does.
+- **Four defects that every automated gate had passed.** **D-1**: view-plugins could not load on
+  Windows *at all* — `pluginSrc` emitted `ccplugin://localhost/…`, an external protocol a sandboxed
+  iframe refuses to navigate to; the unit test asserted the broken string as correct. Fixed
+  (`55b0a5b`), verified cold-start. **D-4**: the app never exited — an infinite `prevent_exit` /
+  `exit(0)` loop burning a full core (309 s of CPU). Fixed (`2ab1b49`), verified in a watched window
+  (exits in ~1 s, 0.19 s CPU). **D-2**: capability negotiation is dead code — every plugin gets every
+  host capability. **D-7**: view-plugins receive no state at all (`DataCloneError` on Svelte 5
+  `$state` proxies). D-2 and D-7 remain open.
+- **1.9b is answered after three carry-forwards.** A real shutdown defect, not a `tauri dev`
+  artifact: `cargo` was blocked *on* the app, and a hot spin loop is not supervision. `0d05f55`'s
+  idempotency fix had made it worse while appearing to eliminate it.
+- **Two of the handoff's premises were wrong.** Prebuilt images do **not** skip `compose build`; and
+  Gate 5's "`docker ps` empty" criterion cannot see the `Created` residue that run 1 left, which is
+  exactly what broke run 2's first launch.
+- **Three items are BLOCKED, not failed** (1.2, 1.4a, 1.7) behind **D-3**: fleetd serves no CORS
+  headers, so no browser `fetch` from the cockpit reaches the daemon. Pre-existing on `main`
+  (`git diff origin/main...HEAD` is empty for `api.ts` and `crates/fleetd/`). Confirmed directly:
+  three real units existed in the daemon and the ops grid still rendered nothing.
+- **Filed [#61](https://github.com/adbarc92/command-center/issues/61)** — the loading model shows
+  blank tabs with no loading *or* failure affordance, which is what made D-1 read as "probably still
+  loading". Also captures D-5, silent background launch failures.
+- **Part 2 (packaged) still not run.** Deliberately deferred to a fresh session.
+- Added the `driving-interactive-smoke-tests` skill capturing the method, at the operator's request.
 
 ### 2026-08-15 — CI became a real gate; three days of orphaned work rescued
 
