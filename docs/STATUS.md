@@ -1,7 +1,7 @@
 ---
 stage: Build
 readiness: "control plane publication-ready; product shell on roadmap"
-updated: "2026-08-10"
+updated: "2026-08-15"
 name: "Command Center"
 base_branch: "main"
 test_cmd: "cargo test --workspace"
@@ -17,16 +17,15 @@ its own `STATUS.md`, so the Command Center appears on its own board as a `local:
 ## State summary
 
 **TL;DR.** The **control plane and workflow layer are feature-complete and tested**, the repo is
-**public**, and `main` is **branch-protected** with `embargo guard` + `cargo test (workspace)` as
-required checks, enforced for admins. The **superseded guard digests are out of public history**
-(targeted 9-commit `filter-repo` rewrite). **The interactive smoke for PR #49 finally ran on
-2026-08-10 — and it earned its keep: it caught a real UI-freezing defect on the very first
-app-plugin activation.** `plugin_launch` was a *synchronous* Tauri command, so the whole
-`docker compose build` + probe sequence ran on the main event-loop thread and froze the window.
-Root-caused, fixed, regression-tested, committed (`db74a47`). **#49 is `MERGEABLE`/`CLEAN` and no
-longer behind `main`, but it is still draft and still merge-blocked** — the smoke is only ~2 of 11
-items deep, and the fix itself has been verified *only* by automated gates, never in a watched
-window.
+**public**, and `main` is **branch-protected**. **CI is now a real gate**: #60 (merged 2026-08-15)
+added rustfmt, clippy, `svelte-check + tsc`, vitest and — critically — `cargo test (cockpit)`, which
+had **never run in CI at all** because `cockpit/ui/src-tauri` is a standalone cargo workspace the
+root `--workspace` never reached. Five of seven test tiers were advisory until that landed. The
+**superseded guard digests are out of public history** (targeted 9-commit `filter-repo` rewrite).
+**#49 is `MERGEABLE`, and as of 2026-08-15 it passes all six fast gates under the new CI**, but it
+is still draft and still merge-blocked on one thing only: **the interactive smoke**, which is ~2 of
+11 items deep. The `db74a47` main-thread fix is now pinned from both sides (a Rust ratchet test and
+`App.appPlugin.test.ts`) but has **still never been watched in a real window**.
 
 **Vision (unchanged):** the Command Center is the operator's **one-stop shop for agentic
 engineering** — dispatch work, see every project's stage, act without alt-tabbing, host the other
@@ -41,11 +40,18 @@ launch.**
 3. **Design overhaul** (needs Claude Design output).
 4. **Remote Control** — brainstorm→spec after Phase-2 auth lands.
 
-**Open PRs.** **#49 (draft)** — cockpit plugin runtime (view-plugins + app-plugins). `MERGEABLE` /
-`CLEAN` (merged up to `main` on 2026-08-10, conflict-free). Merge-blocked on **finishing** the
-interactive smoke: 1.5 failed and was fixed, Gate 5's container half passed, and **nine of eleven
-dev items plus the entire packaged pass have never been run**. Results table in
+**Open PRs.** **#49 (draft)** — cockpit plugin runtime (view-plugins + app-plugins), HEAD `42e290e`.
+`MERGEABLE`; `main` merged up on 2026-08-15 **conflict-free** (`ort` auto-resolved both shared files
+despite a `merge-tree` dry run predicting conflicts). All six fast CI gates pass. Merge-blocked on
+**finishing** the interactive smoke: 1.5 failed and was fixed, Gate 5's container half passed, and
+**nine of eleven dev items plus the entire packaged pass have never been run**. Results table in
 `spikes/SPIKE-RESULTS.md` → "Smoke run 1".
+
+**Testing plan.** `docs/testing/PLAN.md` (first run 2026-08-13) ranks **131 gaps** by likelihood ×
+impact across seven tiers, with a trust verdict per runner. Six items **await human ratification**
+(§3) — including `spine_weight`, which is the Impact axis of every score in the file and is still a
+first-run proposal. Its `in_ci` flags and `GAP-057`/`GAP-111`/`GAP-113` are already stale: #60 closed
+all three.
 
 **Known gaps / blockers.**
 - **Embargoed token remains in git history** (~193 commits) — deliberately out of scope, unchanged.
@@ -114,6 +120,31 @@ resolved** — merging `main` into `feat/plugin-runtime` on 2026-08-10 brought t
 across from #47; close it._
 
 ## Session log
+
+### 2026-08-15 — CI became a real gate; three days of orphaned work rescued
+
+Work-audit → executed the findings. **Branch `feat/plugin-runtime`, HEAD `42e290e`; `main` `3cc1ae6`.**
+
+- **The audit's main finding was that the resume state was two sessions stale.** Session-state and
+  `STATUS.md` both stopped at 2026-08-10, but 8/13–8/14 had produced a 260 KB testing plan, a Gate-5
+  unit suite, a main-thread ratchet test, and **PR #60 with 9/9 checks green** — and the first three
+  existed **only as uncommitted files in the working tree**. Committed as `0d05f55` (tests) and
+  `f4d7f38` (plan) after verifying green locally: 34 + 2 cockpit tests.
+- **#60 merged.** CI now gates `cargo fmt --check`, `clippy --all-targets -D warnings`,
+  `npm run check`, `npm test`, and `cargo test` on the cockpit crate — the last of which had never
+  run in CI, so the cockpit crate's 26 tests were verified only by hand. **It caught something
+  immediately**: `feat/plugin-runtime` had fmt violations in `embedding.rs`, `manager.rs` and
+  `view_plugins.rs` that would have failed the moment #60 landed. Fixed in `42e290e`.
+- **Two predictions that turned out wrong, recorded so they are not re-derived.** (1) A `merge-tree`
+  dry run predicted conflicts between #60 and #49 on `lib.rs` + `manager.rs`; the real merge was
+  **clean**. (2) `gh pr merge --delete-branch` reported failure, but only the *local* branch delete
+  failed — the merge itself succeeded. Check `gh pr view --json state` before retrying a merge.
+- **Housekeeping.** #53 closed with `git check-ignore` evidence (it had been fixed since 2026-08-10
+  and stayed open). Worktrees 5 → 3, keeping only the two deliberate spike worktrees. Pruned
+  `chore/ci-lint-gates` and `worktree-agent-ae21…`; local `main` fast-forwarded. One dead directory
+  survives under `%TEMP%\claude\…\ci-lint` — git-deregistered, undeletable via long paths, harmless.
+- **Not done:** #52 (GitHub Support GC ticket) needs the operator's account. The interactive smoke
+  (#51) is still the sole merge blocker on #49.
 
 ### 2026-08-10 — The smoke finally ran, and caught a real one
 
