@@ -224,3 +224,157 @@ whether it is a dev-only artifact of `tauri dev` supervision or a real shutdown 
 
 **Still merge-blocking:** everything marked "not run" above, plus the whole packaged pass. The fix
 is verified only at the automated level — it has **not** been confirmed in a watched window.
+
+### Smoke run 2 — 2026-08-15 (dev) → **db74a47 CONFIRMED; 4 new defects, 2 fixed**
+
+Run on the target machine against `feat/plugin-runtime` @ `26cbd24`, operator-driven with
+checkpoint-per-item. Nine of eleven items had never been executed before this run.
+
+**Environment notes — two of these invalidate assumptions the handoff was written on.**
+
+- `docker ps` was empty at preflight, but `docker ps -a` was **not**: `audience-minio-1`,
+  `audience-postgres-1` and `audience-redis-1` sat in **`Created`** state, left behind by Smoke
+  run 1. They broke the first AUDIENCE launch outright:
+  `Conflict. The container name "/audience-redis-1" is already in use`.
+- **The handoff's "images are prebuilt, so no 20-min build" is wrong.** `compose build` runs
+  regardless; it rebuilt `audience-video` and `audience-ai_content` before `up`.
+- The pre-warmed Tauri build was stale after `main` merged up — the `app` crate rebuilt cold
+  (16m22s). Budget that for the packaged pass too.
+
+| Item | Result |
+|---|---|
+| 1.1 switcher renders | **PASS** (limited — see note) |
+| 1.2 fleet regression canary | **NOT RUN** — ops grid renders nothing; blocked by **D-3** |
+| 1.3a REFERENCE iframe renders | **FAIL → fixed → PASS** (**D-1**) |
+| 1.3b `plugin-hello`→`ready` | **PASS** — `connected · caps: log-append, real-launch-confirm` |
+| 1.3c no network from plugin | **PASS** — `connect-src 'none'` delivered on the plugin document |
+| 1.4a policed `launch` round-trip | **PARTIAL** — bridge round-trip works; terminal ack is `REJECTED (sink-error)` from **D-3** |
+| 1.4b `command-ack` rejection path | **PASS** — `REJECTED (real-requires-confirm)`, correct reasonClass |
+| **1.5 AUDIENCE activation** | **PASS — 1,127 samples, 0 unresponsive** |
+| 1.6 rect glue on resize | **PASS** |
+| 1.7 park-on-overlay | **BLOCKED** by **D-3** — overlay unreachable, mechanism untested |
+| 1.8 no leak on switch | **PASS** |
+| 1.9a Gate 5 — container teardown | **PASS** — 11→1 running, 27→17 total (10 fully removed) |
+| 1.9b Gate 5 — process exit | **FAIL → root-caused → fixed; re-verification PENDING** (**D-4**) |
+| 1.10 HMR under host CSP | **NOT RIGOROUSLY VERIFIED** — worked incidentally, operator did not observe |
+| Part 2 packaged | **NOT RUN** |
+
+**1.1 covers less than it appears to.** `VIEW_PLUGIN_INDEX` (`App.svelte:45`) is a hard-coded
+build-time constant, not runtime discovery. A REFERENCE tab appears whether or not the plugin
+runtime works at all — as D-1 proved. Do not read 1.1 as evidence about the runtime.
+
+**1.5 — `db74a47` is CONFIRMED.** The pivotal item. Responsiveness was *measured*, not judged:
+`Process.Responding` sampled at 1 Hz across three traces totalling **1,127 samples with zero
+unresponsive**, spanning a full `compose build`, a failed `up`, and a clean 0→3→10 container ramp.
+The window stayed interactive through exactly the workload that froze it in run 1.
+
+#### D-1 — view-plugins could not load on Windows at all *(FIXED this session)*
+
+`pluginSrc()` emitted the literal `ccplugin://localhost/<id>/<entry>`. On Windows/WebView2 — which
+`view_plugins.rs:5` itself calls the primary target — a custom scheme is reachable only as
+`http://<scheme>.localhost/…`; the literal form is an *external protocol*, and
+`sandbox="allow-scripts"` forbids navigating to one. The frame never navigated and stayed blank:
+
+> `Navigation to external protocol blocked by sandbox, because it doesn't contain any of:
+> 'allow-top-navigation-to-custom-protocols', …`
+
+The codebase already contradicted itself here: the host CSP (`frame-src http://ccplugin.localhost`)
+and `pluginSrc`'s own docstring both name the Windows origin the code never produced.
+
+**Why every gate missed it:** `loader.test.ts:52` asserted the broken string as correct. CI has been
+green on a view-plugin runtime that cannot load on the primary target platform. `tauri build` only
+compiles; nothing in CI ever navigates the iframe.
+
+Fixed test-first: `pluginSrc` takes an injected `isWindows` (defaulting to a UA check) and returns
+the `http://ccplugin.localhost` form there. Verified live — REFERENCE rendered and completed its
+handshake without an app restart.
+
+#### D-2 — capability negotiation is dead code at runtime *(NOT fixed — needs a decision)*
+
+The operator's status line read `caps: log-append, real-launch-confirm` for a plugin whose manifest
+requests **only** `log-append`. Cause: `grantedCapabilities` is computed at `loader.ts:140` and read
+in exactly one place in the whole codebase — a test (`loader.test.ts:75`). `App.svelte:237`
+constructs `PluginBridge` without passing `capabilities`, so `bridge.ts:594` falls back to
+`this.opts.capabilities ?? [...HOST_CAPABILITIES]` and ships the **full host set** in `init`.
+
+Every view-plugin is granted every host capability regardless of its manifest. The manifest's
+capability declaration is decorative. This is security-relevant in a sandbox/capability system.
+
+#### D-3 — fleetd serves no CORS headers *(PRE-EXISTING on `main`, not a #49 regression)*
+
+`OPTIONS /missions` → **405**; `GET /health` with an `Origin` returns **no**
+`Access-Control-Allow-Origin`; and `crates/fleetd/src/*.rs` contains no CORS handling anywhere. So
+every browser `fetch` from the cockpit to the daemon fails. One cause, three blocked items:
+
+- **1.2** — `listUnits` is CORS-blocked, so the ops grid stays empty. Confirmed directly: three real
+  units (`u1` failed, `u2` done, `u3` awaiting_oracle_approval) existed in the daemon and the grid
+  still showed nothing.
+- **1.4a** — the plugin's policed launch reaches the sink correctly, then `createMission`
+  (`api.ts:16`) fails preflight → `REJECTED (sink-error)`.
+- **1.7** — the overlay is `$derived` from a unit in `awaiting_oracle_approval`. `u3` was parked
+  there on the daemon, but the cockpit cannot discover units, so the overlay never opened.
+
+`git diff origin/main...HEAD` is **empty** for `cockpit/ui/src/lib/api.ts` and `crates/fleetd/`, so
+the failing code is untouched by this branch. Whether this seam ever worked end-to-end is unverified
+— note that WebSocket state streaming is CORS-exempt, so only the HTTP verbs are affected.
+
+#### D-4 — the app never exits: an infinite exit loop *(FIXED; re-verification PENDING)*
+
+Run 1's undiagnosed anomaly, reproduced and root-caused. `lib.rs` called `api.prevent_exit()`
+unconditionally, ran teardown, then `app_handle.exit(0)` — which **re-emits `ExitRequested`**, so the
+handler prevented it again, forever.
+
+Measured: after a graceful close the process held **20 threads, no window, `Responding=True`,
+spinning at 93.9% of one core**, having burned **309 s of CPU** by the time it was killed.
+
+This **answers the handoff's open question 1 definitively: a real shutdown defect, not a `tauri dev`
+supervision artifact.** The process tree showed `cargo` *blocked on* the app, not holding it open,
+and a hot spin loop is not what supervision looks like.
+
+**`0d05f55` made this worse while appearing to rule it out.** The handoff states its
+`stop_all_owned_is_idempotent` test "already eliminated" the second-teardown-pass hypothesis. Making
+teardown idempotent removed the 30 s cost per iteration and converted a slow loop into a hot one.
+
+It also explains the project's own **trap #2** (`tauri-build` cannot overwrite `fleetd-serve.exe`
+while the app runs) — that trap exists *because* the app never exits.
+
+Fixed test-first with a `ShutdownGuard` (`lib.rs`): the first `ExitRequested` is prevented so
+teardown runs; every later one is allowed through. Pinned by
+`shutdown_guard_tests::only_the_first_exit_request_is_prevented`, verified red→green.
+
+**Not fixed, deliberately (one change at a time):** `stop_all_owned(30_000)` still runs
+*synchronously inside the `RunEvent` callback*, i.e. on the main event-loop thread — the same
+architectural mistake `db74a47` fixed for `plugin_launch`. The trace shows the loop blocked ~2.5 min
+(window closed ~13:15:30, containers reaped 13:18:00). The guard makes the process exit; it does not
+make it exit *promptly*.
+
+#### D-5 — a failed app-plugin launch is invisible in the UI *(NOT fixed)*
+
+The first AUDIENCE launch failed on the container-name conflict and the UI showed **nothing** — no
+chip, no error state. `plugin_launch` returns "dispatched", so there is no rejected promise, and the
+background failure never reached the shell. Operator comment: *"It's empty, and I see no UX to
+indicate anything is loading, which is a problem in itself."*
+
+#### D-6 — Gate 5's success criterion uses the wrong instrument
+
+Run 1 recorded teardown as PASS on "`docker ps` empty". `docker ps` lists only *running* containers
+and cannot see the `Created`/`Exited` residue that teardown actually left — residue which then broke
+the next run's launch. Gate 5 must assert on `docker ps -a` scoped to the project. Run 2's teardown
+genuinely does better: total containers went 27→17, i.e. ten were **removed**, not merely stopped.
+
+#### The systemic pattern
+
+D-1 and D-2 are the same shape: **a unit test passes on a function whose output is never wired to
+anything.** `pluginSrc` was tested against the broken string; `negotiateCapabilities` is tested in
+isolation while its result is discarded. D-4 is the third instance of the main-event-loop-blocking
+family already documented in `tests/tauri_command_threading.rs`. All three passed every automated
+gate. Feed this into `docs/testing/PLAN.md`: the gap is integration-boundary coverage, not unit
+coverage.
+
+**Automated gates after this session's fixes:** `cargo test` **37 passed** · `cargo fmt` clean ·
+`cargo clippy --all-targets -D warnings` clean · `npm test` **137 passed** (19 files) ·
+`npm run check` **353 files, 0 errors / 0 warnings**.
+
+**Still merge-blocking #49:** D-4's fix is unverified in a watched window (re-verification in
+progress); D-2 needs a decision; 1.2/1.4a/1.7 are blocked behind D-3; 1.10 is unverified; and the
+**entire packaged pass (Part 2) has still never been run**.
