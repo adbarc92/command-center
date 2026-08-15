@@ -1,4 +1,27 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
+
+/// Gate-5 shutdown re-entrancy guard (smoke item 1.9b).
+///
+/// `AppHandle::exit` re-emits `RunEvent::ExitRequested`. If the handler calls
+/// `api.prevent_exit()` unconditionally, the exit it requests re-enters the handler, which
+/// prevents it again — so the process never exits and spins the event loop at ~100% of one
+/// core with no window. Measured in Smoke run 2: 309 s of CPU burned after a graceful close.
+///
+/// The FIRST exit request must be prevented, so teardown gets to run. Every later one must be
+/// allowed through.
+#[derive(Default)]
+pub struct ShutdownGuard(AtomicBool);
+
+impl ShutdownGuard {
+    /// True exactly once — for the first exit request only.
+    pub fn should_prevent_exit(&self) -> bool {
+        !self.0.swap(true, Ordering::SeqCst)
+    }
+}
+
+/// One guard per process; there is exactly one `run()` per process.
+static SHUTDOWN_GUARD: ShutdownGuard = ShutdownGuard(AtomicBool::new(false));
 
 mod plugins;
 // LANE-A → SHELL contract: the dashboard's read-seam Tauri commands (§6.1/§6.2).
@@ -76,6 +99,13 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                // `app_handle.exit(0)` below re-emits `ExitRequested`. Preventing that
+                // re-entry too would call this handler forever: the process never exits and
+                // spins the event loop at ~100% of a core with no window (Gate-5 item 1.9b,
+                // measured at 309 s of CPU in Smoke run 2). Let every later request through.
+                if !SHUTDOWN_GUARD.should_prevent_exit() {
+                    return;
+                }
                 api.prevent_exit();
                 // LANE-B → HOST: stop the fleetd-serve sidecar first so the
                 // supervisor doesn't respawn it as we tear down, and no
@@ -103,4 +133,30 @@ pub fn run() {
                 //     cosmetic line.
             }
         });
+}
+
+#[cfg(test)]
+mod shutdown_guard_tests {
+    use super::ShutdownGuard;
+
+    /// Pins Gate-5 item 1.9b. `AppHandle::exit` re-emits `ExitRequested`; if that re-entry is
+    /// prevented too, the handler calls itself forever and the process spins instead of
+    /// exiting. Delete the `swap` in `should_prevent_exit` and this goes red.
+    #[test]
+    fn only_the_first_exit_request_is_prevented() {
+        let guard = ShutdownGuard::default();
+
+        assert!(
+            guard.should_prevent_exit(),
+            "the first ExitRequested must be prevented so teardown can run"
+        );
+        assert!(
+            !guard.should_prevent_exit(),
+            "the exit(0) re-entry must NOT be prevented, or the app never exits"
+        );
+        assert!(
+            !guard.should_prevent_exit(),
+            "every later exit request must also be allowed through"
+        );
+    }
 }
