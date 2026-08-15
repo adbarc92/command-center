@@ -12,12 +12,19 @@ pub struct Manifest {
     pub icon: String,
     pub url: String,
     pub lifecycle: Lifecycle,
+    // UNWIRED FEATURE — deserialized, then read by nothing but test assertions, on
+    // main and on every in-flight branch alike. The manifest advertises these keys
+    // and the app currently ignores them. See WebviewCfg below.
+    #[allow(dead_code)]
     #[serde(default)]
     pub webview: WebviewCfg,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Lifecycle {
+    // Manifest surface that is accepted today but not yet acted on: every plugin
+    // is treated as managed until adopt-only stacks are wired up.
+    #[allow(dead_code)]
     #[serde(default)]
     pub managed: bool,
     #[serde(default)]
@@ -41,7 +48,9 @@ pub struct BuildStep {
     #[serde(default = "default_build_timeout")]
     pub timeout: u64,
 }
-fn default_build_timeout() -> u64 { 1_200_000 }
+fn default_build_timeout() -> u64 {
+    1_200_000
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Probe {
@@ -53,10 +62,22 @@ pub struct Probe {
     #[serde(default = "default_probe_interval")]
     pub interval: u64,
 }
-fn default_ok_status() -> Vec<u16> { vec![200] }
-fn default_probe_timeout() -> u64 { 180_000 }
-fn default_probe_interval() -> u64 { 1_000 }
+fn default_ok_status() -> Vec<u16> {
+    vec![200]
+}
+fn default_probe_timeout() -> u64 {
+    180_000
+}
+fn default_probe_interval() -> u64 {
+    1_000
+}
 
+// UNWIRED FEATURE — `popups`, `external_links` and `title` are parsed from the
+// manifest and asserted on in tests, and that is the whole of their use. No
+// production code reads any of them on any current branch, so a plugin author who
+// sets `popups: block` gets no blocking. The allow keeps the parsed shape around;
+// it does not mean someone is about to honor it.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct WebviewCfg {
     #[serde(default)]
@@ -69,11 +90,19 @@ pub struct WebviewCfg {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum Popups { #[default] Allow, Block }
+pub enum Popups {
+    #[default]
+    Allow,
+    Block,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
-pub enum ExternalLinks { #[default] InApp, SystemBrowser }
+pub enum ExternalLinks {
+    #[default]
+    InApp,
+    SystemBrowser,
+}
 
 pub const SUPPORTED_API_VERSIONS: &[u32] = &[1];
 
@@ -88,8 +117,14 @@ impl Manifest {
         serde_json::from_str(s)
     }
     /// Effective window title (defaults to `name`).
+    // UNWIRED FEATURE — the only call is a test assertion; no production caller
+    // exists on any current branch. Nothing creates a window from this yet.
+    #[allow(dead_code)]
     pub fn window_title(&self) -> String {
-        self.webview.title.clone().unwrap_or_else(|| self.name.clone())
+        self.webview
+            .title
+            .clone()
+            .unwrap_or_else(|| self.name.clone())
     }
     pub fn validate(&self) -> Result<(), ManifestError> {
         if !SUPPORTED_API_VERSIONS.contains(&self.api_version) {
@@ -104,7 +139,11 @@ impl Manifest {
             None => manifest_dir.to_path_buf(),
             Some(c) => {
                 let p = Path::new(c);
-                if p.is_absolute() { p.to_path_buf() } else { manifest_dir.join(p) }
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    manifest_dir.join(p)
+                }
             }
         }
     }
@@ -152,7 +191,10 @@ mod tests {
     fn rejects_unknown_api_version() {
         let json = AUDIENCE_JSON.replace("\"apiVersion\": 1", "\"apiVersion\": 99");
         let m = Manifest::from_json(&json).unwrap();
-        assert!(matches!(m.validate(), Err(ManifestError::UnsupportedApiVersion(99))));
+        assert!(matches!(
+            m.validate(),
+            Err(ManifestError::UnsupportedApiVersion(99))
+        ));
     }
 
     #[test]
@@ -171,15 +213,27 @@ mod tests {
 
     #[test]
     fn keeps_absolute_cwd_as_is() {
-        let m = Manifest::from_json(AUDIENCE_JSON).unwrap(); // cwd is absolute D:/...
+        // `Path::is_absolute` is platform-specific: the fixture's "D:/…" drive path
+        // is absolute only on Windows, and elsewhere gets joined to the manifest dir.
+        // Pick a path the host actually agrees is absolute so the intent holds on both.
+        let abs = if cfg!(windows) {
+            "D:/MajorProjects/CURRENT/audience"
+        } else {
+            "/srv/audience"
+        };
+        let mut m = Manifest::from_json(AUDIENCE_JSON).unwrap();
+        m.lifecycle.cwd = Some(abs.into());
         let resolved = m.resolved_cwd(Path::new("/plugins/audience"));
-        assert_eq!(resolved, Path::new("D:/MajorProjects/CURRENT/audience"));
+        assert_eq!(resolved, Path::new(abs));
     }
 
     #[test]
     fn uses_manifest_dir_when_cwd_is_absent() {
         let mut m = Manifest::from_json(AUDIENCE_JSON).unwrap();
         m.lifecycle.cwd = None;
-        assert_eq!(m.resolved_cwd(Path::new("/plugins/audience")), Path::new("/plugins/audience"));
+        assert_eq!(
+            m.resolved_cwd(Path::new("/plugins/audience")),
+            Path::new("/plugins/audience")
+        );
     }
 }

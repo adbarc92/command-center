@@ -12,7 +12,9 @@ pub struct GateConfig {
 
 impl Default for GateConfig {
     fn default() -> Self {
-        Self { min_review_rounds: 3 }
+        Self {
+            min_review_rounds: 3,
+        }
     }
 }
 
@@ -82,13 +84,17 @@ mod tests {
     #[test]
     fn first_round_has_no_prior_to_compare() {
         // round floor of 1 to isolate the prev=None branch
-        let cfg = GateConfig { min_review_rounds: 1 };
+        let cfg = GateConfig {
+            min_review_rounds: 1,
+        };
         assert!(gate_met(cfg, snap(1, 0, None, true)));
     }
 
     #[test]
     fn respects_custom_floor() {
-        let cfg = GateConfig { min_review_rounds: 1 };
+        let cfg = GateConfig {
+            min_review_rounds: 1,
+        };
         assert!(gate_met(cfg, snap(1, 0, Some(0), true)));
     }
 }

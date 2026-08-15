@@ -20,7 +20,9 @@ pub struct ScanConfig {
     #[serde(default)]
     pub excludes: Vec<String>,
 }
-fn default_depth() -> usize { 5 }
+fn default_depth() -> usize {
+    5
+}
 
 #[derive(Serialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +42,9 @@ fn normalize(p: &Path) -> String {
 
 fn is_excluded(path: &str, excludes: &[String]) -> bool {
     let p = path.to_lowercase();
-    excludes.iter().any(|e| p.contains(&e.replace('\\', "/").to_lowercase()))
+    excludes
+        .iter()
+        .any(|e| p.contains(&e.replace('\\', "/").to_lowercase()))
 }
 
 /// Read a project dir's STATUS.md/ROADMAP.md into a doc (raw text; hash over raw bytes).
@@ -71,8 +75,8 @@ fn discover(root: &Path, max_depth: usize, excludes: &[String], out: &mut Vec<Pa
         .into_iter()
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
-            !(e.file_type().is_dir() && PRUNE.contains(&name.as_ref()))
-                && !is_excluded(&normalize(e.path()), excludes)
+            let pruned = e.file_type().is_dir() && PRUNE.contains(&name.as_ref());
+            !pruned && !is_excluded(&normalize(e.path()), excludes)
         });
     for entry in walker.flatten() {
         if entry.file_type().is_dir() && entry.path().join("docs/STATUS.md").is_file() {
@@ -85,10 +89,14 @@ fn discover(root: &Path, max_depth: usize, excludes: &[String], out: &mut Vec<Pa
 pub fn scan_local_projects(config: ScanConfig) -> Result<Vec<LocalProjectDoc>, String> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     for root in &config.scan_roots {
-        discover(Path::new(root), config.max_depth, &config.excludes, &mut dirs);
+        discover(
+            Path::new(root),
+            config.max_depth,
+            &config.excludes,
+            &mut dirs,
+        );
     }
-    let discovered: std::collections::HashSet<String> =
-        dirs.iter().map(|p| normalize(p)).collect();
+    let discovered: std::collections::HashSet<String> = dirs.iter().map(|p| normalize(p)).collect();
 
     let mut docs: Vec<LocalProjectDoc> = dirs.iter().map(|d| read_project(d, false)).collect();
     // Pins: included even without a marker; skip a pin already auto-discovered.
@@ -108,7 +116,12 @@ mod tests {
     use std::fs;
 
     fn tmp() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("cc-scan-{}", std::process::id()));
+        // Unique per call. Keying only on the pid gave every test in this binary the
+        // same directory, and they run concurrently — one test's `remove_dir_all`
+        // raced another's `create_dir_all` and failed the run about 1 time in 4.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("cc-scan-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
@@ -126,7 +139,12 @@ mod tests {
         make_project(&root, "mono/services/api", "---\nstage: Spec\n---\n"); // depth-3 nested
         fs::create_dir_all(root.join("node_modules/pkg/docs")).unwrap();
         fs::write(root.join("node_modules/pkg/docs/STATUS.md"), "x").unwrap(); // must be pruned
-        let cfg = ScanConfig { scan_roots: vec![root.to_string_lossy().into()], max_depth: 5, pins: vec![], excludes: vec![] };
+        let cfg = ScanConfig {
+            scan_roots: vec![root.to_string_lossy().into()],
+            max_depth: 5,
+            pins: vec![],
+            excludes: vec![],
+        };
         let docs = scan_local_projects(cfg).unwrap();
         let dirs: Vec<&str> = docs.iter().map(|d| d.project_dir.as_str()).collect();
         assert!(dirs.iter().any(|d| d.ends_with("/alpha")));
@@ -138,10 +156,22 @@ mod tests {
     fn hashes_roadmap_over_raw_bytes() {
         let root = tmp();
         make_project(&root, "beta", "---\nstage: Build\n---\n");
-        fs::write(root.join("beta/ROADMAP.md"), "## X\n<!-- cc-item id=x status=open -->\n").unwrap();
-        let cfg = ScanConfig { scan_roots: vec![root.to_string_lossy().into()], max_depth: 5, pins: vec![], excludes: vec![] };
+        fs::write(
+            root.join("beta/ROADMAP.md"),
+            "## X\n<!-- cc-item id=x status=open -->\n",
+        )
+        .unwrap();
+        let cfg = ScanConfig {
+            scan_roots: vec![root.to_string_lossy().into()],
+            max_depth: 5,
+            pins: vec![],
+            excludes: vec![],
+        };
         let docs = scan_local_projects(cfg).unwrap();
-        let beta = docs.iter().find(|d| d.project_dir.ends_with("/beta")).unwrap();
+        let beta = docs
+            .iter()
+            .find(|d| d.project_dir.ends_with("/beta"))
+            .unwrap();
         assert!(beta.roadmap_hash.as_ref().unwrap().len() == 64); // hex sha256
     }
 
@@ -149,10 +179,22 @@ mod tests {
     fn roadmap_hash_is_over_raw_bytes_even_when_not_utf8() {
         let root = tmp();
         make_project(&root, "gamma", "---\nstage: Build\n---\n");
-        std::fs::write(root.join("gamma/ROADMAP.md"), [0x23, 0x20, 0xff, 0xfe, 0x0a]).unwrap();
-        let cfg = ScanConfig { scan_roots: vec![root.to_string_lossy().into()], max_depth: 5, pins: vec![], excludes: vec![] };
+        std::fs::write(
+            root.join("gamma/ROADMAP.md"),
+            [0x23, 0x20, 0xff, 0xfe, 0x0a],
+        )
+        .unwrap();
+        let cfg = ScanConfig {
+            scan_roots: vec![root.to_string_lossy().into()],
+            max_depth: 5,
+            pins: vec![],
+            excludes: vec![],
+        };
         let docs = scan_local_projects(cfg).unwrap();
-        let gamma = docs.iter().find(|d| d.project_dir.ends_with("/gamma")).unwrap();
+        let gamma = docs
+            .iter()
+            .find(|d| d.project_dir.ends_with("/gamma"))
+            .unwrap();
         assert!(gamma.roadmap_hash.as_ref().unwrap().len() == 64); // hash computed despite invalid UTF-8
         assert!(gamma.roadmap_text.is_none()); // decode fails, proving hash path is independent of decode
     }
@@ -162,7 +204,12 @@ mod tests {
         let root = tmp();
         let pin = root.join("pinned-no-marker");
         fs::create_dir_all(&pin).unwrap();
-        let cfg = ScanConfig { scan_roots: vec![], max_depth: 5, pins: vec![pin.to_string_lossy().into()], excludes: vec![] };
+        let cfg = ScanConfig {
+            scan_roots: vec![],
+            max_depth: 5,
+            pins: vec![pin.to_string_lossy().into()],
+            excludes: vec![],
+        };
         let docs = scan_local_projects(cfg).unwrap();
         assert_eq!(docs.len(), 1);
         assert!(docs[0].is_pinned);

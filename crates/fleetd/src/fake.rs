@@ -82,7 +82,11 @@ impl FakeRunner {
             exit_code: 0,
             stdout: stdout.iter().map(|s| s.to_string()).collect(),
             stderr: vec![],
-            usage: Some(Usage { tokens_in: 100, tokens_out: 10, cost_usd }),
+            usage: Some(Usage {
+                tokens_in: 100,
+                tokens_out: 10,
+                cost_usd,
+            }),
         }
     }
 
@@ -92,7 +96,10 @@ impl FakeRunner {
             exit_code: 1,
             stdout: vec![],
             stderr: vec![],
-            usage: Some(Usage { cost_usd, ..Default::default() }),
+            usage: Some(Usage {
+                cost_usd,
+                ..Default::default()
+            }),
         }
     }
 
@@ -111,7 +118,9 @@ impl FakeRunner {
 #[async_trait]
 impl Runner for FakeRunner {
     async fn provision(&self, _spec: &UnitSpec) -> Result<Handle, RunnerError> {
-        Ok(Handle { id: "fake-container".into() })
+        Ok(Handle {
+            id: "fake-container".into(),
+        })
     }
 
     async fn exec(
@@ -172,7 +181,11 @@ impl Runner for FakeRunner {
         // Pop the next scripted read; default to a STABLE constant so unscripted tests
         // see an unchanged oracle and never trip tamper detection.
         let mut q = self.oracle_reads.lock().unwrap();
-        Ok(if q.is_empty() { vec!["<frozen>".to_string()] } else { q.remove(0) })
+        Ok(if q.is_empty() {
+            vec!["<frozen>".to_string()]
+        } else {
+            q.remove(0)
+        })
     }
 }
 
@@ -184,7 +197,10 @@ pub struct FakeForge {
 
 impl Default for FakeForge {
     fn default() -> Self {
-        Self { merge: MergeResult::Clean, mergeable: Mergeability::Mergeable }
+        Self {
+            merge: MergeResult::Clean,
+            mergeable: Mergeability::Mergeable,
+        }
     }
 }
 

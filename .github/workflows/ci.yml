@@ -1,10 +1,15 @@
 name: CI
 
 # First CI for command-center (Lane C / roadmap C8).
-# On every push and PR: run the embargo guard, run the Rust workspace tests, then
-# build the frontend + fleetd sidecar and produce Tauri bundles on all three target
-# OSes. Bundles are uploaded as workflow artifacts so a reviewer can smoke-test a
-# real build.
+# On every push and PR: run the embargo guard, the lint/type gates (rustfmt,
+# clippy, svelte-check + tsc), the Rust tests for both cargo workspaces and the
+# frontend's vitest suite, then build the frontend + fleetd sidecar and produce
+# Tauri bundles on all three target OSes. Bundles are uploaded as workflow
+# artifacts so a reviewer can smoke-test a real build.
+#
+# TWO CARGO WORKSPACES: the root one (crates/fleet-core, crates/fleetd) and the
+# standalone cockpit/ui/src-tauri crate. Nothing run from the repo root reaches
+# the latter, so the fmt, clippy and test gates each run once per manifest.
 #
 # COVERAGE GAP (intentional): the real-Docker integration tests in
 # crates/fleetd/tests/ (local_docker_it.rs, preflight_it.rs, swarm_smoke_it.rs)
@@ -75,8 +80,150 @@ jobs:
           node scripts/embargo-guard.mjs --message "$RUNNER_TEMP/msgs.txt"
 
   # ---------------------------------------------------------------------------
+  # rustfmt + clippy, over BOTH cargo workspaces.
+  #
+  # cockpit/ui/src-tauri declares its own empty `[workspace]` table, so it is a
+  # standalone workspace that the root manifest does not list as a member. That
+  # makes it invisible to `--workspace` / `--all` run from the repo root, which
+  # is why every gate here runs twice — once per manifest. Dropping either half
+  # silently leaves that crate ungated.
+  #
+  # rustfmt only needs the sources, so both fmt checks run first and fail fast.
+  # Clippy has to actually compile, and compiling the tauri crate needs two
+  # things the root workspace does not: the WebKitGTK system deps (same list the
+  # build job installs) and the fleetd sidecar binary, because tauri-build
+  # resolves the `externalBin` resource at compile time and hard-errors when it
+  # is absent.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            cockpit/ui/src-tauri
+
+      - name: Check formatting (root workspace)
+        run: cargo fmt --all -- --check
+
+      - name: Check formatting (cockpit/ui/src-tauri)
+        run: cargo fmt --all --manifest-path cockpit/ui/src-tauri/Cargo.toml -- --check
+
+      - name: Clippy (root workspace)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Everything below exists only so the tauri crate can be compiled.
+      - name: Install Tauri Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cockpit/ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: cockpit/ui
+
+      # tauri-build fails the compile without this — see the note above.
+      - name: Build fleetd sidecar
+        run: npm run sidecar
+        working-directory: cockpit/ui
+
+      - name: Clippy (cockpit/ui/src-tauri)
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: cockpit/ui/src-tauri
+
+  # ---------------------------------------------------------------------------
+  # Frontend type gate: `npm run check` is svelte-check over tsconfig.app.json
+  # followed by `tsc -p tsconfig.node.json`. Pure type-checking — no Rust, no
+  # system deps, so it stands alone and finishes in well under a minute.
+  # ---------------------------------------------------------------------------
+  check:
+    name: svelte-check + tsc
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cockpit/ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cockpit/ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Type-check the frontend
+        run: npm run check
+
+  # ---------------------------------------------------------------------------
+  # Frontend unit tests (vitest + jsdom). Same shape as the type gate above: no
+  # Rust, no system deps.
+  #
+  # This is half of a pair. The regression pin for the plugin_launch main-thread
+  # freeze is split across two suites — a Rust test, gated by `cargo test
+  # (cockpit)` below, and cockpit/ui/src/App.appPlugin.test.ts, gated here. That
+  # file arrives with the plugin-runtime work and is not on main yet; wiring the
+  # job now means the JS half is covered the moment it lands, instead of the pin
+  # being half-enforced and quietly rotting.
+  # ---------------------------------------------------------------------------
+  test-ui:
+    name: vitest (cockpit/ui)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cockpit/ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cockpit/ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend unit tests
+        run: npm test
+
+  # ---------------------------------------------------------------------------
   # Rust workspace tests. Fast, OS-independent gate — runs once on Linux.
   # Does NOT run the `#[ignore]`d real-Docker ITs (see header note above).
+  #
+  # ROOT WORKSPACE ONLY. The cockpit crate's tests are a separate job below —
+  # see the standalone-workspace note on the `lint` job for why they have to be.
   # ---------------------------------------------------------------------------
   test:
     name: cargo test (workspace)
@@ -94,6 +241,66 @@ jobs:
       # Docker daemon + cc-agent:dev image. This is a documented coverage gap.
       - name: Run workspace tests (Docker ITs stay --ignored)
         run: cargo test --workspace
+
+  # ---------------------------------------------------------------------------
+  # The cockpit crate's own tests — the app-plugin state machine, manifest
+  # validation and discovery. `cargo test --workspace` above runs from the repo
+  # root and cannot reach them: cockpit/ui/src-tauri is a standalone workspace
+  # (see the `lint` job note), so until this job existed that whole suite was
+  # verified only by hand on a developer's machine.
+  #
+  # Same compile prerequisites as clippy: WebKitGTK system deps plus the fleetd
+  # sidecar binary that tauri-build resolves at compile time.
+  # ---------------------------------------------------------------------------
+  test-cockpit:
+    name: cargo test (cockpit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            cockpit/ui/src-tauri
+
+      - name: Install Tauri Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cockpit/ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: cockpit/ui
+
+      - name: Build fleetd sidecar
+        run: npm run sidecar
+        working-directory: cockpit/ui
+
+      - name: Run cockpit crate tests
+        run: cargo test
+        working-directory: cockpit/ui/src-tauri
 
   # ---------------------------------------------------------------------------
   # Cross-platform Tauri build matrix. Builds the SvelteKit frontend, then the

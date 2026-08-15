@@ -43,7 +43,10 @@ fn run_halyard(subcommand: &str) -> Result<Value, String> {
     if !out.status.success() {
         let code = out.status.code().unwrap_or(-1);
         let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("halyard {subcommand} exited {code}: {}", stderr.trim()));
+        return Err(format!(
+            "halyard {subcommand} exited {code}: {}",
+            stderr.trim()
+        ));
     }
 
     let stdout = String::from_utf8_lossy(&out.stdout);

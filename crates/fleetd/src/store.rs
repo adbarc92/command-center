@@ -124,12 +124,26 @@ impl Store {
                oracle_frozen=(oracle_frozen OR (?6 IS NOT NULL)),
                updated_ts=?7
              WHERE unit_id=?1",
-            params![unit_id, phase, cost, last_seq, terminal_reason, oracle_hash, now],
+            params![
+                unit_id,
+                phase,
+                cost,
+                last_seq,
+                terminal_reason,
+                oracle_hash,
+                now
+            ],
         )?;
         Ok(())
     }
 
-    pub fn append_event(&self, unit_id: &str, seq: u64, ts: i64, json: &str) -> rusqlite::Result<()> {
+    pub fn append_event(
+        &self,
+        unit_id: &str,
+        seq: u64,
+        ts: i64,
+        json: &str,
+    ) -> rusqlite::Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO events(unit_id,seq,ts,json) VALUES(?1,?2,?3,?4)",
             params![unit_id, seq, ts, json],
@@ -195,7 +209,10 @@ impl Store {
     /// count their `planner_cost`. Partitioned by the authoritative terminal list.
     pub fn committed_spend(&self, since_ts: i64) -> rusqlite::Result<f64> {
         let terminal = fleet_core::TERMINAL_PHASE_STRS
-            .iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(",");
+            .iter()
+            .map(|p| format!("'{p}'"))
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT
                COALESCE((SELECT SUM(cost) FROM units
@@ -268,28 +285,63 @@ impl Store {
              ON CONFLICT(swarm_id) DO UPDATE SET
                status=?11, planner_cost=?12, lanes_launched=?13, lanes_dropped=?14,
                terminal_reason=?16, updated_ts=?17",
-            params![r.swarm_id, r.repo_url, r.repo_slug, r.base_branch, r.doc_path, r.tier, r.mode,
-                r.lane_cap, r.usd_budget, r.per_lane_cap, r.status, r.planner_cost,
-                r.lanes_launched, r.lanes_dropped, r.min_review_rounds, r.terminal_reason, now],
+            params![
+                r.swarm_id,
+                r.repo_url,
+                r.repo_slug,
+                r.base_branch,
+                r.doc_path,
+                r.tier,
+                r.mode,
+                r.lane_cap,
+                r.usd_budget,
+                r.per_lane_cap,
+                r.status,
+                r.planner_cost,
+                r.lanes_launched,
+                r.lanes_dropped,
+                r.min_review_rounds,
+                r.terminal_reason,
+                now
+            ],
         )?;
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn update_swarm(&self, id: &str, status: &str, planner_cost: f64, lanes_launched: u32,
-        lanes_dropped: u32, terminal_reason: Option<&str>, now: i64) -> rusqlite::Result<()> {
+    pub fn update_swarm(
+        &self,
+        id: &str,
+        status: &str,
+        planner_cost: f64,
+        lanes_launched: u32,
+        lanes_dropped: u32,
+        terminal_reason: Option<&str>,
+        now: i64,
+    ) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE swarms SET status=?2, planner_cost=?3, lanes_launched=?4, lanes_dropped=?5,
                terminal_reason=?6, updated_ts=?7 WHERE swarm_id=?1",
-            params![id, status, planner_cost, lanes_launched, lanes_dropped, terminal_reason, now],
+            params![
+                id,
+                status,
+                planner_cost,
+                lanes_launched,
+                lanes_dropped,
+                terminal_reason,
+                now
+            ],
         )?;
         Ok(())
     }
 
     pub fn get_swarm(&self, id: &str) -> rusqlite::Result<Option<SwarmRow>> {
-        self.conn.query_row(SELECT_SWARM_WHERE_ID, params![id], Self::map_swarm)
-            .map(Some).or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None), other => Err(other),
+        self.conn
+            .query_row(SELECT_SWARM_WHERE_ID, params![id], Self::map_swarm)
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
             })
     }
 
@@ -303,7 +355,10 @@ impl Store {
     /// = non-terminal parked phases (`needs_human`/`halted`).
     pub fn swarm_rollup(&self, swarm_id: &str) -> rusqlite::Result<(u64, u64, u64)> {
         let terminal = fleet_core::TERMINAL_PHASE_STRS
-            .iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(",");
+            .iter()
+            .map(|p| format!("'{p}'"))
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT
                COUNT(*),
@@ -312,18 +367,32 @@ impl Store {
              FROM units WHERE swarm_id=?1"
         );
         self.conn.query_row(&sql, params![swarm_id], |r| {
-            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64))
+            Ok((
+                r.get::<_, i64>(0)? as u64,
+                r.get::<_, i64>(1)? as u64,
+                r.get::<_, i64>(2)? as u64,
+            ))
         })
     }
 
     fn map_swarm(r: &rusqlite::Row) -> rusqlite::Result<SwarmRow> {
         Ok(SwarmRow {
-            swarm_id: r.get(0)?, repo_url: r.get(1)?, repo_slug: r.get(2)?, base_branch: r.get(3)?,
-            doc_path: r.get(4)?, tier: r.get(5)?, mode: r.get(6)?,
-            lane_cap: r.get::<_, i64>(7)? as u32, usd_budget: r.get(8)?, per_lane_cap: r.get(9)?,
-            status: r.get(10)?, planner_cost: r.get(11)?,
-            lanes_launched: r.get::<_, i64>(12)? as u32, lanes_dropped: r.get::<_, i64>(13)? as u32,
-            min_review_rounds: r.get::<_, i64>(14)? as u32, terminal_reason: r.get(15)?,
+            swarm_id: r.get(0)?,
+            repo_url: r.get(1)?,
+            repo_slug: r.get(2)?,
+            base_branch: r.get(3)?,
+            doc_path: r.get(4)?,
+            tier: r.get(5)?,
+            mode: r.get(6)?,
+            lane_cap: r.get::<_, i64>(7)? as u32,
+            usd_budget: r.get(8)?,
+            per_lane_cap: r.get(9)?,
+            status: r.get(10)?,
+            planner_cost: r.get(11)?,
+            lanes_launched: r.get::<_, i64>(12)? as u32,
+            lanes_dropped: r.get::<_, i64>(13)? as u32,
+            min_review_rounds: r.get::<_, i64>(14)? as u32,
+            terminal_reason: r.get(15)?,
         })
     }
 }
@@ -342,8 +411,16 @@ pub struct LaneRow {
 
 impl Store {
     #[allow(clippy::too_many_arguments)]
-    pub fn upsert_lane(&self, swarm_id: &str, idx: u32, title: &str, task: &str,
-        rationale: &str, decision: &str, unit_id: Option<&str>) -> rusqlite::Result<()> {
+    pub fn upsert_lane(
+        &self,
+        swarm_id: &str,
+        idx: u32,
+        title: &str,
+        task: &str,
+        rationale: &str,
+        decision: &str,
+        unit_id: Option<&str>,
+    ) -> rusqlite::Result<()> {
         self.conn.execute(
             "INSERT INTO swarm_lanes(swarm_id,idx,title,task,rationale,decision,unit_id)
              VALUES(?1,?2,?3,?4,?5,?6,?7)
@@ -356,18 +433,31 @@ impl Store {
     pub fn lanes_for_swarm(&self, swarm_id: &str) -> rusqlite::Result<Vec<LaneRow>> {
         let mut s = self.conn.prepare(
             "SELECT swarm_id,idx,title,task,rationale,decision,unit_id
-             FROM swarm_lanes WHERE swarm_id=?1 ORDER BY idx")?;
-        let rows = s.query_map(params![swarm_id], |r| Ok(LaneRow {
-            swarm_id: r.get(0)?, idx: r.get::<_, i64>(1)? as u32, title: r.get(2)?,
-            task: r.get(3)?, rationale: r.get(4)?, decision: r.get(5)?, unit_id: r.get(6)?,
-        }))?;
+             FROM swarm_lanes WHERE swarm_id=?1 ORDER BY idx",
+        )?;
+        let rows = s.query_map(params![swarm_id], |r| {
+            Ok(LaneRow {
+                swarm_id: r.get(0)?,
+                idx: r.get::<_, i64>(1)? as u32,
+                title: r.get(2)?,
+                task: r.get(3)?,
+                rationale: r.get(4)?,
+                decision: r.get(5)?,
+                unit_id: r.get(6)?,
+            })
+        })?;
         rows.collect()
     }
 
     /// Insert the lane's unit row AND set `swarm_lanes.unit_id` in ONE transaction,
     /// so a crash never leaves a dangling back-link or an orphan row (spec R2 #5).
-    pub fn commit_lane_unit(&self, swarm_id: &str, idx: u32, u: &UnitRow, now: i64)
-        -> rusqlite::Result<()> {
+    pub fn commit_lane_unit(
+        &self,
+        swarm_id: &str,
+        idx: u32,
+        u: &UnitRow,
+        now: i64,
+    ) -> rusqlite::Result<()> {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let r: rusqlite::Result<()> = (|| {
             self.upsert_unit(u, now)?;
@@ -378,8 +468,14 @@ impl Store {
             Ok(())
         })();
         match r {
-            Ok(()) => { self.conn.execute_batch("COMMIT")?; Ok(()) }
-            Err(e) => { let _ = self.conn.execute_batch("ROLLBACK"); Err(e) }
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
         }
     }
 }
@@ -416,8 +512,10 @@ mod tests {
     fn upsert_append_list_since_spend() {
         let s = Store::open_memory().unwrap();
         s.upsert_unit(&row("u1"), 1000).unwrap();
-        s.append_event("u1", 1, 1000, r#"{"type":"phase_changed"}"#).unwrap();
-        s.append_event("u1", 2, 1001, r#"{"type":"metric"}"#).unwrap();
+        s.append_event("u1", 1, 1000, r#"{"type":"phase_changed"}"#)
+            .unwrap();
+        s.append_event("u1", 2, 1001, r#"{"type":"metric"}"#)
+            .unwrap();
         assert_eq!(s.events_since("u1", 0).unwrap().len(), 2);
         assert_eq!(s.events_since("u1", 1).unwrap().len(), 1);
 
@@ -448,7 +546,10 @@ mod tests {
         s.upsert_unit(&upd, 1001).unwrap();
         let got = s.get_unit("u1").unwrap().unwrap();
         assert_eq!(got.mode, "real", "mode is set-once at create");
-        assert_eq!(got.min_review_rounds, 3, "review floor is set-once at create");
+        assert_eq!(
+            got.min_review_rounds, 3,
+            "review floor is set-once at create"
+        );
         assert_eq!(got.phase, "building", "projection columns still update");
     }
 
@@ -461,21 +562,52 @@ mod tests {
         r.oracle_hash = Some("h0000000000000abc".into());
         s.upsert_unit(&r, 1000).unwrap();
         let got = s.get_unit("u1").unwrap().unwrap();
-        assert_eq!(got.oracle_hash.as_deref(), Some("h0000000000000abc"), "oracle_hash round-trips");
-        assert!(!got.oracle_frozen, "upsert_unit alone does not flip oracle_frozen");
+        assert_eq!(
+            got.oracle_hash.as_deref(),
+            Some("h0000000000000abc"),
+            "oracle_hash round-trips"
+        );
+        assert!(
+            !got.oracle_frozen,
+            "upsert_unit alone does not flip oracle_frozen"
+        );
 
-        s.update_unit("u1", "checking", got.cost, got.last_seq + 1, None,
-            Some("h0000000000000abc"), 1001).unwrap();
+        s.update_unit(
+            "u1",
+            "checking",
+            got.cost,
+            got.last_seq + 1,
+            None,
+            Some("h0000000000000abc"),
+            1001,
+        )
+        .unwrap();
         let got2 = s.get_unit("u1").unwrap().unwrap();
         assert_eq!(got2.oracle_hash.as_deref(), Some("h0000000000000abc"));
-        assert!(got2.oracle_frozen, "oracle_frozen flips true once update_unit sees a hash");
+        assert!(
+            got2.oracle_frozen,
+            "oracle_frozen flips true once update_unit sees a hash"
+        );
 
         // A later update_unit call with oracle_hash=None (the common case — most
         // phase transitions don't carry a fresh hash) must NOT clobber the
         // already-persisted hash/frozen state (COALESCE / OR are no-ops on None).
-        s.update_unit("u1", "reviewing", got2.cost, got2.last_seq + 1, None, None, 1002).unwrap();
+        s.update_unit(
+            "u1",
+            "reviewing",
+            got2.cost,
+            got2.last_seq + 1,
+            None,
+            None,
+            1002,
+        )
+        .unwrap();
         let got3 = s.get_unit("u1").unwrap().unwrap();
-        assert_eq!(got3.oracle_hash.as_deref(), Some("h0000000000000abc"), "None must not wipe a prior hash");
+        assert_eq!(
+            got3.oracle_hash.as_deref(),
+            Some("h0000000000000abc"),
+            "None must not wipe a prior hash"
+        );
         assert!(got3.oracle_frozen, "None must not un-freeze");
     }
 
@@ -501,7 +633,9 @@ mod tests {
             [],
         ).unwrap();
         // units.swarm_id column present:
-        s.conn.execute("UPDATE units SET swarm_id='s1' WHERE unit_id='nope'", []).unwrap();
+        s.conn
+            .execute("UPDATE units SET swarm_id='s1' WHERE unit_id='nope'", [])
+            .unwrap();
     }
 
     #[test]
@@ -510,7 +644,10 @@ mod tests {
         let mut r = row("u1");
         r.swarm_id = Some("sw1".into());
         s.upsert_unit(&r, 1000).unwrap();
-        assert_eq!(s.get_unit("u1").unwrap().unwrap().swarm_id.as_deref(), Some("sw1"));
+        assert_eq!(
+            s.get_unit("u1").unwrap().unwrap().swarm_id.as_deref(),
+            Some("sw1")
+        );
     }
 
     #[test]
@@ -529,20 +666,33 @@ mod tests {
         s.upsert_unit(&row("u3"), 1).unwrap();
         s.upsert_unit(&row("u10"), 1).unwrap();
         s.upsert_unit(&row("u2"), 1).unwrap();
-        assert_eq!(s.max_unit_seq().unwrap(), 10, "parses the numeric suffix, not lexical max");
+        assert_eq!(
+            s.max_unit_seq().unwrap(),
+            10,
+            "parses the numeric suffix, not lexical max"
+        );
     }
 
     #[test]
     fn committed_spend_counts_reservations_and_overcap_and_planner() {
         let s = Store::open_memory().unwrap();
         // A terminal unit contributes its final cost.
-        let mut done = row("done"); done.phase = "done".into(); done.cost = 1.0; done.usd_cap = 5.0;
+        let mut done = row("done");
+        done.phase = "done".into();
+        done.cost = 1.0;
+        done.usd_cap = 5.0;
         s.upsert_unit(&done, 1000).unwrap();
         // A non-terminal unit under cap contributes its usd_cap (reservation).
-        let mut run = row("run"); run.phase = "building".into(); run.cost = 0.5; run.usd_cap = 5.0;
+        let mut run = row("run");
+        run.phase = "building".into();
+        run.cost = 0.5;
+        run.usd_cap = 5.0;
         s.upsert_unit(&run, 1000).unwrap();
         // A non-terminal unit that BILLED PAST its cap contributes cost (MAX), not usd_cap.
-        let mut over = row("over"); over.phase = "building".into(); over.cost = 9.0; over.usd_cap = 5.0;
+        let mut over = row("over");
+        over.phase = "building".into();
+        over.cost = 9.0;
+        over.usd_cap = 5.0;
         s.upsert_unit(&over, 1000).unwrap();
         // Planner cost of a swarm counts too.
         s.conn.execute(
@@ -556,21 +706,38 @@ mod tests {
     #[test]
     fn committed_spend_window_excludes_old() {
         let s = Store::open_memory().unwrap();
-        let mut old = row("old"); old.phase = "building".into(); old.usd_cap = 5.0;
+        let mut old = row("old");
+        old.phase = "building".into();
+        old.usd_cap = 5.0;
         s.upsert_unit(&old, 100).unwrap();
         s.conn.execute(
             "INSERT INTO swarms(swarm_id,status,planner_cost,created_ts,updated_ts) VALUES('oldsw','failed',7.0,100,100)",
             [],
         ).unwrap();
-        assert_eq!(s.committed_spend(500).unwrap(), 0.0, "created before the window is excluded");
+        assert_eq!(
+            s.committed_spend(500).unwrap(),
+            0.0,
+            "created before the window is excluded"
+        );
     }
 
     fn swarm_row(id: &str, status: &str) -> SwarmRow {
         SwarmRow {
-            swarm_id: id.into(), repo_url: "u".into(), repo_slug: "s".into(), base_branch: "main".into(),
-            doc_path: "spec.md".into(), tier: "t1".into(), mode: "demo".into(),
-            lane_cap: 8, usd_budget: 15.0, per_lane_cap: 5.0, status: status.into(),
-            planner_cost: 0.0, lanes_launched: 0, lanes_dropped: 0, min_review_rounds: 2,
+            swarm_id: id.into(),
+            repo_url: "u".into(),
+            repo_slug: "s".into(),
+            base_branch: "main".into(),
+            doc_path: "spec.md".into(),
+            tier: "t1".into(),
+            mode: "demo".into(),
+            lane_cap: 8,
+            usd_budget: 15.0,
+            per_lane_cap: 5.0,
+            status: status.into(),
+            planner_cost: 0.0,
+            lanes_launched: 0,
+            lanes_dropped: 0,
+            min_review_rounds: 2,
             terminal_reason: None,
         }
     }
@@ -581,7 +748,8 @@ mod tests {
         let sw = swarm_row("sw1", "planning");
         s.upsert_swarm(&sw, 1000).unwrap();
         assert_eq!(s.get_swarm("sw1").unwrap().unwrap().status, "planning");
-        s.update_swarm("sw1", "running", 0.4, 3, 0, None, 1001).unwrap();
+        s.update_swarm("sw1", "running", 0.4, 3, 0, None, 1001)
+            .unwrap();
         let got = s.get_swarm("sw1").unwrap().unwrap();
         assert_eq!(got.status, "running");
         assert_eq!(got.planner_cost, 0.4);
@@ -592,31 +760,45 @@ mod tests {
     #[test]
     fn lane_crud_and_commit_is_atomic() {
         let s = Store::open_memory().unwrap();
-        s.upsert_swarm(&swarm_row("sw1", "fanning_out"), 1000).unwrap();
+        s.upsert_swarm(&swarm_row("sw1", "fanning_out"), 1000)
+            .unwrap();
         // Persist a lane with no unit yet.
-        s.upsert_lane("sw1", 0, "Add auth", "do auth", "indep", "admit", None).unwrap();
+        s.upsert_lane("sw1", 0, "Add auth", "do auth", "indep", "admit", None)
+            .unwrap();
         let lanes = s.lanes_for_swarm("sw1").unwrap();
         assert_eq!(lanes.len(), 1);
         assert_eq!(lanes[0].decision, "admit");
         assert!(lanes[0].unit_id.is_none());
 
         // commit_lane_unit inserts the unit row AND sets the back-link in one txn.
-        let mut u = row("u1"); u.swarm_id = Some("sw1".into());
+        let mut u = row("u1");
+        u.swarm_id = Some("sw1".into());
         s.commit_lane_unit("sw1", 0, &u, 1001).unwrap();
         assert!(s.get_unit("u1").unwrap().is_some(), "unit row inserted");
-        assert_eq!(s.lanes_for_swarm("sw1").unwrap()[0].unit_id.as_deref(), Some("u1"), "back-link set");
+        assert_eq!(
+            s.lanes_for_swarm("sw1").unwrap()[0].unit_id.as_deref(),
+            Some("u1"),
+            "back-link set"
+        );
     }
 
     #[test]
     fn swarm_rollup_counts_terminal_and_awaiting_human() {
         let s = Store::open_memory().unwrap();
-        for (id, phase) in [("u1","done"), ("u2","failed"), ("u3","building"), ("u4","needs_human")] {
-            let mut r = row(id); r.phase = phase.into(); r.swarm_id = Some("sw1".into());
+        for (id, phase) in [
+            ("u1", "done"),
+            ("u2", "failed"),
+            ("u3", "building"),
+            ("u4", "needs_human"),
+        ] {
+            let mut r = row(id);
+            r.phase = phase.into();
+            r.swarm_id = Some("sw1".into());
             s.upsert_unit(&r, 1000).unwrap();
         }
         let (total, terminal, awaiting) = s.swarm_rollup("sw1").unwrap();
         assert_eq!(total, 4);
-        assert_eq!(terminal, 2);          // done + failed
-        assert_eq!(awaiting, 1);          // needs_human (halted would also count)
+        assert_eq!(terminal, 2); // done + failed
+        assert_eq!(awaiting, 1); // needs_human (halted would also count)
     }
 }

@@ -44,7 +44,9 @@ async fn provision_commit_export_roundtrip() {
          git commit -q -m base; git checkout -q -b agent/it; \
          printf 'x\\ny\\n' > f.txt; git add f.txt; git commit -q -m feat; \
          git rev-parse agent/it";
-    let exec = runner.exec(&handle, "/work", &["sh".into(), "-c".into(), script.into()]).await;
+    let exec = runner
+        .exec(&handle, "/work", &["sh".into(), "-c".into(), script.into()])
+        .await;
     let bundle = match &exec {
         Ok(o) if o.exit_code == 0 => runner.export_bundle(&handle, "agent/it").await.ok(),
         _ => None,
@@ -59,7 +61,12 @@ async fn provision_commit_export_roundtrip() {
             .status()
             .ok()?;
         let o = StdCommand::new("git")
-            .args(["-C", &dir.to_string_lossy(), "rev-parse", "refs/remotes/origin/agent/it"])
+            .args([
+                "-C",
+                &dir.to_string_lossy(),
+                "rev-parse",
+                "refs/remotes/origin/agent/it",
+            ])
             .output()
             .ok()?;
         Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -75,6 +82,14 @@ async fn provision_commit_export_roundtrip() {
     let out = exec.expect("exec git script");
     assert_eq!(out.exit_code, 0, "git script failed: {:?}", out.stdout);
     let container_sha = out.stdout.last().expect("a sha line").trim().to_string();
-    assert_eq!(container_sha.len(), 40, "expected a full sha, got {container_sha:?}");
-    assert_eq!(host_sha.as_deref(), Some(container_sha.as_str()), "host SHA must match container");
+    assert_eq!(
+        container_sha.len(),
+        40,
+        "expected a full sha, got {container_sha:?}"
+    );
+    assert_eq!(
+        host_sha.as_deref(),
+        Some(container_sha.as_str()),
+        "host SHA must match container"
+    );
 }
