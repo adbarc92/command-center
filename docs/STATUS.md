@@ -1,7 +1,7 @@
 ---
 stage: Build
 readiness: "control plane publication-ready; product shell on roadmap"
-updated: "2026-08-15"
+updated: "2026-08-16"
 name: "Command Center"
 base_branch: "main"
 test_cmd: "cargo test --workspace"
@@ -22,12 +22,15 @@ added rustfmt, clippy, `svelte-check + tsc`, vitest and — critically — `carg
 had **never run in CI at all** because `cockpit/ui/src-tauri` is a standalone cargo workspace the
 root `--workspace` never reached. Five of seven test tiers were advisory until that landed. The
 **superseded guard digests are out of public history** (targeted 9-commit `filter-repo` rewrite).
-**Smoke run 2 (2026-08-15) executed Part 1 of the interactive smoke and changed the picture
-substantially.** The headline is good: **`db74a47` is CONFIRMED** — responsiveness was *measured*,
-1,127 samples at 1 Hz with **zero unresponsive**, spanning a live `compose build` and a 0→3→10
-container ramp. But the smoke also found **four defects that every automated gate had passed**, two
-of which are now fixed and verified (`55b0a5b`, `2ab1b49`), and it is now clear that **#49 is
-blocked on more than "finish the checklist"**.
+**The interactive smoke is FINISHED.** Run 2 (dev) and **Run 3 (packaged, 2026-08-16)** are both
+complete, and **#49 is READY FOR REVIEW with all 18 CI checks green** — it is waiting on a human
+merge decision and nothing else. Run 3 scored **9 PASS / 2 BLOCKED / 2 NOT RUN / 0 FAIL** and, with
+the fixes that followed, closed **five** defects: **D-7** (view-plugins received no state at all),
+**D-8** (**the packaged bundle shipped no plugin root — no shipped build could load a view-plugin**),
+**D-2** (every plugin was granted every capability; now fails closed), **D-4** (re-verified packaged:
+0.23 s cold exit, 5.27 s with 10 containers) and **D-5** (investigated, **did not reproduce**).
+Across both runs, **`db74a47` is CONFIRMED twice** — 1,127 samples in dev and 632 in packaged, zero
+unresponsive in either.
 
 **Vision (unchanged):** the Command Center is the operator's **one-stop shop for agentic
 engineering** — dispatch work, see every project's stage, act without alt-tabbing, host the other
@@ -42,22 +45,26 @@ launch.**
 3. **Design overhaul** (needs Claude Design output).
 4. **Remote Control** — brainstorm→spec after Phase-2 auth lands.
 
-**Open PRs.** **#49 (draft)** — cockpit plugin runtime (view-plugins + app-plugins), HEAD `44ee6ad`.
-`MERGEABLE`. Part 1 of the smoke is now largely done (results: `spikes/SPIKE-RESULTS.md` → **"Smoke
-run 2"**). **Merge-blocked on three things:** (1) **D-2** — capability negotiation is dead code at
-runtime, so every view-plugin is granted every host capability regardless of its manifest;
-(2) **D-7** — view-plugins receive **no state at all** (`DataCloneError` posting Svelte 5 `$state`
-proxies through `postMessage`), agreed as the next fix; (3) **the entire packaged pass (Part 2) has
-still never been run**. Items 1.2 / 1.4a / 1.7 are **BLOCKED** behind **D-3**, a *pre-existing*
-`main` defect — fleetd serves no CORS headers, so every browser `fetch` from the cockpit to the
-daemon fails. That last one is not a #49 regression but it does make the FLEET ops grid
-non-functional today.
+**Open PRs.** **#49 — READY FOR REVIEW** (no longer draft), cockpit plugin runtime, HEAD `05c95ca`.
+`MERGEABLE`, `mergeStateStatus: CLEAN`, **18/18 CI checks pass**. Every previous merge blocker is
+resolved: D-7 fixed and confirmed live, D-8 found and fixed, D-2 fixed, and the packaged Part 2 run
+end to end (`spikes/SPIKE-RESULTS.md` → **"Smoke run 3"**). **It needs a human merge decision.**
 
-**Testing plan.** `docs/testing/PLAN.md` (first run 2026-08-13) ranks **131 gaps** by likelihood ×
-impact across seven tiers, with a trust verdict per runner. Six items **await human ratification**
-(§3) — including `spine_weight`, which is the Impact axis of every score in the file and is still a
-first-run proposal. Its `in_ci` flags and `GAP-057`/`GAP-111`/`GAP-113` are already stale: #60 closed
-all three.
+Items 1.2 / 1.4a / 1.7 remain **BLOCKED** behind **D-3**, a *pre-existing* `main` defect — fleetd
+serves no CORS headers, so every browser `fetch` from the cockpit to the daemon fails. Confirmed by
+`git diff origin/main...HEAD` being empty for `crates/fleetd/`. **Not a #49 regression; it needs its
+own issue.** It does make the FLEET ops grid non-functional today.
+
+**Testing plan.** `docs/testing/PLAN.md` (first run 2026-08-13) ranks gaps by likelihood × impact
+across seven tiers. **Reconciled by hand on 2026-08-16** (§1 "Reconciliation") because it had gone
+materially stale: it claimed CI has "exactly three jobs" (it now runs **nine** checks), and it still
+ranked `GAP-006`/`GAP-008`/`GAP-010`/`GAP-012` at the top when runs 2 and 3 had verified all four.
+Those rows are struck through pending a real scan; their `status` fields were **deliberately left
+`open`**, because status is human-owned and retirement belongs to a scan, not a hand edit.
+
+**`GAP-132` was added and is now rank 1** — the register entry for the pattern behind D-1/D-2/D-4/
+D-7/D-8. Six items still **await human ratification** (§3), including `spine_weight`, the Impact axis
+of every score in the file. **A full `testing-plan` re-run is the top-value next action.**
 
 **Known gaps / blockers.**
 - **Embargoed token remains in git history** (~193 commits) — deliberately out of scope, unchanged.
@@ -76,19 +83,29 @@ all three.
   in a watched window**: exits in ~1 s, 0.19 s total CPU. Note `0d05f55` made this *worse* while
   appearing to rule it out — idempotent teardown turned a slow loop into a hot one. This also
   explains the standing "don't rebuild the tauri crate while the app runs" trap.
-  **Still open:** `stop_all_owned(30_000)` runs synchronously inside the `RunEvent` callback, so exit
-  is blocked for as long as teardown takes (~2.5 min with 10 containers up).
+  **Re-verified in the packaged build (run 3):** 0.23 s cold exit, and **5.27 s with 10 containers
+  up** — including full teardown, sidecar reaped and port 8787 released.
+  **Still open, but lower urgency than assumed:** `stop_all_owned(30_000)` still runs synchronously
+  inside the `RunEvent` callback, so exit is blocked for as long as teardown takes. Dev run 2 saw
+  ~2.5 min; packaged run 3 measured **5.27 s**, so the architectural concern stands but the observed
+  cost does not. **Needs a fix-or-accept decision** with that measurement attached.
   `docs/SWARM-HANDOFF-plugin-runtime.md` still overstates P3 as "GO"; unchanged.
 - **Gate 5's success criterion used the wrong instrument.** Run 1 recorded PASS on "`docker ps`
   empty". `docker ps` shows only *running* containers and cannot see the `Created`/`Exited` residue
   teardown left — residue which then broke run 2's first launch with a container-name conflict.
   Assert on **`docker ps -a`** scoped to the project. Run 2's teardown genuinely does better: 27→17
   total, i.e. ten containers **removed**, not merely stopped.
-- **The systemic pattern behind three of the four new defects.** D-1, D-2 and D-7 are one shape: a
-  **unit test passes on a function whose output is never wired to anything** (`pluginSrc` was tested
-  against the broken string; `negotiateCapabilities`' result is discarded; `bridge.test.ts` drives
-  fakes, so the real `$state` proxies are never exercised). All passed every gate. The coverage gap
-  is at **integration boundaries**, not units — feed this into `docs/testing/PLAN.md`.
+- **The systemic pattern, now FIVE instances and filed as `GAP-132`.** D-1, D-2, D-7, D-8 and D-4 are
+  one shape: **the dev path is exercised; the path that ships is neither wired nor asserted.**
+  `pluginSrc` was tested against the broken string; `negotiateCapabilities`' result is discarded;
+  `bridge.test.ts` drives fakes so real `$state` proxies are never exercised; and the bundle simply
+  never carried the plugin root. **Twice a test actively *defended* the defect** — `loader.test.ts:52`
+  and `bridge.test.ts:360` both asserted the broken behaviour as correct, which is worse than absent
+  coverage because it converts a gap into a false guarantee.
+  **Correction worth keeping:** it is tempting to say "CI never builds the app". **That is false** —
+  `ci.yml:311` runs `tauri build` on all three OSes and uploads artifacts. Nothing looks *inside* the
+  bundle, which is how D-8 passed a **successful** build. The cheap fix (unzip a CI artifact, assert
+  two files exist) is written up in `GAP-132`.
 - **Audience's `video` service busy-polls at ~100% of a core while idle** (last log line is just
   `video worker started, listening on …`). Different repo, not a #49 blocker, but it skews any
   performance observation made while the Audience stack is up. Worth filing against Audience.
@@ -113,16 +130,21 @@ the branch/worktree pruning below._
 _For #51 specifically, work from the handoff brief:_
 [`docs/handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md`](handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md)
 _— it is self-contained and supersedes the abbreviated instructions in this list._
-1. **Fix D-7 — view-plugins receive no state** (agreed as the next action). `sendFullState` throws
-   `DataCloneError` posting Svelte 5 `$state` proxies over `postMessage`; because it throws inside
-   `onReady` *before* the tick timer starts, the plugin gets no state **and** no ticks. Fix with
-   `$state.snapshot()` or a structural clone, and write the test against **real proxies**, not the
-   fakes in `bridge.test.ts` — the fakes are why 137 tests missed it.
-2. **Decide D-2 — capability negotiation is inert.** `grantedCapabilities` is computed
-   (`loader.ts:140`) and read only by a test; `App.svelte:237` never passes it to `PluginBridge`, so
-   `bridge.ts:594` ships the full host set. Security-relevant in a capability system.
-3. **#51 — Part 2, the packaged smoke.** Never executed. `npm run bundle`, run the release exe,
-   repeat 1.1–1.9. Budget real time: the cold `app` crate build took **16m22s** this session.
+1. **MERGE #49.** It is ready for review, `CLEAN`, 18/18 CI checks green, and every blocker that
+   existed on 2026-08-15 is resolved. This is a decision, not work. ~~D-7~~, ~~D-2~~ and ~~#51 the
+   packaged smoke~~ are **all done** — see the Session log entry for 2026-08-16.
+2. **File D-3 as its own issue against `main`.** fleetd serves no CORS headers, so every browser
+   `fetch` from the cockpit fails and the FLEET ops grid is empty. Pre-existing, **not** a #49
+   regression (`git diff origin/main...HEAD` is empty for `crates/fleetd/`). It blocks smoke items
+   1.2 / 1.4a / 1.7 permanently until fixed, and it is the reason the ops grid looks broken today.
+3. **Re-run `testing-plan`.** `docs/testing/PLAN.md` was hand-reconciled on 2026-08-16 but needs a
+   real scan: retire `GAP-006`/`GAP-008`/`GAP-010`/`GAP-012` with the run-2/run-3 evidence, refresh
+   the `in_ci` flags (CI now runs nine checks, not three), and rank the new **`GAP-132`** properly.
+4. **Do `GAP-132`'s cheap half.** Add a CI step that unzips a `tauri build` artifact and asserts
+   `plugins/reference/index.html` + `plugin-sdk/index.js` are present. That one assertion would have
+   caught D-8 on the commit that introduced it, and the artifacts already exist.
+5. **Decide D-4's second half** — `stop_all_owned` synchronous in the `RunEvent` callback. Now
+   measured at **5.27 s** packaged (vs ~2.5 min in dev), so: fix, or accept with the measurement.
    Note the handoff's "prebuilt images skip the build" premise is **wrong** — `compose build` runs
    regardless. Record under "Smoke run 2 — Part 2".
 4. **File D-3 upstream** — fleetd has no CORS layer (`OPTIONS /missions` → 405, no ACAO on any
@@ -148,6 +170,65 @@ resolved** — merging `main` into `feat/plugin-runtime` on 2026-08-10 brought t
 across from #47; close it._
 
 ## Session log
+
+### 2026-08-16 — Built the smoke skill, then it found the defect that would have shipped
+
+Two halves. First, built and merged the **`driving-interactive-smoke-tests`** skill into `claude-kit`
+(PR #22, merged). Then used it on this repo, where it immediately paid for itself.
+
+**On building the skill — the finding that changed it.** The RED phase was run properly: 27
+no-guidance control samples across 9 scenarios drawn from the run-2 corpus. **An earlier round of 8
+controls was thrown away as invalid** — run as subagents inside this repo, they inherited a
+`CLAUDE.md` stating the `docker ps -a` rule and a `MEMORY.md` stating "never infer a result". They
+were open-book and all "passed". Re-run headless from a neutral directory, the controls **did not
+reproduce the corpus failures**: result laundering, false passes, wrong instrument, jargon, missing
+instrumentation and missing coverage analysis were all handled unaided at 3/3. So the draft's
+discipline apparatus (iron law, rationalisation table, red flags) was **deleted** — it documented
+behaviour the model already has. What shipped is the workflow shape plus the policy choices a model
+cannot derive. One operator decision was reversed by the evidence: the operator-vs-instrument rule
+became "re-read the criterion, NOT RUN only if it can't discriminate."
+
+**On the smoke itself — 9 PASS / 2 BLOCKED / 2 NOT RUN / 0 FAIL.** Details in
+`spikes/SPIKE-RESULTS.md` → "Smoke run 3". What matters here is what the *method* caught:
+
+- **D-8 was found in preflight, before the operator touched the keyboard.** `tauri.conf.json` had no
+  `bundle.resources` key, so every packaged build shipped `icon.ico` and nothing else — **no shipped
+  build could load any view-plugin.** The branch's headline feature was broken on the only path that
+  ships, and it would have shipped. Found by deriving criteria from source rather than trusting the
+  checklist. Fixed, pinned by `tests/packaged_plugin_root.rs`.
+- **The stale-artifact catch.** The packaged exe on disk was dated **2026-07-23** and predated every
+  run-2 fix. Running Part 2 against it would have measured a three-week-old build and proved nothing.
+- **A false D-5 was nearly filed.** The operator reported the pane "empty, no error, no spinner" —
+  D-5's exact signature. The instrument contradicted it: containers were 9–15 s old and the gates had
+  not passed. On re-run the app rendered. **D-5 did not reproduce**; recording the first report would
+  have filed a defect against working code.
+- **An unobserved item was scored by instrument, not impression.** For 2.5 the operator said *"I'm
+  not sure, I looked away."* That is not a pass. The 1 Hz trace — **632 samples, zero unresponsive
+  across a 0→10 container ramp** — is what scored it.
+
+**Fixes landed:** D-7 (`c16356a`), D-8 (`c16356a`), D-2 (`f275c44`), plus `05c95ca`. All test-first
+with a real red→green. **D-4 re-verified packaged** (0.23 s cold, 5.27 s with 10 containers).
+
+**Three mistakes of mine worth recording,** because each was caught by checking evidence against the
+claim rather than by being careful:
+1. The contaminated RED controls above — nearly a false GREEN on the skill's own evidence.
+2. I stated WebSocket seeding would surface units in the cockpit. **Wrong** — `store.reconnect()`
+   calls `listUnits()` (HTTP, CORS-blocked) *before* opening any per-unit stream, so D-3 blocks
+   discovery entirely.
+3. I shipped a **flaky test** — the D-7 guard waited on `setTimeout(0)` for async `MessagePort`
+   delivery (1 failure in 3 runs). Rewritten to wait on the condition; 8/8 clean. A ratchet that
+   flakes is a ratchet that gets deleted.
+
+**And one factual correction now propagated everywhere:** I wrote "nothing in CI bundles the app."
+**False** — `ci.yml:311` runs `tauri build` on three OSes. The true gap is that nothing looks *inside*
+the bundle, which is how D-8 passed a *successful* build. That correction is the substance of the new
+**`GAP-132`**, and it makes the fix cheap rather than architectural.
+
+**Docs reconciled this session:** `docs/testing/PLAN.md` (§1 Reconciliation, struck-through rows,
+`GAP-132`, `next_id` → 133), this file, and the `CLAUDE.md` pickup block. Confirmed *not* problems:
+`.embargo-guard.local.json` **is** gitignored (`.gitignore:35`), and **PR #50 is merged**.
+
+**#49 is READY FOR REVIEW, `CLEAN`, 18/18 checks green. It needs a merge decision, not more work.**
 
 ### 2026-08-15 (later) — Smoke run 2: `db74a47` confirmed, four hidden defects found
 

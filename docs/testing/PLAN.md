@@ -1,6 +1,6 @@
 ---
 plan-format: 1
-next_id: 132
+next_id: 133
 
 # RATIFICATION PENDING (proposed 2026-08-13, first run) — the Impact axis, 1-5 per module.
 # Nothing here was derived from call-graph fan-in; these are judgments about blast radius.
@@ -101,6 +101,34 @@ tier_map:
 | **Working tree at scan time** | `M cockpit/ui/src-tauri/src/plugins/manager.rs`, `?? cockpit/ui/src-tauri/tests/` — **concurrent work by another agent**, see the carve-out in §2 |
 | **Repo age** | 223 commits, first commit 2026-06-04 (70 days) |
 
+### Reconciliation — 2026-08-16 (not a rescan; a correction of known-stale facts)
+
+The 2026-08-13 stamp above is **materially out of date**. Three smoke sessions and two CI changes
+have landed since. This block corrects the facts a reader would otherwise be misled by; it does
+**not** re-derive risk or rescan the tree. **A full `testing-plan` re-run is the right next step**
+and is recorded as the top item in `docs/STATUS.md`.
+
+**1. CI no longer has "exactly three jobs."** §1's coverage-hole #1 below is stale. `#60` added
+rustfmt, clippy, type-check and both test tiers. CI now runs **nine** distinct checks:
+`embargo guard`, `fmt + clippy`, `svelte-check + tsc`, `vitest (cockpit/ui)`,
+`cargo test (workspace)`, `cargo test (cockpit)`, and `tauri build` ×3 OS. The claim that five of
+seven tiers never run in CI no longer holds — `vitest` and `tauri-host` both run now.
+
+**2. The manual row is no longer "1 of 12 PASS."** Smoke run 2 (dev, 2026-08-15) and Smoke run 3
+(**packaged**, 2026-08-15/16) executed the checklist end to end. See `spikes/SPIKE-RESULTS.md`.
+Current manual state: **most rows PASS**, three are BLOCKED behind **D-3** (fleetd serves no CORS
+headers — pre-existing on `main`), and two are genuinely unverified (`GAP-011`, and the packaged
+no-network check which needs devtools a release build does not have).
+
+**3. Five defects were found by those sessions that every automated gate had passed** — D-1, D-2,
+D-4, D-7 and D-8. All are now fixed. The pattern they share is recorded as **`GAP-132`**, which is
+the single highest-value addition to this register.
+
+**4. A correction worth keeping.** A first draft of the run-3 analysis claimed *"nothing in CI
+bundles the app."* **That is false** — `tauri build` runs on all three OSes and uploads artifacts.
+The true gap is that **nothing asserts what is inside the bundle**, which is why D-8 passed a
+*successful* build. `GAP-132` records this precisely.
+
 ### Per-tier results this run
 
 | Tier | Runner | Runs in CI? | This run |
@@ -193,9 +221,10 @@ tie-break is `(impact desc, likelihood desc, GAP id asc)`.
 
 | rank | id | risk | title |
 |---:|---|---:|---|
-| 1 | `GAP-006` | **25** (L5×I5) | Smoke 1.6: native webview stays glued to its rect on resize (manual) |
-| 2 | `GAP-008` | **25** (L5×I5) | Smoke 1.8: no leak or orphaned webview when switching away and back (manual) |
-| 3 | `GAP-010` | **25** (L5×I5) | Smoke 1.9b: the app process survives window close (manual) — PARKED, undiagnosed |
+| **1** | **`GAP-132`** | **25** (L5×I5) | **CI bundles the app on three OSes and never looks inside the bundle** — the register entry for the pattern behind D-1/D-2/D-4/D-7/D-8 (added 2026-08-16) |
+| ~~1~~ | `GAP-006` | ~~25~~ | ~~Smoke 1.6: rect glue on resize~~ — **VERIFIED** run 2 (dev) + run 3 (packaged, item 2.6). Retire on next scan |
+| ~~2~~ | `GAP-008` | ~~25~~ | ~~Smoke 1.8: no leak on switch~~ — **VERIFIED AND MEASURED** run 3 (item 2.8): 3 switch cycles, webview2 procs 31→31, mem +0.19%. Retire on next scan |
+| ~~3~~ | `GAP-010` | ~~25~~ | ~~Smoke 1.9b: app process survives window close~~ — **ROOT-CAUSED AND FIXED** (D-4, `2ab1b49`); re-verified packaged: exit in **0.23 s** cold / **5.27 s** with 10 containers. No longer "undiagnosed". Retire on next scan |
 | 4 | `GAP-013` | **25** (L5×I5) | Overlay input-block over a LIVE view-plugin iframe is unverified (new manual row) |
 | 5 | `GAP-014` | **25** (L5×I5) | Rect glue under DPI, monitor, and window-move changes (new manual row) |
 | 6 | `GAP-015` | **25** (L5×I5) | Cockpit behaviour after fleetd restarts or the socket drops (new manual row) |
@@ -204,7 +233,7 @@ tie-break is `(impact desc, likelihood desc, GAP id asc)`.
 | 9 | `GAP-002` | **20** (L4×I5) | Smoke 1.2: Fleet ops-grid regression canary (manual) |
 | 10 | `GAP-007` | **20** (L4×I5) | Smoke 1.7: native webview parks off-screen while a host overlay is open (manual) |
 | 11 | `GAP-011` | **20** (L4×I5) | Smoke 1.10: Vite HMR still works under the host CSP (manual) |
-| 12 | `GAP-012` | **20** (L4×I5) | Smoke Part 2: the packaged build has never been launched (manual) |
+| ~~12~~ | `GAP-012` | ~~20~~ | ~~Smoke Part 2: the packaged build has never been launched~~ — **LAUNCHED AND RUN END TO END**, run 3 (2026-08-16). 9 PASS / 2 BLOCKED / 2 NOT RUN / 0 FAIL. Retire on next scan; the two NOT RUN rows (packaged no-network, policed-launch ack) need their own entries |
 | 13 | `GAP-018` | **20** (L4×I5) | `Runner::health` is implemented twice and called from nowhere, so `Trigger::Stall` is unreachable |
 | 14 | `GAP-019` | **20** (L4×I5) | Resumed T2/T3: rejecting the oracle is a silent no-op |
 | 15 | `GAP-021` | **20** (L4×I5) | A successful T3 ship orphans the unit's named volume |
@@ -329,7 +358,12 @@ tie-break is `(impact desc, likelihood desc, GAP id asc)`.
 
 | status | count | ids |
 |---|---:|---|
-| `open` | 131 | all entries |
+| `open` | 132 | all entries |
+
+_As of the **2026-08-16 reconciliation** (§1), four ranked rows are verified-but-not-yet-retired —
+`GAP-006`, `GAP-008`, `GAP-010`, `GAP-012` — and are struck through in §4.1. Their `status` fields
+are deliberately left `open` because status is human-owned and retirement belongs to a real scan,
+not a hand edit. The next `testing-plan` run should retire all four with the run-2/run-3 evidence._
 
 _Three entries are parked as **covered separately** pending the concurrent app-plugin-runtime
 test work and are excluded from the call to action even though they appear in the ranking above:
@@ -4308,6 +4342,59 @@ simply never fires, with no error anywhere.
 identical after the second run — specifically no `<InstallDir>\src\src` — and that `uv run --project`
 still resolves. Run `-PrintHooksOnly` under **both** pwsh 7 and `powershell.exe` and assert the parsed
 JSON has an array of matcher objects. Then factor the shared body into one parameterised script.
+
+### GAP-132 — CI bundles the app on three OSes and never looks inside the bundle
+
+| field | value |
+|---|---|
+| **status** | `open` <!-- human --> |
+| **claim_type** | `absent-coverage` |
+| **layer** | build/packaging |
+| **verified_by** | manual |
+| **anchors** | `.github/workflows/ci.yml:311`, `cockpit/ui/src-tauri/tauri.conf.json`, `spikes/SPIKE-RESULTS.md#smoke-run-3` |
+| **governs** | `cockpit/ui/src-tauri/tauri.conf.json`, `cockpit/ui/src-tauri/src/view_plugins.rs`, `.github/workflows/ci.yml` |
+| **last_manual_pass** | 2026-08-16 (found by inspection during Smoke run 3 preflight) |
+| **risk** | L5 × I5 = **25** |
+| **observations** | produced_a_real_defect=true (D-8), instances_of_pattern=5 |
+| **anchor_sites** | 3 |
+| **first_seen** | 2026-08-16 |
+| **last_verified** | 2026-08-16 @ `05c95ca` |
+| **decision** | — |
+| **rationale** | — |
+
+**Risk rationale.** This is the register entry for the pattern behind **five** defects on
+`feat/plugin-runtime`, every one of which passed every automated gate:
+
+- **D-1** — `pluginSrc` emitted a URL unusable on the primary target; `loader.test.ts:52` **asserted
+  the broken string as expected**.
+- **D-2** — `grantedCapabilities` was computed and discarded; every plugin got every capability.
+  `bridge.test.ts:360` **asserted the full host set as correct**.
+- **D-7** — `sendFullState` was tested against plain objects; production passes Svelte `$state`
+  proxies, which are not structured-cloneable. The fake could not fail the way production did.
+- **D-8** — `bundle.resources` did not exist, so **no packaged build could load any view-plugin**.
+- **D-4** — a third instance of the main-event-loop family already guarded by
+  `tests/tauri_command_threading.rs`.
+
+The shape is one thing: **the dev path is exercised; the path that ships is neither wired nor
+asserted.** Twice a test actively *defended* the defect, which is worse than absent coverage — it
+converts a gap into a false guarantee.
+
+**The important correction.** It is tempting to write "CI never builds the app". **That is false.**
+`ci.yml:311` runs `npm run tauri build` on `windows-latest`, `macos-latest` and `ubuntu-latest` and
+uploads the bundles as artifacts, on every run. D-8 did not slip past a missing build — it slipped
+past a **successful** one. A green `tauri build` means "it compiled and packaged", never "it packaged
+the right files".
+
+**Concrete test.** Cheap, because the artifacts already exist. Add a CI step after `tauri build` that
+unzips the produced bundle and asserts `plugins/reference/index.html` and `plugin-sdk/index.js` are
+present at the paths `resource_dir()` resolves. That single assertion would have caught D-8 on the
+commit that introduced it. `cockpit/ui/src-tauri/tests/packaged_plugin_root.rs` already closes the
+*config* half (the mapping exists and its sources exist on disk); this entry covers the *artifact*
+half, which no gate touches.
+
+Second, structural: a smoke-test lane that **launches the built artifact headlessly** and asserts the
+handshake completes would have caught D-1, D-7 and D-8 together. That is the general fix; the unzip
+assertion is the cheap one to do first.
 
 ## 6. Change log
 
