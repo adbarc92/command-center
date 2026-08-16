@@ -503,9 +503,25 @@ D-1, D-2, D-7 and **D-8** are one shape: **something is exercised only on the de
 that ships was never wired or never asserted.** `pluginSrc` was tested against the broken string;
 `negotiateCapabilities` is computed and discarded; `sendFullState` was tested against plain objects
 it never sees at runtime; and the packaged bundle simply never carried the plugin root. Every one
-passed every automated gate, because **nothing in CI bundles the app or navigates the iframe**.
+passed every automated gate.
 
-The gap is integration-boundary and packaging coverage, not unit coverage.
+**Correction, made after CI ran on this work.** An earlier draft of this section (and commit
+`c16356a`'s message) claimed *"nothing in CI bundles the app"*. **That is false.** `.github/workflows/ci.yml:311`
+runs `npm run tauri build` on windows-latest, macos-latest and ubuntu-latest and uploads the bundles
+as artifacts. CI bundles the app on every platform, every run.
+
+The real gap is narrower, and better news: **nothing asserts what is INSIDE the bundle, and nothing
+ever runs the artifact.** D-8 did not slip past a missing build — it slipped past a *successful* one.
+`tauri build` packaged an app with no plugin root and exited 0, because a green build means "it
+compiled and packaged", never "it packaged the right files".
+
+That makes the fix cheap rather than architectural: the bundles already exist as CI artifacts, so a
+job that unzips one and asserts `plugins/reference/index.html` and `plugin-sdk/index.js` are present
+would have caught D-8 on the commit that introduced it. `tests/packaged_plugin_root.rs` closes the
+config half of this today; the artifact half is still open and is the single highest-value addition
+to `docs/testing/PLAN.md`.
+
+The gap is integration-boundary and **bundle-content** coverage, not unit coverage.
 
 **Automated gates after this session:** `cargo test --workspace` **120 passed** · tauri host **40
 passed** (+3, the new ratchet) · `npm test` **139 passed** (+2, the D-7 proxy lane) ·

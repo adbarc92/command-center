@@ -14,7 +14,12 @@
 //!
 //! That is D-8, and it is the fourth instance of one pattern in this branch (see D-1, D-2, D-7
 //! in `spikes/SPIKE-RESULTS.md`): something is exercised only on the dev path and was never
-//! wired for the path that ships. Nothing in CI bundles the app, so no suite could see it.
+//! wired for the path that ships.
+//!
+//! CI *does* bundle the app — `tauri build` runs on all three OSes and uploads the artifacts.
+//! What no gate did was look INSIDE the bundle. The build succeeded exactly as before; it just
+//! shipped an app with no plugin root. A green `tauri build` says "it compiled and packaged",
+//! never "it packaged the right files".
 //!
 //! This test makes the class mechanical: delete either mapping from `tauri.conf.json` and this
 //! goes red immediately, instead of surfacing as a blank pane in a packaged smoke weeks later.
@@ -32,8 +37,8 @@ const REQUIRED_RESOURCES: &[(&str, &str)] = &[
 
 fn config() -> serde_json::Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
-    let raw = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let raw =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     serde_json::from_str(&raw)
         .unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", path.display()))
 }
@@ -91,7 +96,10 @@ fn declared_resource_sources_exist_on_disk() {
 #[test]
 fn reference_plugin_entry_and_sdk_are_present() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for rel in ["../../../plugins/reference/index.html", "../../plugin-sdk/index.js"] {
+    for rel in [
+        "../../../plugins/reference/index.html",
+        "../../plugin-sdk/index.js",
+    ] {
         let p = manifest.join(rel);
         assert!(p.exists(), "missing {} ({})", rel, p.display());
     }
