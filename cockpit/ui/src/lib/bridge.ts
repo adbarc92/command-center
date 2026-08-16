@@ -507,9 +507,19 @@ export class PluginSession {
     this.post(msg);
   }
 
+  /**
+   * Svelte 5 `$state` proxies are not structured-cloneable, and `makeFleetHost` hands this
+   * session live store proxies (`store.units[id]`, `store.order`). Posting one throws
+   * `DataCloneError`; raised from `onReady` that killed the whole state channel before the
+   * tick timer was installed (D-7). Every outbound payload is plain JSON data by contract —
+   * `UnitLite` is already JSON-serialised for delta suppression — so a round-trip is both
+   * sufficient and the cheapest guarantee that no proxy reaches `postMessage`. Done here,
+   * at the single choke point, so `state`, `log-append`, `order` and `degraded` are all
+   * covered rather than one call site.
+   */
   private post(msg: HostMessage): void {
     if (!this.alive) return;
-    this.port.postMessage(msg);
+    this.port.postMessage(JSON.parse(JSON.stringify(msg)) as HostMessage);
   }
 
   /** Kill the plugin: stop the tick, close the port, notify the host (→ ops-grid revert). */
