@@ -601,7 +601,11 @@ export class PluginBridge {
       v: 1,
       type: 'init',
       apiVersion: HOST_API_VERSION,
-      capabilities: this.opts.capabilities ?? [...HOST_CAPABILITIES],
+      // Fail CLOSED (D-2). This used to default to the full host set, so a caller that
+      // forgot to pass the manifest's negotiated grant silently handed the plugin
+      // everything — which is exactly what happened: every view-plugin ran with every
+      // host capability regardless of its manifest. An absent grant now means no grant.
+      capabilities: this.opts.capabilities ?? [],
     };
     // `"*"` targetOrigin is safe — the init payload is non-sensitive and the sandboxed
     // frame's real origin is "null" (can't be named). Trust comes from holding port1.

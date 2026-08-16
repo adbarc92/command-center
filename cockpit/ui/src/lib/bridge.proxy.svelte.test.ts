@@ -43,7 +43,14 @@ describe('PluginSession over a real MessagePort, backed by real $state units', (
   it('actually delivers the unit to the plugin side of the port', async () => {
     const chan = new MessageChannel();
     const received: HostMessage[] = [];
-    chan.port2.onmessage = (e: MessageEvent) => received.push(e.data as HostMessage);
+    // Wait on the CONDITION (a message arrived), never on a fixed delay. Port delivery is
+    // async and a `setTimeout(0)` races it - that made this test intermittently red.
+    let seen: () => void;
+    const delivered = new Promise<void>((r) => (seen = r));
+    chan.port2.onmessage = (e: MessageEvent) => {
+      received.push(e.data as HostMessage);
+      seen();
+    };
     chan.port2.start();
 
     const cleanup = $effect.root(() => {
@@ -54,7 +61,12 @@ describe('PluginSession over a real MessagePort, backed by real $state units', (
       session.sendFullState();
     });
 
-    await new Promise((r) => setTimeout(r, 0));
+    await Promise.race([
+      delivered,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('no host message arrived on the port within 5s')), 5000),
+      ),
+    ]);
     cleanup();
 
     const state = received.find((m) => m.type === 'state');

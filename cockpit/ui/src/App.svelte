@@ -235,6 +235,12 @@
   $effect(() => {
     if (!activeViewPlugin || !pluginFrame) return;
     const bridge = new PluginBridge(pluginFrame, makeFleetHost(fleet), {
+      // D-2: the manifest's negotiated grant, not the host set. `discoverFrom` computed
+      // this per plugin and nothing ever passed it, so `init` shipped every host
+      // capability to every plugin. `?? []` keeps the fail-closed posture if the active
+      // id somehow has no discovered entry.
+      capabilities:
+        viewPlugins.find((p) => p.manifest.id === activeViewPlugin)?.grantedCapabilities ?? [],
       onKill: () => {
         activeViewPlugin = null;
         view = 'fleet';

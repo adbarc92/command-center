@@ -476,11 +476,26 @@ required files now land beside `app.exe`, and 2.3a/2.3b/2.4 all passed immediate
 **Pinned by `cockpit/ui/src-tauri/tests/packaged_plugin_root.rs`** — a ratchet, not a note: delete
 either mapping and it goes red. Verified red→green.
 
-#### D-2 — confirmed on the shipping path
+#### D-2 — confirmed on the shipping path *(FIXED after the run)*
 
 `caps: log-append, real-launch-confirm` for a plugin whose manifest requests **only** `log-append`.
-Previously observed in dev; this run confirms it reproduces in the packaged build. Still unfixed and
-still needs a decision. This is a capability-system defect in the build that would ship.
+Previously observed in dev; this run confirmed it reproduces in the packaged build — a capability
+defect in the build that would ship, which is why it was fixed rather than deferred.
+
+Two changes, test-first. `App.svelte` now passes the discovered plugin's `grantedCapabilities` into
+`PluginBridge`, and `bridge.ts` **fails closed**: an absent grant is now `[]`, not the full host set,
+so forgetting to pass it can never again silently widen a plugin's authority.
+
+**`bridge.test.ts:360` asserted the full host set as correct** — the same mistake `loader.test.ts:52`
+made for D-1. That is now the **fifth** instance of the pattern and the second time a test actively
+defended the defect. The assertion was corrected and three new tests pin the grant, the fail-closed
+default, and an explicitly empty grant. Verified red→green
+(`expected [ 'log-append', 'real-launch-confirm' ] to deeply equal []`).
+
+**A flake was also fixed in this session's own work.** `bridge.proxy.svelte.test.ts` waited on
+`setTimeout(0)` for an inherently async `MessagePort` delivery and was intermittently red (1 failure
+in 3 isolation runs). Rewritten to wait on the condition with a 5 s ceiling; 8/8 clean since. A
+ratchet that flakes is a ratchet that gets deleted.
 
 #### The systemic pattern, now four instances
 

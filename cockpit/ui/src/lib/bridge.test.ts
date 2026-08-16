@@ -357,7 +357,11 @@ describe('PluginBridge window handshake (hello → init + port)', () => {
     // A hello from our frame completes the handshake.
     bridge.onWindowMessage({ data: { v: 1, type: 'plugin-hello' }, source: contentWindow });
     expect(bridge.active).not.toBeNull();
-    expect(initMsg).toMatchObject({ type: 'init', apiVersion: HOST_API_VERSION, capabilities: [...HOST_CAPABILITIES] });
+    // Capabilities are asserted in the D-2 block below. This bridge is constructed without a
+    // grant, and the fallback is now fail-closed — this line previously asserted the FULL host
+    // set here, which encoded the D-2 defect as expected behaviour (the same mistake
+    // `loader.test.ts:52` made for D-1).
+    expect(initMsg).toMatchObject({ type: 'init', apiVersion: HOST_API_VERSION, capabilities: [] });
     expect(transferred).toBeTruthy();
 
     // The transferred port is live: driving ready over it yields a snapshot.
@@ -378,5 +382,47 @@ describe('PluginBridge window handshake (hello → init + port)', () => {
     bridge.onWindowMessage({ data: { v: 1, type: 'plugin-hello' }, source: contentWindow });
     expect(posts).toBe(1);
     bridge.destroy();
+  });
+});
+
+// ── D-2: the manifest's capability grant must actually reach the plugin ───────
+//
+// `discoverFrom` computes `grantedCapabilities` per plugin (`loader.ts:140`), but nothing
+// passed it to the bridge, so `init` shipped the FULL host set to every plugin regardless of
+// what its manifest asked for. Observed live in both the dev and packaged smokes: a plugin
+// whose manifest requests only `log-append` was granted `real-launch-confirm` as well.
+//
+// The fallback is now fail-CLOSED. A bridge constructed without an explicit grant offers
+// nothing, so forgetting to pass the grant can never again silently widen it.
+describe('PluginBridge capability grant (D-2)', () => {
+  function handshake(opts: Record<string, unknown>): HostMessage {
+    const bag = makeHost();
+    let initMsg: HostMessage | null = null;
+    const contentWindow = {
+      postMessage: (msg: unknown) => {
+        initMsg = msg as HostMessage;
+      },
+    };
+    const bridge = new PluginBridge({ contentWindow }, bag.host, { autoTick: false, ...opts });
+    bridge.onWindowMessage({ data: { v: 1, type: 'plugin-hello' }, source: contentWindow });
+    bridge.destroy();
+    return initMsg!;
+  }
+
+  it('ships exactly the negotiated grant, not the host set', () => {
+    const init = handshake({ capabilities: ['log-append'] });
+    expect(init).toMatchObject({ type: 'init', capabilities: ['log-append'] });
+    // The precise defect: `real-launch-confirm` leaking to a plugin that never asked.
+    expect((init as { capabilities: string[] }).capabilities).not.toContain('real-launch-confirm');
+  });
+
+  it('fails CLOSED when no grant is passed', () => {
+    const init = handshake({});
+    expect((init as { capabilities: string[] }).capabilities).toEqual([]);
+  });
+
+  it('an empty grant stays empty', () => {
+    const init = handshake({ capabilities: [] });
+    expect((init as { capabilities: string[] }).capabilities).toEqual([]);
   });
 });
