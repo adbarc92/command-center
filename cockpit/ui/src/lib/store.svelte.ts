@@ -14,6 +14,22 @@ import type { CommandName, Envelope, FleetEvent, Health, Phase, Snapshot } from 
 /** A live `phase_changed` listener — the seam the Dashboard's `onFleetPhase` prop wires to. */
 type PhaseListener = (unitId: string, to: Phase, task: string, tier: string) => void;
 
+/**
+ * One seq-tagged log line, retained by the store so the view-plugin bridge can build
+ * `log-append` deltas since a plugin's per-unit seq cursor. Kept deliberately OUTSIDE
+ * the reactive `Unit` (whose `fleet.ts` `log` is capped + untagged): the bridge needs
+ * the daemon `seq` to diff against a cursor, and this tail must not drive a component
+ * re-render, so it lives in a plain (non-`$state`) store field.
+ */
+export interface LogDelta {
+  seq: number;
+  stream: string;
+  line: string;
+}
+
+/** How many seq-tagged log lines the store retains per unit for plugin `log-append`. */
+const LOG_TAIL_CAP = 500;
+
 export class FleetStore {
   units = $state<Record<string, Unit>>({});
   order = $state<string[]>([]);
@@ -27,6 +43,20 @@ export class FleetStore {
   private phaseListeners = new Set<PhaseListener>();
   // Guards against double-connecting (e.g. a re-mounted Fleet view re-calling reconnect).
   private started = false;
+
+  // ── view-plugin command-sink support (Lane V) ──────────────────────────────
+  // The store is the SINGLE command sink: every daemon write (built-in ops grid AND
+  // policed plugin commands) flows through `launch`/`cmd`, which own `cmd_id`, the
+  // optimistic insert, and socket-open. Plugin-originated commands are validated by the
+  // bridge's command policy BEFORE they reach these methods; trusted built-in calls skip
+  // it. These plain (non-reactive) accumulators are what the bridge drains on its tick —
+  // Svelte-5 runes tell *components* what changed but hand a plain consumer nothing, so
+  // the fold/command path records touched ids here explicitly.
+  //
+  // `dirty` = ids touched since the bridge last drained (drives per-unit `state` deltas).
+  private dirty = new Set<string>();
+  // `logTail` = per-unit seq-tagged log lines, for `log-append` since a plugin's cursor.
+  private logTail: Record<string, LogDelta[]> = {};
 
   // A REAL-mode launch the host has staged but not yet confirmed. While set, the host
   // overlay (Lane O) shows a confirm modal; nothing is sent to the daemon until the human
@@ -84,9 +114,46 @@ export class FleetStore {
       if (this.units[s.unit_id]) continue;
       this.units[s.unit_id] = fromSnapshot(s);
       this.order = [...this.order, s.unit_id];
-      this.sockets[s.unit_id] = openStream(s.unit_id, 0, (e) => this.onEvt(s.unit_id, e));
+      this.markDirty(s.unit_id);
+      this.ensureStream(s.unit_id);
     }
     if (!this.selectedId && this.order.length) this.selectedId = this.order[0];
+  }
+
+  /**
+   * Open the WS stream for a unit exactly once. Both `reconnect` (snapshot repopulate)
+   * and `launch` (optimistic new unit) route through here so a bridge `launch` racing a
+   * concurrent `reconnect()` can never open a second socket for the same unit — the
+   * single-socket half of the single-sink guarantee.
+   */
+  private ensureStream(id: string): void {
+    if (this.sockets[id]) return;
+    this.sockets[id] = openStream(id, 0, (e) => this.onEvt(id, e));
+  }
+
+  /** Record that a unit changed so the plugin bridge picks it up on its next drain. */
+  private markDirty(id: string): void {
+    this.dirty.add(id);
+  }
+
+  /**
+   * Drain the set of unit ids touched since the last call (the bridge invokes this on its
+   * ~60ms tick to build per-unit `state` deltas). Returns the ids and clears the set.
+   */
+  drainDirty(): string[] {
+    const ids = [...this.dirty];
+    this.dirty.clear();
+    return ids;
+  }
+
+  /**
+   * Seq-tagged log lines for a unit with `seq > sinceSeq` — the bridge's `log-append`
+   * source, diffed against the plugin's per-unit cursor. Bounded by `LOG_TAIL_CAP`.
+   */
+  logsSince(id: string, sinceSeq: number): LogDelta[] {
+    const tail = this.logTail[id];
+    if (!tail) return [];
+    return sinceSeq <= 0 ? tail.slice() : tail.filter((l) => l.seq > sinceSeq);
   }
 
   /** First-mount entry point: connect once, return a teardown the view can ignore. */
@@ -104,6 +171,12 @@ export class FleetStore {
     const next = fold({ ...prev }, e.event);
     next.lastSeq = e.seq;
     this.units[id] = next;
+    this.markDirty(id);
+    if (e.event.type === 'log') {
+      const tail = (this.logTail[id] ??= []);
+      tail.push({ seq: e.seq, stream: e.event.stream, line: e.event.line });
+      if (tail.length > LOG_TAIL_CAP) tail.splice(0, tail.length - LOG_TAIL_CAP);
+    }
     if (e.event.type === 'phase_changed') this.emitPhase(id, e.event);
   }
 
@@ -122,13 +195,23 @@ export class FleetStore {
     return () => this.phaseListeners.delete(cb);
   }
 
-  /** Launch a new mission, optimistically seed its tile, open its stream, select it. */
+  /**
+   * Launch a new mission, optimistically seed its tile, open its stream, select it. The
+   * single command sink for new units: the ops grid calls it directly (trusted); the
+   * plugin bridge calls it only AFTER its command policy passes. Guards the optimistic
+   * insert against a concurrent `reconnect()` that already materialised this id from a
+   * snapshot, so a bridge `launch` racing a reconnect yields exactly one unit + one
+   * socket (`ensureStream` enforces the socket half).
+   */
   async launch(req: CreateReq): Promise<string> {
     const id = await createMission(req);
-    this.units[id] = newUnit(id, req.task, req.tier.toUpperCase());
-    this.order = [id, ...this.order];
+    if (!this.units[id]) {
+      this.units[id] = newUnit(id, req.task, req.tier.toUpperCase());
+      this.order = [id, ...this.order];
+      this.markDirty(id);
+    }
     this.selectedId = id;
-    this.sockets[id] = openStream(id, 0, (e) => this.onEvt(id, e));
+    this.ensureStream(id);
     return id;
   }
 
