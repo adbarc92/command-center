@@ -2,8 +2,15 @@
 //
 // Spec: docs/superpowers/specs/2026-06-09-project-dashboard-design.md (§3, §5).
 // Every source adapter (§6) produces `ProjectCard`s through this one model; the
-// board (`views/Dashboard.svelte`) renders nothing else. Adding a fifth source
-// later is one new adapter, zero board change (locked decision #6).
+// board (`views/Dashboard.svelte`) renders nothing else.
+//
+// Locked decision #6 claimed adding a source later is "one new adapter, zero board
+// change". RETRACTED — the Telltale feedback source (its spec §6.1) verified the
+// real surface at seven files: this union, the adapter, `api.ts`, `store.ts`,
+// `Dashboard.svelte`'s SOURCE_LABEL (without which the badge renders raw lowercase
+// via the `?? c.source` fallback), plus the Rust command and its handler
+// registration. The local-tracker spec already retracted the same overclaim for
+// itself. Adding a source is small, but it is not zero.
 
 // ── §3 canonical pipeline + off-pipeline states ─────────────────────────────
 // Declared verbatim ONCE here (R3 fix #2): every §6 mapping maps INTO these exact
@@ -50,7 +57,7 @@ export function isOffPipeline(s: Stage): s is OffPipelineStage {
 
 // ── §5.1 ProjectCard — the single render contract ───────────────────────────
 
-export type Source = 'halyard' | 'audience' | 'fleet' | 'app-plugin' | 'manual' | 'local';
+export type Source = 'halyard' | 'audience' | 'fleet' | 'app-plugin' | 'manual' | 'local' | 'feedback';
 
 export type Health = 'ok' | 'degraded' | 'unknown';
 
