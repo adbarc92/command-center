@@ -1,0 +1,9 @@
+name = "telltale"
+main = "src/index.ts"
+compatibility_date = "2026-08-30"
+
+# Rate-limit counters, comment throttles, and stats. Approximate by design —
+# see spec §4.2 for why KV is correct here and was not for the deleted dedup gate.
+[[kv_namespaces]]
+binding = "TELLTALE_KV"
+id = "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
