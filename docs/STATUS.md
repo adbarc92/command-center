@@ -17,10 +17,11 @@ its own `STATUS.md`, so the Command Center appears on its own board as a `local:
 ## State summary
 
 **TL;DR.** The **control plane and workflow layer are feature-complete and tested**, the repo is
-**public**, and `main` is now **branch-protected** with `embargo guard` + `cargo test (workspace)` as
-required checks, enforced for admins. The **superseded guard digests are out of public history** — a
-targeted 9-commit `filter-repo` rewrite, not the 193-commit rewrite that was correctly ruled out for
-the embargoed name. The **product shell is no longer purely roadmap**: the plugin-runtime swarm's work
+**public**, and `main` is **branch-protected** with `cargo test (workspace)` as the required check,
+enforced for admins. **The embargo guard was removed 2026-08-30** (operator decision; the embargo was
+lifted 2026-08-29) — hooks, script, CI job and denylist are gone, and `embargo guard` must be dropped
+from the branch-protection required checks or every PR to `main` will hang on a check that no longer
+reports. The **product shell is no longer purely roadmap**: the plugin-runtime swarm's work
 turned out to be **complete, not stranded**, and now sits in **draft PR #49** with all three automated
 gates re-verified against current `main`, blocked only on an interactive smoke that needs a GUI
 session. A design pass and remote control remain on the roadmap.

@@ -162,34 +162,6 @@ cargo test --workspace     # 116 tests; Docker/network ITs are #[ignore]d
 | [`scripts/`](scripts) | Runnable demos (e.g. restart recovery) |
 | [`docs/`](docs) | Quickstart, architecture vision, roadmap |
 
-### Repo hooks
-
-One-time, per clone:
-
-```bash
-git config core.hooksPath "$(pwd)/.githooks"                                   # run from the repo root
-EG_TOKEN='<token to forbid>' node scripts/embargo-guard.mjs --add-entry <id>   # repeat per token
-```
-
-**Use an absolute path.** A relative `core.hooksPath` is resolved against each
-worktree's own root, so in a worktree whose branch predates `.githooks/` git finds no hook and
-commits without checking — a silent fail-open. An absolute path points every worktree back at this
-checkout, and the hooks resolve the guard and its denylist by their own location.
-
-This enables the embargo guard ([`scripts/embargo-guard.mjs`](scripts/embargo-guard.mjs)), which
-blocks commits whose staged content or commit message contains a forbidden token, matching a
-normalized sliding window so case, punctuation and line wrapping don't evade it.
-
-The denylist is **not committed**. It holds salted digests rather than plaintext, but the tokens are
-low-entropy, so a digest published next to its salt is just a slow-release copy of the token — a
-10-digit one fell to a targeted search in 22.6s on one CPU core. So it lives in
-`.embargo-guard.local.json` (gitignored) locally and in the `EMBARGO_GUARD_CONFIG` repo secret for
-CI. Nothing about the forbidden tokens is in the repository: not the plaintext, not a regex, not a
-digest, not a length.
-
-The same check runs as the `embargo` job in CI, so skipping the hook — or committing with
-`--no-verify` — does not skip the check. It fails closed when no denylist is available.
-
 ## Status
 
 **Feature-complete and tested:**

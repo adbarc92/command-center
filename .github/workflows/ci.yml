@@ -1,7 +1,7 @@
 name: CI
 
 # First CI for command-center (Lane C / roadmap C8).
-# On every push and PR: run the embargo guard, the lint/type gates (rustfmt,
+# On every push and PR: run the lint/type gates (rustfmt,
 # clippy, svelte-check + tsc), the Rust tests for both cargo workspaces and the
 # frontend's vitest suite, then build the frontend + fleetd sidecar and produce
 # Tauri bundles on all three target OSes. Bundles are uploaded as workflow
@@ -32,69 +32,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Embargo guard. The same check the .githooks/pre-commit hook runs locally —
-  # duplicated here because a local hook is bypassable with `--no-verify`, and
-  # this class of mistake is exactly the kind someone waves through in a hurry.
-  #
-  # The denylist is NOT in the repo: the tokens are low-entropy, so a committed
-  # digest is a crackable copy of the token (see scripts/embargo-guard.mjs). It
-  # arrives here as the EMBARGO_GUARD_CONFIG repo secret. The guard fails closed
-  # when that secret is absent — which includes pull requests from forks, since
-  # GitHub withholds secrets from them. A fork PR therefore needs a maintainer to
-  # run the check locally; that is the intended trade, not an oversight.
-  # ---------------------------------------------------------------------------
-  embargo:
-    name: embargo guard
-    runs-on: ubuntu-latest
-    env:
-      EMBARGO_GUARD_CONFIG: ${{ secrets.EMBARGO_GUARD_CONFIG }}
-    steps:
-      # Full history: this job scans the branch's commit messages, not just its
-      # tree. A message on a public branch is as public as a file in it.
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      # Hermetic — generates throwaway tokens and their denylists at runtime, so
-      # it needs no secret and still runs on fork PRs.
-      - name: Test the guard
-        run: node --test scripts/embargo-guard.test.mjs
-
-      - name: Scan tracked files
-        run: node scripts/embargo-guard.mjs --all
-
-      - name: Scan this branch's commit messages
-        run: |
-          base="origin/${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}"
-          if git rev-parse --verify "$base" >/dev/null 2>&1; then
-            git log --format=%B "$base..HEAD" > "$RUNNER_TEMP/msgs.txt"
-          else
-            git log --format=%B -50 > "$RUNNER_TEMP/msgs.txt"
-          fi
-          node scripts/embargo-guard.mjs --message "$RUNNER_TEMP/msgs.txt"
-
-  # ---------------------------------------------------------------------------
-  # rustfmt + clippy, over BOTH cargo workspaces.
-  #
-  # cockpit/ui/src-tauri declares its own empty `[workspace]` table, so it is a
-  # standalone workspace that the root manifest does not list as a member. That
-  # makes it invisible to `--workspace` / `--all` run from the repo root, which
-  # is why every gate here runs twice — once per manifest. Dropping either half
-  # silently leaves that crate ungated.
-  #
-  # rustfmt only needs the sources, so both fmt checks run first and fail fast.
-  # Clippy has to actually compile, and compiling the tauri crate needs two
-  # things the root workspace does not: the WebKitGTK system deps (same list the
-  # build job installs) and the fleetd sidecar binary, because tauri-build
-  # resolves the `externalBin` resource at compile time and hard-errors when it
-  # is absent.
-  # ---------------------------------------------------------------------------
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest
