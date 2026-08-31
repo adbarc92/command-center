@@ -29,7 +29,17 @@ export async function handleEvent(req: Request, env: Env, deps: Deps): Promise<R
   const project = req.headers.get('X-Telltale-Project')
   if (!project) return fail(401, 'bad_signature')
 
-  const secrets = JSON.parse(env.TELLTALE_SENDER_SECRETS) as Record<string, string>
+  // A malformed operator-configured secrets blob is a deploy problem, not a
+  // rejected request: it must still land in stats (the whole point of
+  // /v1/stats is to make silent failure visible) and still return the same
+  // { error: reason } envelope every other path returns, not a bare runtime
+  // throw.
+  let secrets: Record<string, string>
+  try {
+    secrets = JSON.parse(env.TELLTALE_SENDER_SECRETS) as Record<string, string>
+  } catch {
+    return fail(500, 'config_error')
+  }
   const secret = secrets[project]
   const rawBody = await req.text()
 

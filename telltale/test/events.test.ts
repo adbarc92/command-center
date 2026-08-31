@@ -126,4 +126,12 @@ describe('POST /v1/events', () => {
     for (let i = 0; i < 12; i++) last = (await handleEvent(await post(EVENT), env, deps(gh))).status
     expect(last).toBe(429)
   })
+
+  it('500s on a malformed TELLTALE_SENDER_SECRETS instead of throwing', async () => {
+    const gh = new FakeGitHub()
+    const env: Env = { ...makeEnv(new FakeKV()), TELLTALE_SENDER_SECRETS: '{not valid json' }
+    const res = await handleEvent(await post(EVENT), env, deps(gh))
+    expect(res.status).toBe(500)
+    expect(gh.issues).toHaveLength(0)
+  })
 })

@@ -14,7 +14,7 @@ export type RateResult = { ok: true } | { ok: false; scope: 'pair' | 'ip' | 'pro
 export type StatReason =
   | 'accepted' | 'bad_signature' | 'clock_skew' | 'rate_limited'
   | 'unregistered_project' | 'invalid_schema' | 'labels_dropped'
-  | 'duplicate_fingerprint' | 'github_error' | 'ignored'
+  | 'duplicate_fingerprint' | 'github_error' | 'ignored' | 'config_error'
 
 /** The client IP is stored ONLY as a salted hash, and never written to an issue. */
 export async function hashIp(ip: string, salt: string): Promise<string> {
