@@ -1,3 +1,6 @@
+import type { GitHubClient } from '../src/github'
+import type { CandidateIssue } from '../src/decide'
+
 /** Minimal in-memory KVNamespace stand-in. Enough for counters and TTL-less reads. */
 export class FakeKV {
   store = new Map<string, string>()
@@ -7,4 +10,32 @@ export class FakeKV {
   async list({ prefix }: { prefix: string }) {
     return { keys: [...this.store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })) }
   }
+}
+
+export class FakeGitHub implements GitHubClient {
+  issues: Array<CandidateIssue & { title: string; body: string }> = []
+  comments: Array<{ number: number; body: string }> = []
+  /** Simulates GitHub silently dropping labels when the token lacks push access. */
+  dropLabels = false
+  private next = 1
+
+  async findByLabel(_repo: string, label: string): Promise<CandidateIssue[]> {
+    return this.issues.filter((i) => i.labels.includes(label))
+  }
+
+  async createIssue(_repo: string, i: { title: string; body: string; labels: string[] }) {
+    const labels = this.dropLabels ? [] : i.labels
+    const number = this.next++
+    this.issues.push({
+      number, state: 'open', stateReason: null, labels,
+      isPullRequest: false, title: i.title, body: i.body,
+    })
+    return { number, url: `https://example.test/i/${number}`, labelsDropped: labels.length !== i.labels.length }
+  }
+
+  async commentIssue(_repo: string, number: number, body: string) {
+    this.comments.push({ number, body })
+  }
+
+  async listTelltaleIssues() { return [] }
 }
