@@ -7,6 +7,7 @@ import { verifySignature } from './auth'
 import { decide } from './decide'
 import { restClient, tokenFor, type GitHubClient } from './github'
 import { hashIp, checkRateLimits, shouldComment, recordStat, type StatReason } from './kv'
+import { handleIssues, handleStats } from './read'
 
 export interface Deps {
   gh: (entry: RegistryEntry) => GitHubClient
@@ -135,6 +136,12 @@ export default {
     }
     if (req.method === 'POST' && url.pathname === '/v1/events') {
       return handleEvent(req, env, deps)
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/issues') {
+      return handleIssues(req, env, deps)
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/stats') {
+      return handleStats(req, env)
     }
     return json(404, { error: 'not_found' })
   },
