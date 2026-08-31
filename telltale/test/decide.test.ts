@@ -54,4 +54,10 @@ describe('decide', () => {
     const closed = { ...base, number: 3, state: 'closed' as const, stateReason: 'completed' as const }
     expect(decide([closed, base])).toEqual({ action: 'comment', issue: 7 })
   })
+
+  it('a not_planned closure silences the fingerprint even when a completed duplicate is lower-numbered', () => {
+    const completed = { ...base, number: 3, state: 'closed' as const, stateReason: 'completed' as const }
+    const wontfix = { ...base, number: 5, state: 'closed' as const, stateReason: 'not_planned' as const }
+    expect(decide([completed, wontfix])).toEqual({ action: 'ignore', reason: 'not_planned' })
+  })
 })

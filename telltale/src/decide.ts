@@ -32,10 +32,14 @@ export function decide(candidates: CandidateIssue[]): Decision {
   if (open.length > 0) return { action: 'comment', issue: open[0]!.number }
 
   const closed = [...issues].sort((a, b) => a.number - b.number)
-  const first = closed[0]!
-  if (first.stateReason === 'not_planned') return { action: 'ignore', reason: 'not_planned' }
+
+  // Operator intent to stay silent wins over everything else — same rule as mute,
+  // so it is checked across all closed candidates, not just the lowest-numbered one.
+  if (closed.some((i) => i.stateReason === 'not_planned')) {
+    return { action: 'ignore', reason: 'not_planned' }
+  }
 
   // Closed as completed, or a legacy closure with no state_reason: comment so the
   // recurrence is recorded, but NEVER auto-reopen.
-  return { action: 'comment', issue: first.number }
+  return { action: 'comment', issue: closed[0]!.number }
 }
