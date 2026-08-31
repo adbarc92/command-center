@@ -1,0 +1,16 @@
+{
+  "name": "@cockpit/plugin-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bundled convenience SDK for cockpit view plugins (sandboxed-iframe MessagePort client).",
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  }
+}

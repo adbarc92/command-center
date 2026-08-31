@@ -1,0 +1,42 @@
+{
+  "id": "audience",
+  "name": "Audience",
+  "apiVersion": 1,
+  "icon": "icon.svg",
+  "url": "http://localhost:3000",
+
+  "lifecycle": {
+    "managed": true,
+    "cwd": "D:/MajorProjects/CURRENT/audience",
+
+    "build": {
+      "cmd": "docker compose -f docker-compose.prod.yml build",
+      "args": {
+        "NODE_ENV": "development",
+        "AI_PROVIDER": "fake",
+        "MEDIA_PROVIDER": "fake"
+      },
+      "timeout": 1200000
+    },
+
+    "start": "docker compose -f docker-compose.prod.yml up",
+    "stop": "docker compose -f docker-compose.prod.yml down",
+
+    "env": {
+      "NODE_ENV": "development",
+      "AI_PROVIDER": "fake",
+      "MEDIA_PROVIDER": "fake",
+      "DEV_WORKSPACE_ID": "ws_dev_cockpit",
+      "DEV_USER_ID": "user_dev_cockpit"
+    },
+
+    "health": { "url": "http://localhost:8080/health", "okStatus": [200], "timeout": 180000, "interval": 1000 },
+    "ready":  { "url": "http://localhost:3000", "okStatus": [200, 204, 301, 302, 307, 308], "timeout": 180000, "interval": 1000 }
+  },
+
+  "webview": {
+    "popups": "allow",
+    "externalLinks": "in-app",
+    "title": "Audience"
+  }
+}
