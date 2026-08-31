@@ -37,8 +37,9 @@ export async function sign(secret: string, timestamp: string, rawBody: string): 
   return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-/** Constant-time compare, so a signature cannot be recovered byte by byte. */
-function equals(a: string, b: string): boolean {
+/** Constant-time compare, so a secret cannot be recovered byte by byte.
+ *  Shared with the operator read-token check in src/read.ts. */
+export function equals(a: string, b: string): boolean {
   if (a.length !== b.length) return false
   let diff = 0
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)

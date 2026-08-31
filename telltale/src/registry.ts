@@ -11,7 +11,10 @@ import type { RegistryEntry } from './types'
  * Sentry-created issues and appears on the board, but no app POSTs to it.
  */
 export const REGISTRY: Record<string, RegistryEntry> = {
-  tenzy:           { repo: 'adbarc92/tenzy',           account: 'primary',   labels: ['telltale'] },
+  // Transferred to the OpenBarclay org. adbarc92/tenzy is ONLY a redirect —
+  // `gh api` follows it silently — and the primary PAT's resource owner is the
+  // adbarc92 user, so it cannot write to an org repo at all.
+  tenzy:           { repo: 'OpenBarclay/tenzy',        account: 'secondary', labels: ['telltale'] },
   giftkeeper:      { repo: 'adbarc92/parcle',          account: 'primary',   labels: ['telltale'] },
   purposefull:     { repo: 'OpenBarclay/purposefull',  account: 'secondary', labels: ['telltale'] },
   ironsoul:        { repo: 'adbarc92/ironsoul',        account: 'primary',   labels: ['telltale'] },

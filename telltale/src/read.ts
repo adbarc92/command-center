@@ -1,6 +1,7 @@
 import type { Env, RegistryEntry } from './types'
 import { REGISTRY } from './registry'
 import { readStats } from './kv'
+import { equals } from './auth'
 import type { GitHubClient, RawIssue } from './github'
 
 export interface TelltaleIssueDTO {
@@ -34,8 +35,15 @@ export function toDto(repo: string, project: string, i: RawIssue): TelltaleIssue
   }
 }
 
+/**
+ * A missing secret denies everything. Interpolating an unset OPERATOR_READ_TOKEN
+ * makes the expected header the literal string "Bearer undefined" — a guessable
+ * constant that would serve every bug-report body in every private registry repo
+ * to anyone who sends it. Never "accept a guessable constant"; always "deny".
+ */
 function unauthorized(req: Request, env: Env): boolean {
-  return req.headers.get('Authorization') !== `Bearer ${env.OPERATOR_READ_TOKEN}`
+  if (!env.OPERATOR_READ_TOKEN) return true
+  return !equals(req.headers.get('Authorization') ?? '', `Bearer ${env.OPERATOR_READ_TOKEN}`)
 }
 
 export async function handleIssues(

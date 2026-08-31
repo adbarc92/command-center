@@ -52,7 +52,19 @@ export function restClient(token: string, fetchImpl: typeof fetch = fetch): GitH
   }
 
   async function api(path: string, init?: RequestInit): Promise<Response> {
-    const res = await fetchImpl(`https://api.github.com${path}`, { ...init, headers })
+    // `redirect: 'manual'`, not the default 'follow'. A repo transfer is a
+    // normal, silent event, and following its 301 rewrites a POST into a GET:
+    // createIssue would then parse an issue ARRAY as an object, `labels` would
+    // be undefined, and a stale registry entry would surface as a generic
+    // github_error far from its cause. Fail loudly, naming the new location.
+    const res = await fetchImpl(`https://api.github.com${path}`, { ...init, headers, redirect: 'manual' })
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location')
+      throw new Error(
+        `github ${res.status} redirect on ${path}${location ? ` -> ${location}` : ''}` +
+          ' (repo moved or renamed - update src/registry.ts)',
+      )
+    }
     if (!res.ok) throw new Error(`github ${res.status} on ${path}`)
     return res
   }

@@ -28,6 +28,15 @@ npm run dev       # wrangler dev
 
 ## Deploy
 
+Two registry targets do not exist yet and must be created first, or
+`GET /v1/issues` carries a permanent `errors` entry from its very first request
+and the live grader can never pass:
+
+```bash
+gh repo create adbarc92/telltale-intake --private   # pawsport's target
+gh repo create adbarc92/telltale-probe  --private   # the live grader's target
+```
+
 ```bash
 npx wrangler kv namespace create TELLTALE_KV   # paste the id into wrangler.toml
 npx wrangler secret put TELLTALE_SENDER_SECRETS  # {"tenzy":"...","hexy":"..."}
@@ -44,6 +53,13 @@ Add an explicit entry to `src/registry.ts` — there is no slug-to-repo inferenc
 anywhere, because a wrong guess writes a user's bug report into a stranger's
 repository. Then generate an HMAC secret and add it to
 `TELLTALE_SENDER_SECRETS`.
+
+`account` must name the PAT whose **resource owner actually owns the repo**: a
+fine-grained PAT owned by the `adbarc92` user cannot write to an `OpenBarclay`
+org repo at all, so `OpenBarclay/*` is always `secondary`. Verify the owner
+against the repo's real location, not against `gh api repos/<owner>/<name>` —
+that call silently follows a transfer redirect and reports the repo's NEW owner
+under the OLD path, which is how a wrong entry got in once already.
 
 ## Running the live grader
 

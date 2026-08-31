@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { FakeKV } from './fakes'
-import { handleIssues, toDto } from '../src/read'
+import { handleIssues, handleStats, toDto } from '../src/read'
 import type { Env } from '../src/types'
 import type { RawIssue } from '../src/github'
 
@@ -21,12 +21,38 @@ const raw = (o: Partial<RawIssue> = {}): RawIssue => ({
 const req = (token?: string) =>
   new Request('https://t.test/v1/issues', token ? { headers: { Authorization: `Bearer ${token}` } } : undefined)
 
+const statsReq = (token?: string) =>
+  new Request('https://t.test/v1/stats', token ? { headers: { Authorization: `Bearer ${token}` } } : undefined)
+
 describe('GET /v1/issues auth', () => {
   it('401s without the operator read token', async () => {
     // The Worker can read PRIVATE registry repos. An open read endpoint would
     // serve every private bug-report body to anyone who guesses the hostname.
     expect((await handleIssues(req(), env(), { gh: () => ({} as never) })).status).toBe(401)
     expect((await handleIssues(req('wrong'), env(), { gh: () => ({} as never) })).status).toBe(401)
+  })
+})
+
+describe('GET /v1/stats auth', () => {
+  it('401s without the operator read token and 200s with it', async () => {
+    // "Read endpoints must not be anonymous" is a binding constraint, and
+    // /v1/stats is the second of the two read routes.
+    expect((await handleStats(statsReq(), env())).status).toBe(401)
+    expect((await handleStats(statsReq('wrong'), env())).status).toBe(401)
+    expect((await handleStats(statsReq('op-token'), env())).status).toBe(200)
+  })
+})
+
+describe('an unset OPERATOR_READ_TOKEN', () => {
+  it('denies both read routes rather than accepting the literal "Bearer undefined"', async () => {
+    // First-deploy misconfiguration: if the secret is never set, comparing
+    // against `Bearer ${env.OPERATOR_READ_TOKEN}` makes "Bearer undefined" a
+    // working password for every private bug-report body in the registry.
+    const unset = { ...env(), OPERATOR_READ_TOKEN: undefined as unknown as string }
+    expect((await handleIssues(req(), unset, { gh: () => ({} as never) })).status).toBe(401)
+    expect((await handleIssues(req('undefined'), unset, { gh: () => ({} as never) })).status).toBe(401)
+    expect((await handleStats(statsReq(), unset)).status).toBe(401)
+    expect((await handleStats(statsReq('undefined'), unset)).status).toBe(401)
   })
 })
 

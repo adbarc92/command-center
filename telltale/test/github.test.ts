@@ -95,6 +95,23 @@ describe('restClient', () => {
     ])
   })
 
+  it('refuses to follow a repo-transfer redirect, naming the new location', async () => {
+    // Workers' default redirect:'follow' rewrites a 301'd POST into a GET, so a
+    // transferred repo would return an issue ARRAY where createIssue expects
+    // the created issue — created.labels undefined, and a stale registry entry
+    // surfacing as a generic github_error far from its cause.
+    const { fn, calls } = captureFetch(() =>
+      new Response(null, {
+        status: 301,
+        headers: { location: 'https://api.github.com/repositories/12345/issues' },
+      })
+    )
+    const gh = restClient('tok', fn)
+    await expect(gh.createIssue('old/name', { title: 't', body: 'b', labels: ['tt:abc'] }))
+      .rejects.toThrow(/301.*repositories\/12345\/issues/)
+    expect((calls[0]!.init as RequestInit).redirect).toBe('manual')
+  })
+
   it('throws on a non-2xx response instead of returning an empty array', async () => {
     // An empty array from a failed lookup reads as "no match" and would open
     // a duplicate issue — this must fail loudly instead.
