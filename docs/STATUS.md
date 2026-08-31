@@ -36,6 +36,22 @@ the fixes that followed, closed **five** defects: **D-7** (view-plugins received
 Across both runs, **`db74a47` is CONFIRMED twice** — 1,127 samples in dev and 632 in packaged, zero
 unresponsive in either.
 
+**⚠ Telltale is pivoting OUT of this repo (2026-08-30).** A feedback pipeline — authenticated bug
+reports deduplicated into GitHub issues — was built as a `telltale/` subdirectory here (PR #64, 82
+tests, fully reviewed). **That was the wrong repository.** Telltale becomes its own app and repo;
+this repo keeps only the **integration**: a `feedback` source adapter for the Project Dashboard that
+reads Telltale's `GET /v1/issues` (spec §6, **not started**). Extraction steps, PR dispositions and
+the six defects found in the plan's reference code are in
+[`docs/handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md`](handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md).
+**PR #64 is to be closed, not merged.**
+
+**⚠ Intermittent race in the fleetd spend cap, unrelated to the above.**
+`server::tests::concurrent_missions_cannot_both_breach_the_cap` failed on PR #64 with **both**
+concurrent missions admitted past the $20 global cap (`left: 2, right: 1`) — the condition its own
+comment calls "an open race" — then passed on a re-run of the identical tree. `create_mission` holds
+the store lock across check and insert, so the obvious explanation does not apply; the `.ok()` that
+swallows `upsert_unit`'s error is the first thing to look at. Not investigated further.
+
 **Vision (unchanged):** the Command Center is the operator's **one-stop shop for agentic
 engineering** — dispatch work, see every project's stage, act without alt-tabbing, host the other
 tools inside it, and (future) **remote-control** it from away-from-desk. **Feature-complete before
@@ -174,6 +190,36 @@ resolved** — merging `main` into `feat/plugin-runtime` on 2026-08-10 brought t
 across from #47; close it._
 
 ## Session log
+
+### 2026-08-30 — Built the Telltale Worker here, then pivoted it out; removed the embargo guard
+
+**Three PRs opened.** [#62](https://github.com/adbarc92/command-center/pull/62) removes the **embargo
+guard** in full — hooks, script, CI job, denylist, README section — the embargo having been lifted
+2026-08-29. It was five interlocking parts, and `embargo guard` was a *required status check* on
+`main`, so deleting the CI job alone would have hung every PR forever on a check that no longer
+reports; branch protection was updated in the same breath. Conflicts with `main` (PR #49 landed
+mid-session) resolved in `af11995`.
+
+[#63](https://github.com/adbarc92/command-center/pull/63) carries the **Telltale spec and plan**. The
+spec lost roughly half its mass across three rounds of adversarial critique: the entire crash-side
+pipeline was deleted once it became clear it was **reimplementing Sentry** (whose native GitHub
+integration already opens one issue per group), and fleet dispatch was cut because it would have
+widened a credentialed agent's push target from one sandbox to every repo in the registry, for a
+pipeline whose input is internet-authored text.
+
+[#64](https://github.com/adbarc92/command-center/pull/64) built the **ingest Worker** — eleven TDD
+tasks, each independently reviewed, plus a whole-branch review and a final fix wave. 82 tests, zero
+runtime dependencies. That process found **six defects in the plan's own reference code**, including
+a registry entry pointing at `adbarc92/tenzy`, which does not exist — `gh api` silently follows a
+transfer redirect to `OpenBarclay/tenzy`, and the primary PAT cannot write to an org repo.
+
+**Then the pivot.** Telltale was never meant to live in this repo — the operator's earlier "put it in
+Command Center" was about the *spec*, and it was extended to the implementation without being put to
+them. Telltale becomes its own app and repo; this repo keeps only the `feedback` source adapter.
+**#64 is to be closed, not merged.** Full extraction plan:
+[`docs/handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md`](handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md).
+
+Also surfaced, unrelated: an **intermittent race in fleetd's global spend cap** (see State summary).
 
 ### 2026-08-16 — Built the smoke skill, then it found the defect that would have shipped
 
