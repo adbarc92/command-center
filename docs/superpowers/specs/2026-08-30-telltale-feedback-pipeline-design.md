@@ -70,6 +70,8 @@ library projects; **`kind: "idea"`**; and **fleet dispatch** (§6.5).
    read token that is never shipped in an app binary (§5.4).
 7. **Dispatch is out of scope** (§6.5).
 8. **Standalone before integrated.** P1–P2 ship and are useful with no Command Center running.
+9. **T5 ships** (operator, 2026-08-30). Command Center is the central hub; the dashboard adapter is
+   a deliverable, not an optional extra — see §6.7 for the argument against it that was rejected.
 
 ---
 
@@ -594,11 +596,12 @@ Critique argued T5/P3 should also go. The argument is strong and belongs on the 
   `api.ts` binding, an adapter, a `store.ts` poll, plus Worker-side `/v1/issues` with auth, caching,
   ETag, and per-repo error isolation.
 
-**T5 is nevertheless retained**, because the operator's stated requirement is that this system
-integrate with Command Center as the central orchestration hub — a board presence is the deliverable,
-not an optimization. If that is worth less than the build cost, the fallback is one `manual`-source
-card deep-linking to the saved search: a two-line change that preserves the board presence and
-deletes P3 entirely. **This is a live decision, not a closed one.**
+**T5 is retained — confirmed by the operator on 2026-08-30, and this decision is closed.** Command
+Center is to be the central hub for all of this, so a real `feedback` source adapter is the
+deliverable, not an optimization to be traded away. The saved-search fallback is recorded above only
+so a future reader knows it was considered and rejected on purpose; **do not substitute it for the
+adapter.** The §6.4 fixes (cards only for projects with open issues) address the clutter and
+count-inflation half of the critique without giving up the integration.
 
 ---
 
@@ -683,8 +686,9 @@ user-typed text, and one recovered report does not justify it.
 1. **Abuse of the ingest.** It converts a request into a public issue under the operator's identity.
    HMAC (§4.1) makes abuse attributable and rotatable; rate limiting (§4.2) bounds it; the registry
    redirect (§5.1) is the escalation for the bug half. **A secret in a distributed binary is
-   extractable — managed, not solved.** *This risk was never put to the operator as a decision (the
-   PII question was); it should be.*
+   extractable — managed, not solved.** **Put to the operator and knowingly accepted, 2026-08-30**,
+   on the same footing as the PII decision: the mitigations bound and attribute abuse rather than
+   preventing it, and that is judged tolerable at this portfolio's scale.
 2. **PII in public issues.** Bug reports are scrubbed (§4.3); **crash issues are not** — they are
    authored by Sentry directly and depend entirely on §3 step 2's Sentry-side scrubbing, a different
    control in a different console. The private-repo escape hatch is a config edit for bugs but N
