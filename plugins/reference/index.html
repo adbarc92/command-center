@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cockpit Reference Plugin</title>
+    <!--
+      NOTE: the plugin-document CSP is delivered as a RESPONSE HEADER by the ccplugin://
+      scheme handler (lib.rs) / the dev static route — NOT a <meta> the plugin controls.
+      This document only loads its own same-origin module scripts (app.js → sdk.js/model.js).
+    -->
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; font: 13px/1.5 ui-monospace, monospace; background: #05121a; color: #cfe8f0; padding: 14px; }
+      h1 { font-size: 14px; letter-spacing: 2px; margin: 0 0 10px; color: #7fe3e3; }
+      .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+      button { background: #0c2a34; color: #cfe8f0; border: 1px solid #1c4a58; border-radius: 3px; padding: 6px 10px; cursor: pointer; font: inherit; }
+      button:hover { border-color: #2f7f92; }
+      #banner { background: rgba(120, 220, 220, 0.12); border: 1px solid #2f7f92; color: #7fe3e3; padding: 8px 10px; border-radius: 3px; margin-bottom: 10px; }
+      ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+      li { background: #0a1f27; border: 1px solid #16323c; border-radius: 3px; padding: 6px 9px; }
+      li b { color: #eaf6fa; }
+      li span { color: #7fe3e3; }
+      li i { color: #86a2ad; }
+      li.empty { color: #567; }
+      .muted { color: #6f8a94; }
+    </style>
+  </head>
+  <body>
+    <h1>REFERENCE VIEW-PLUGIN</h1>
+    <div class="bar">
+      <span id="status" class="muted">connecting…</span>
+      <span id="degraded" class="muted">DAEMON: ?</span>
+    </div>
+    <div class="bar">
+      <button id="launch-demo">▸ demo launch</button>
+      <button id="launch-real">▸ real launch (→ rejected, host confirms)</button>
+      <button id="halt">◼ halt first unit</button>
+      <span id="acks" class="muted">no commands yet</span>
+    </div>
+    <div id="banner" hidden></div>
+    <ul id="units"><li class="empty">no units</li></ul>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

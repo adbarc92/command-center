@@ -30,3 +30,5 @@
 # ContextCurator local store (user's product data, not ours to track)
 /.context-curator/
 
+# Root-level tooling artifacts (cockpit/ui has its own ignore for its tree).
+node_modules/
