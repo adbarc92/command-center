@@ -51,6 +51,26 @@ describe('toDto', () => {
   })
 })
 
+describe('GET /issues excludes pull requests', () => {
+  it('drops issues carrying a pull_request key, keeping only real issues', async () => {
+    // GET /repos/{o}/{r}/issues returns PRs as issues. Without this filter, a
+    // labelled fix PR would read as an open bug report that never closes.
+    const gh = (entry: { repo: string }) => ({
+      listTelltaleIssues: async () => {
+        if (!entry.repo.includes('tenzy')) return []
+        return [
+          raw({ number: 1 }),
+          raw({ number: 2, pull_request: {} }),
+        ]
+      },
+    }) as never
+    const res = await handleIssues(req('op-token'), env(), { gh })
+    const out = await res.json() as { issues: Array<{ number: number }> }
+    expect(out.issues.length).toBe(1)
+    expect(out.issues[0]?.number).toBe(1)
+  })
+})
+
 describe('per-repo error isolation', () => {
   it('returns the repos that answered plus a per-repo error list', async () => {
     // Some registry repos are archived or private with broken billing. One 403
