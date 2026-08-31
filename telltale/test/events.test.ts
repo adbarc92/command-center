@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { FakeKV, FakeGitHub } from './fakes'
-import { handleEvent } from '../src/index'
+import worker, { handleEvent } from '../src/index'
 import { sign } from '../src/auth'
+import { readStats } from '../src/kv'
 import type { Env } from '../src/types'
 
 const SECRET = 'sender-secret'
@@ -29,6 +30,22 @@ async function post(body: object, opts: { secret?: string; ts?: string } = {}) {
     },
     body: raw,
   })
+}
+
+/** Every KV operation rejects — the shape of a namespace-wide blip. */
+class ThrowingKV {
+  async get(): Promise<string | null> { throw new Error('KV unavailable') }
+  async put(): Promise<void> { throw new Error('KV unavailable') }
+  async list(): Promise<never> { throw new Error('KV unavailable') }
+}
+
+/** Only the stats counters reject — the realistic case, since `st:` keys are
+ *  hot keys by construction and KV allows ~1 write per second per key. */
+class StatsHostileKV extends FakeKV {
+  async put(k: string, v: string, o?: { expirationTtl?: number }): Promise<void> {
+    if (k.startsWith('st:')) throw new Error('KV write rate limit on a hot key')
+    return super.put(k, v, o)
+  }
 }
 
 const EVENT = { schema_version: 1, title: 'Save fails', body: 'nothing happens', reporter: { anon_id: 'a1' } }
@@ -119,12 +136,52 @@ describe('POST /v1/events', () => {
     expect(res.status).toBe(500)
   })
 
-  it('429s past the per-install ceiling', async () => {
+  it('429s past the per-install ceiling, telling the sender when to come back', async () => {
     const gh = new FakeGitHub()
     const env = makeEnv(new FakeKV())
-    let last = 0
-    for (let i = 0; i < 12; i++) last = (await handleEvent(await post(EVENT), env, deps(gh))).status
-    expect(last).toBe(429)
+    let last: Response | undefined
+    for (let i = 0; i < 12; i++) last = await handleEvent(await post(EVENT), env, deps(gh))
+    expect(last!.status).toBe(429)
+    // Binding constraint: without Retry-After a throttled sender has no idea
+    // when to retry and hammers the endpoint through the whole hour bucket.
+    expect(last!.headers.get('Retry-After')).toBe('3600')
+  })
+
+  it('records duplicate_fingerprint when the lookup returns two open matches', async () => {
+    // The spec knowingly accepts a concurrent-create race that can open two
+    // issues for one fingerprint. That acceptance is only defensible while the
+    // operator can see it in /v1/stats.
+    const gh = new FakeGitHub()
+    const kv = new FakeKV()
+    const env = makeEnv(kv)
+    await handleEvent(await post(EVENT), env, deps(gh))
+    gh.issues.push({ ...gh.issues[0]!, number: 2 })
+
+    const res = await handleEvent(await post(EVENT), env, deps(gh))
+    expect(res.status).toBe(202)
+    const stats = await readStats(kv as unknown as KVNamespace)
+    expect(stats.duplicate_fingerprint).toBe(1)
+    expect(stats.accepted).toBe(2)
+  })
+
+  it('answers with the JSON envelope, not an unhandled throw, when KV is down', async () => {
+    // recordStat/bump write hot keys by construction. A rejection that escapes
+    // handleEvent hands the client Cloudflare's bare 5xx: no { error } body and
+    // no stat — the exact silent failure /v1/stats exists to eliminate.
+    const env: Env = { ...makeEnv(new FakeKV()), TELLTALE_KV: new ThrowingKV() as unknown as KVNamespace }
+    // The default export builds its own deps with the REAL Date.now(), so this
+    // one request must be signed against wall-clock time, not the frozen NOW.
+    const req = await post(EVENT, { ts: String(Math.floor(Date.now() / 1000)) })
+    const res = await worker.fetch(req, env)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ error: 'internal' })
+  })
+
+  it('degrades observability, not the pipeline, when a stats write fails', async () => {
+    const gh = new FakeGitHub()
+    const res = await handleEvent(await post(EVENT), makeEnv(new StatsHostileKV()), deps(gh))
+    expect(res.status).toBe(202)
+    expect(gh.issues).toHaveLength(1)
   })
 
   it('500s on a malformed TELLTALE_SENDER_SECRETS instead of throwing', async () => {

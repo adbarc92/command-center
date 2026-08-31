@@ -42,9 +42,21 @@ describe('checkRateLimits', () => {
 describe('shouldComment', () => {
   it('allows the first comment then throttles within the hour', async () => {
     const k = kv()
-    expect(await shouldComment(k, 'fp1')).toBe(true)
-    expect(await shouldComment(k, 'fp1')).toBe(false)
-    expect(await shouldComment(k, 'fp2')).toBe(true)
+    expect(await shouldComment(k, 'tenzy', 'fp1')).toBe(true)
+    expect(await shouldComment(k, 'tenzy', 'fp1')).toBe(false)
+    expect(await shouldComment(k, 'tenzy', 'fp2')).toBe(true)
+  })
+
+  it('does not let one project throttle another that shares a fingerprint', async () => {
+    // The fingerprint is a hash of the scrubbed title alone and KV is ONE
+    // namespace across all eleven projects, so "Save button does nothing"
+    // fingerprints identically everywhere. An unscoped key would silently
+    // swallow the second project's genuine recurrence comment for an hour.
+    const k = kv()
+    expect(await shouldComment(k, 'tenzy', 'shared-fp')).toBe(true)
+    expect(await shouldComment(k, 'hexy', 'shared-fp')).toBe(true)
+    // ...and each project still throttles itself.
+    expect(await shouldComment(k, 'hexy', 'shared-fp')).toBe(false)
   })
 })
 

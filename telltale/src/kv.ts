@@ -44,19 +44,35 @@ export async function checkRateLimits(
   return { ok: true }
 }
 
-/** At most one comment per fingerprint per hour: a crash hitting a thousand users
- *  must produce one issue and a handful of comments, not a thousand notifications. */
-export async function shouldComment(kv: KVNamespace, fp: string): Promise<boolean> {
-  const k = `ct:${fp}:${bucket()}`
+/** At most one comment per project per fingerprint per hour: a crash hitting a
+ *  thousand users must produce one issue and a handful of comments, not a
+ *  thousand notifications.
+ *
+ *  The key is PROJECT-SCOPED, like `rl:proj:`. The fingerprint is a hash of the
+ *  scrubbed title alone, and KV is a single namespace across all eleven
+ *  projects: two apps whose users type the same generic title ("Save button
+ *  does nothing") share a fingerprint, and an unscoped key would silently
+ *  suppress the second project's genuine recurrence comment for an hour. */
+export async function shouldComment(kv: KVNamespace, project: string, fp: string): Promise<boolean> {
+  const k = `ct:${project}:${fp}:${bucket()}`
   if (await kv.get(k)) return false
   await kv.put(k, '1', { expirationTtl: HOUR * 2 })
   return true
 }
 
+/** Never throws. Every counter here is a hot key by construction
+ *  (`st:bad_signature:{hour}`) and KV documents roughly one write per second
+ *  per key, so a rejection is expected under real traffic. Swallowing it here
+ *  rather than at each call site means a KV hiccup degrades observability
+ *  instead of taking down the pipeline /v1/stats exists to describe. */
 export async function recordStat(kv: KVNamespace, reason: StatReason): Promise<void> {
-  const k = `st:${reason}:${bucket()}`
-  const n = Number((await kv.get(k)) ?? '0')
-  await kv.put(k, String(n + 1), { expirationTtl: HOUR * 26 })
+  try {
+    const k = `st:${reason}:${bucket()}`
+    const n = Number((await kv.get(k)) ?? '0')
+    await kv.put(k, String(n + 1), { expirationTtl: HOUR * 26 })
+  } catch {
+    // Best-effort by design; see above.
+  }
 }
 
 export async function readStats(kv: KVNamespace): Promise<Record<string, number>> {

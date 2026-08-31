@@ -94,6 +94,14 @@ export async function handleEvent(req: Request, env: Env, deps: Deps): Promise<R
   const decision = decide(candidates)
   if (decision.action === 'ignore') return fail(200, 'ignored')
 
+  // The spec knowingly accepts a concurrent-create race that can open two
+  // issues for one fingerprint (§4.4). That acceptance is only defensible while
+  // the operator can SEE it happening, so a multi-match lookup is counted
+  // alongside the normal 'accepted'.
+  if (candidates.filter((c) => !c.isPullRequest && c.state === 'open').length > 1) {
+    await recordStat(kv, 'duplicate_fingerprint')
+  }
+
   const footer =
     `\n\n---\n` +
     (event.release ? `Release: ${project}-${event.release.surface}@${event.release.version}\n` : '') +
@@ -117,7 +125,7 @@ export async function handleEvent(req: Request, env: Env, deps: Deps): Promise<R
       return json(202, { issue: created.number, url: created.url })
     }
 
-    if (await shouldComment(kv, fp)) {
+    if (await shouldComment(kv, project, fp)) {
       await gh.commentIssue(entry.repo, decision.issue, `Reported again.${footer}`)
     }
     await recordStat(kv, 'accepted')
@@ -129,20 +137,29 @@ export async function handleEvent(req: Request, env: Env, deps: Deps): Promise<R
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    const url = new URL(req.url)
-    const deps: Deps = {
-      gh: (entry) => restClient(tokenFor(env, entry)),
-      nowMs: Date.now(),
+    // Top-level boundary. Anything that escapes here becomes Cloudflare's bare
+    // 5xx HTML — no { error } envelope and no stat — which is exactly the
+    // silent failure /v1/stats exists to eliminate. KV is the realistic source:
+    // its counters are hot keys by construction and a blip must not take the
+    // pipeline down with it.
+    try {
+      const url = new URL(req.url)
+      const deps: Deps = {
+        gh: (entry) => restClient(tokenFor(env, entry)),
+        nowMs: Date.now(),
+      }
+      if (req.method === 'POST' && url.pathname === '/v1/events') {
+        return await handleEvent(req, env, deps)
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/issues') {
+        return await handleIssues(req, env, deps)
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/stats') {
+        return await handleStats(req, env)
+      }
+      return json(404, { error: 'not_found' })
+    } catch {
+      return json(500, { error: 'internal' })
     }
-    if (req.method === 'POST' && url.pathname === '/v1/events') {
-      return handleEvent(req, env, deps)
-    }
-    if (req.method === 'GET' && url.pathname === '/v1/issues') {
-      return handleIssues(req, env, deps)
-    }
-    if (req.method === 'GET' && url.pathname === '/v1/stats') {
-      return handleStats(req, env)
-    }
-    return json(404, { error: 'not_found' })
   },
 }
