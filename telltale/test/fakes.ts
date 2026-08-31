@@ -15,8 +15,10 @@ export class FakeKV {
 export class FakeGitHub implements GitHubClient {
   issues: Array<CandidateIssue & { title: string; body: string }> = []
   comments: Array<{ number: number; body: string }> = []
-  /** Simulates GitHub silently dropping labels when the token lacks push access. */
+  /** Simulates GitHub silently dropping ALL labels when the token lacks push access. */
   dropLabels = false
+  /** Simulates a PARTIAL drop: this one label is omitted from the response, others survive. */
+  dropLabel?: string
   private next = 1
 
   async findByLabel(_repo: string, label: string): Promise<CandidateIssue[]> {
@@ -24,13 +26,15 @@ export class FakeGitHub implements GitHubClient {
   }
 
   async createIssue(_repo: string, i: { title: string; body: string; labels: string[] }) {
-    const labels = this.dropLabels ? [] : i.labels
+    const labels = this.dropLabels ? [] : i.labels.filter((l) => l !== this.dropLabel)
     const number = this.next++
     this.issues.push({
       number, state: 'open', stateReason: null, labels,
       isPullRequest: false, title: i.title, body: i.body,
     })
-    return { number, url: `https://example.test/i/${number}`, labelsDropped: labels.length !== i.labels.length }
+    // Content-based, matching the real client: a count comparison would miss
+    // a partial drop where another label backfills the missing slot.
+    return { number, url: `https://example.test/i/${number}`, labelsDropped: i.labels.some((l) => !labels.includes(l)) }
   }
 
   async commentIssue(_repo: string, number: number, body: string) {

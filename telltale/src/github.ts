@@ -46,6 +46,9 @@ export function restClient(token: string, fetchImpl: typeof fetch = fetch): GitH
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'telltale',
+    // Without this, a plain string body defaults to text/plain per the Fetch
+    // spec and GitHub reads the POST body as text, not JSON.
+    'Content-Type': 'application/json',
   }
 
   async function api(path: string, init?: RequestInit): Promise<Response> {
