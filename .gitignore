@@ -30,9 +30,5 @@
 # ContextCurator local store (user's product data, not ours to track)
 /.context-curator/
 
-# embargo guard denylist — digests of low-entropy tokens are crackable, so the
-# denylist is never committed (see scripts/embargo-guard.mjs)
-/.embargo-guard.local.json
-
 # Root-level tooling artifacts (cockpit/ui has its own ignore for its tree).
 node_modules/

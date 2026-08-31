@@ -1,7 +1,7 @@
 ---
 stage: Build
 readiness: "control plane publication-ready; product shell on roadmap"
-updated: "2026-08-16"
+updated: "2026-08-30"
 name: "Command Center"
 base_branch: "main"
 test_cmd: "cargo test --workspace"
@@ -17,20 +17,57 @@ its own `STATUS.md`, so the Command Center appears on its own board as a `local:
 ## State summary
 
 **TL;DR.** The **control plane and workflow layer are feature-complete and tested**, the repo is
-**public**, and `main` is **branch-protected**. **CI is now a real gate**: #60 (merged 2026-08-15)
+**public**, and `main` is **branch-protected**, with `cargo test (workspace)` as the required check.
+**The embargo guard was removed 2026-08-30** (operator decision; the embargo was lifted 2026-08-29) —
+hooks, script, CI job and denylist are all gone, and `embargo guard` has been **dropped from the
+branch-protection required checks**, without which every PR would have hung forever on a check that
+no longer reports. **CI is now a real gate**: #60 (merged 2026-08-15)
 added rustfmt, clippy, `svelte-check + tsc`, vitest and — critically — `cargo test (cockpit)`, which
 had **never run in CI at all** because `cockpit/ui/src-tauri` is a standalone cargo workspace the
 root `--workspace` never reached. Five of seven test tiers were advisory until that landed. The
 **superseded guard digests are out of public history** (targeted 9-commit `filter-repo` rewrite).
 **The interactive smoke is FINISHED.** Run 2 (dev) and **Run 3 (packaged, 2026-08-16)** are both
-complete, and **#49 is READY FOR REVIEW with all 18 CI checks green** — it is waiting on a human
-merge decision and nothing else. Run 3 scored **9 PASS / 2 BLOCKED / 2 NOT RUN / 0 FAIL** and, with
+complete, and **#49 is MERGED** (`e2fc3ce`) — the product shell is no longer roadmap. Run 3 scored
+**9 PASS / 2 BLOCKED / 2 NOT RUN / 0 FAIL** and, with
 the fixes that followed, closed **five** defects: **D-7** (view-plugins received no state at all),
 **D-8** (**the packaged bundle shipped no plugin root — no shipped build could load a view-plugin**),
 **D-2** (every plugin was granted every capability; now fails closed), **D-4** (re-verified packaged:
 0.23 s cold exit, 5.27 s with 10 containers) and **D-5** (investigated, **did not reproduce**).
 Across both runs, **`db74a47` is CONFIRMED twice** — 1,127 samples in dev and 632 in packaged, zero
 unresponsive in either.
+
+**✅ Telltale has moved OUT of this repo (2026-08-30) — the pivot is complete.** A feedback pipeline
+— authenticated bug reports deduplicated into GitHub issues — was built as a `telltale/`
+subdirectory here (PR #64, 82 tests, fully reviewed). That was the wrong repository. It now lives at
+**[`adbarc92/telltale`](https://github.com/adbarc92/telltale)** (private), extracted with
+`git subtree split` so all **17 commits** kept their TDD and review history with `telltale/` as the
+repo root. Verified on the extracted tree before pushing: `npm ci` clean, `npx vitest run` →
+**82 passed, 1 skipped**, `npm run check` → exit 0. The spec and plan moved with it
+(`docs/design.md`, `docs/plan.md`); the plan gained a **Defects found during execution** section
+recording six defects in its own reference code, all fixed in `src/`.
+
+**Nothing had to be stripped from this repo.** `telltale/` never existed on `main` or on
+`chore/remove-embargo-guard` — only on PR #64's branch — so closing that PR was sufficient, and the
+`vitest (telltale)` CI job never reached `main` either. **PR #64 and PR #63 are both closed, not
+merged.** Extraction detail and the six defects are in
+[`docs/handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md`](handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md).
+
+**What remains here is the integration only, and it is NOT started:** a `feedback` source adapter
+for the Project Dashboard reading Telltale's `GET /v1/issues` (design spec §6 in the Telltale repo).
+Its change surface is eight files across `cockpit/ui`. Three things that spec settles and are easy
+to get wrong: cards are **`Idle`, never `Build`** (`sortedCards` ranks `Build` above `Live`, so one
+old bug would outrank a live production project); **`Blocked` only for an open `telltale:crash`
+issue with no assignee** (`blockedCount` is the board's "NEEDS YOU" headline — a condition that
+never clears poisons it); and **`family` is inert** — written by three adapters, read by nothing.
+A command-center-side adapter spec gets written when P3 begins, rather than maintained in two
+places while the work is unstarted.
+
+**⚠ Intermittent race in the fleetd spend cap, unrelated to the above.**
+`server::tests::concurrent_missions_cannot_both_breach_the_cap` failed on PR #64 with **both**
+concurrent missions admitted past the $20 global cap (`left: 2, right: 1`) — the condition its own
+comment calls "an open race" — then passed on a re-run of the identical tree. `create_mission` holds
+the store lock across check and insert, so the obvious explanation does not apply; the `.ok()` that
+swallows `upsert_unit`'s error is the first thing to look at. Not investigated further.
 
 **Vision (unchanged):** the Command Center is the operator's **one-stop shop for agentic
 engineering** — dispatch work, see every project's stage, act without alt-tabbing, host the other
@@ -170,6 +207,51 @@ resolved** — merging `main` into `feat/plugin-runtime` on 2026-08-10 brought t
 across from #47; close it._
 
 ## Session log
+
+### 2026-08-30 — Built the Telltale Worker here, then pivoted it out; removed the embargo guard
+
+**Three PRs opened.** [#62](https://github.com/adbarc92/command-center/pull/62) removes the **embargo
+guard** in full — hooks, script, CI job, denylist, README section — the embargo having been lifted
+2026-08-29. It was five interlocking parts, and `embargo guard` was a *required status check* on
+`main`, so deleting the CI job alone would have hung every PR forever on a check that no longer
+reports; branch protection was updated in the same breath. Conflicts with `main` (PR #49 landed
+mid-session) resolved in `af11995`.
+
+[#63](https://github.com/adbarc92/command-center/pull/63) carries the **Telltale spec and plan**. The
+spec lost roughly half its mass across three rounds of adversarial critique: the entire crash-side
+pipeline was deleted once it became clear it was **reimplementing Sentry** (whose native GitHub
+integration already opens one issue per group), and fleet dispatch was cut because it would have
+widened a credentialed agent's push target from one sandbox to every repo in the registry, for a
+pipeline whose input is internet-authored text.
+
+[#64](https://github.com/adbarc92/command-center/pull/64) built the **ingest Worker** — eleven TDD
+tasks, each independently reviewed, plus a whole-branch review and a final fix wave. 82 tests, zero
+runtime dependencies. That process found **six defects in the plan's own reference code**, including
+a registry entry pointing at `adbarc92/tenzy`, which does not exist — `gh api` silently follows a
+transfer redirect to `OpenBarclay/tenzy`, and the primary PAT cannot write to an org repo.
+
+**Then the pivot.** Telltale was never meant to live in this repo — the operator's earlier "put it in
+Command Center" was about the *spec*, and it was extended to the implementation without being put to
+them. Telltale becomes its own app and repo; this repo keeps only the `feedback` source adapter.
+**#64 is to be closed, not merged.** Full extraction plan:
+[`docs/handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md`](handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md).
+
+**Pivot executed, same session.** [`adbarc92/telltale`](https://github.com/adbarc92/telltale) created
+(private) and seeded by `git subtree split --prefix=telltale`, carrying all **17 commits** with
+`telltale/` as the repo root. The extracted tree was verified *before* pushing — `npm ci` clean,
+`npx vitest run` → **82 passed, 1 skipped**, `npm run check` → exit 0 — confirming every in-code path
+was already relative to `telltale/`. Spec and plan followed as `docs/design.md` and `docs/plan.md`
+(telltale PR #1), with cross-links repaired and a **Defects found during execution** section added to
+the plan so its six known-defective reference snippets cannot be rebuilt by anyone following it.
+
+**The handoff's step 3 turned out to be a no-op.** It called for `git rm -r telltale/` on a branch off
+`chore/remove-embargo-guard` and a revert of the `vitest (telltale)` CI job. Neither existed there:
+`telltale/` was only ever on #64's branch, and the CI job with it. Because #64 was closed rather than
+merged, nothing entered this repo's history and there was nothing to strip. What *was* worth
+salvaging were the two docs that existed only on that branch — the pivot handoff and this STATUS
+entry — cherry-picked onto #62 before #64 closed. **#64 and #63 are both closed.**
+
+Also surfaced, unrelated: an **intermittent race in fleetd's global spend cap** (see State summary).
 
 ### 2026-08-16 — Built the smoke skill, then it found the defect that would have shipped
 
