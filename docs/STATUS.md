@@ -1,7 +1,7 @@
 ---
 stage: Build
 readiness: "control plane publication-ready; product shell on roadmap"
-updated: "2026-08-16"
+updated: "2026-08-30"
 name: "Command Center"
 base_branch: "main"
 test_cmd: "cargo test --workspace"
@@ -36,14 +36,31 @@ the fixes that followed, closed **five** defects: **D-7** (view-plugins received
 Across both runs, **`db74a47` is CONFIRMED twice** — 1,127 samples in dev and 632 in packaged, zero
 unresponsive in either.
 
-**⚠ Telltale is pivoting OUT of this repo (2026-08-30).** A feedback pipeline — authenticated bug
-reports deduplicated into GitHub issues — was built as a `telltale/` subdirectory here (PR #64, 82
-tests, fully reviewed). **That was the wrong repository.** Telltale becomes its own app and repo;
-this repo keeps only the **integration**: a `feedback` source adapter for the Project Dashboard that
-reads Telltale's `GET /v1/issues` (spec §6, **not started**). Extraction steps, PR dispositions and
-the six defects found in the plan's reference code are in
+**✅ Telltale has moved OUT of this repo (2026-08-30) — the pivot is complete.** A feedback pipeline
+— authenticated bug reports deduplicated into GitHub issues — was built as a `telltale/`
+subdirectory here (PR #64, 82 tests, fully reviewed). That was the wrong repository. It now lives at
+**[`adbarc92/telltale`](https://github.com/adbarc92/telltale)** (private), extracted with
+`git subtree split` so all **17 commits** kept their TDD and review history with `telltale/` as the
+repo root. Verified on the extracted tree before pushing: `npm ci` clean, `npx vitest run` →
+**82 passed, 1 skipped**, `npm run check` → exit 0. The spec and plan moved with it
+(`docs/design.md`, `docs/plan.md`); the plan gained a **Defects found during execution** section
+recording six defects in its own reference code, all fixed in `src/`.
+
+**Nothing had to be stripped from this repo.** `telltale/` never existed on `main` or on
+`chore/remove-embargo-guard` — only on PR #64's branch — so closing that PR was sufficient, and the
+`vitest (telltale)` CI job never reached `main` either. **PR #64 and PR #63 are both closed, not
+merged.** Extraction detail and the six defects are in
 [`docs/handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md`](handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md).
-**PR #64 is to be closed, not merged.**
+
+**What remains here is the integration only, and it is NOT started:** a `feedback` source adapter
+for the Project Dashboard reading Telltale's `GET /v1/issues` (design spec §6 in the Telltale repo).
+Its change surface is eight files across `cockpit/ui`. Three things that spec settles and are easy
+to get wrong: cards are **`Idle`, never `Build`** (`sortedCards` ranks `Build` above `Live`, so one
+old bug would outrank a live production project); **`Blocked` only for an open `telltale:crash`
+issue with no assignee** (`blockedCount` is the board's "NEEDS YOU" headline — a condition that
+never clears poisons it); and **`family` is inert** — written by three adapters, read by nothing.
+A command-center-side adapter spec gets written when P3 begins, rather than maintained in two
+places while the work is unstarted.
 
 **⚠ Intermittent race in the fleetd spend cap, unrelated to the above.**
 `server::tests::concurrent_missions_cannot_both_breach_the_cap` failed on PR #64 with **both**
@@ -218,6 +235,21 @@ Command Center" was about the *spec*, and it was extended to the implementation 
 them. Telltale becomes its own app and repo; this repo keeps only the `feedback` source adapter.
 **#64 is to be closed, not merged.** Full extraction plan:
 [`docs/handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md`](handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md).
+
+**Pivot executed, same session.** [`adbarc92/telltale`](https://github.com/adbarc92/telltale) created
+(private) and seeded by `git subtree split --prefix=telltale`, carrying all **17 commits** with
+`telltale/` as the repo root. The extracted tree was verified *before* pushing — `npm ci` clean,
+`npx vitest run` → **82 passed, 1 skipped**, `npm run check` → exit 0 — confirming every in-code path
+was already relative to `telltale/`. Spec and plan followed as `docs/design.md` and `docs/plan.md`
+(telltale PR #1), with cross-links repaired and a **Defects found during execution** section added to
+the plan so its six known-defective reference snippets cannot be rebuilt by anyone following it.
+
+**The handoff's step 3 turned out to be a no-op.** It called for `git rm -r telltale/` on a branch off
+`chore/remove-embargo-guard` and a revert of the `vitest (telltale)` CI job. Neither existed there:
+`telltale/` was only ever on #64's branch, and the CI job with it. Because #64 was closed rather than
+merged, nothing entered this repo's history and there was nothing to strip. What *was* worth
+salvaging were the two docs that existed only on that branch — the pivot handoff and this STATUS
+entry — cherry-picked onto #62 before #64 closed. **#64 and #63 are both closed.**
 
 Also surfaced, unrelated: an **intermittent race in fleetd's global spend cap** (see State summary).
 
