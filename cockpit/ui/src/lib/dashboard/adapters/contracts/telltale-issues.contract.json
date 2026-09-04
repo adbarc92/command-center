@@ -1,0 +1,45 @@
+{
+  "contract": "telltale GET /v1/issues",
+  "version": 1,
+  "producer": "telltale · src/read.ts · TelltaleIssueDTO / IssuesResponse",
+  "consumer": "command-center · cockpit/ui/src/lib/dashboard/adapters/feedback.ts · TelltaleIssue / FeedbackIssuesResponse",
+  "issueFields": {
+    "repo": "string",
+    "number": "number",
+    "title": "string",
+    "body": "string",
+    "kind": "'bug' | 'crash' | 'unknown'",
+    "project": "string",
+    "isOpen": "boolean",
+    "hasAssignee": "boolean",
+    "createdIso": "string",
+    "updatedIso": "string",
+    "labels": "string[]",
+    "url": "string"
+  },
+  "errorFields": {
+    "project": "string",
+    "message": "string"
+  },
+  "sample": {
+    "issues": [
+      {
+        "repo": "adbarc92/hexy",
+        "number": 1,
+        "title": "crash on launch",
+        "body": "opened the app and it closed immediately",
+        "kind": "crash",
+        "project": "hexy",
+        "isOpen": true,
+        "hasAssignee": false,
+        "createdIso": "2026-06-08T12:00:00Z",
+        "updatedIso": "2026-06-08T12:00:00Z",
+        "labels": ["telltale", "telltale:crash"],
+        "url": "https://github.com/adbarc92/hexy/issues/1"
+      }
+    ],
+    "errors": [
+      { "project": "lineage", "message": "config_error: no token for the org account" }
+    ]
+  }
+}
