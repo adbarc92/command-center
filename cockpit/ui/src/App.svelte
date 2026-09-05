@@ -9,7 +9,7 @@
   import Switcher, { type ViewEntry } from './lib/Switcher.svelte';
   import Dashboard from './views/Dashboard.svelte';
   import ApprovalOverlay, { type ApprovalRequest } from './lib/ApprovalOverlay.svelte';
-  import { tauriHalyardReader, tauriAudienceReader } from './lib/dashboard/api';
+  import { tauriHalyardReader, tauriAudienceReader, tauriFeedbackReader } from './lib/dashboard/api';
   import type { LocalReader, LocalProjectDoc } from './lib/dashboard/adapters/local';
   // PLUGIN RUNTIME (Lane S): the sandboxed view-plugin bridge (Lane V) + app-plugin
   // discovery (Lane A). The one topbar switcher unifies host views + both plugin kinds.
@@ -379,6 +379,7 @@
     <Dashboard
       halyardReader={tauriHalyardReader}
       audienceReader={tauriAudienceReader}
+      feedbackReader={tauriFeedbackReader}
       {localReader}
       fleetSnapshots={fleet.snapshots()}
       onFleetPhase={(cb) => fleet.onPhase(cb)}

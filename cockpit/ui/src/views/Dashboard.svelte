@@ -9,6 +9,7 @@
     newBoard,
     pollHalyard,
     pollAudience,
+    pollFeedback,
     pollLocal,
     seedFleet,
     applyFleetPhase,
@@ -21,6 +22,7 @@
   import type { ProjectCard, Stage } from '../lib/dashboard/model';
   import type { HalyardReader } from '../lib/dashboard/adapters/halyard';
   import type { AudienceReader } from '../lib/dashboard/adapters/audience';
+  import type { FeedbackReader } from '../lib/dashboard/adapters/feedback';
   import type { LocalReader } from '../lib/dashboard/adapters/local';
   import type { Snapshot, Phase } from '../lib/types';
   import type { PluginUnit } from '../lib/dashboard/adapters/appPlugin';
@@ -30,6 +32,7 @@
   interface Props {
     halyardReader?: HalyardReader;
     audienceReader?: AudienceReader;
+    feedbackReader?: FeedbackReader;
     localReader?: LocalReader;
     fleetSnapshots?: Snapshot[];
     /** Subscribe to fleet `phase_changed`; returns an unsubscribe. */
@@ -44,6 +47,7 @@
   let {
     halyardReader,
     audienceReader,
+    feedbackReader,
     localReader,
     fleetSnapshots = [],
     onFleetPhase,
@@ -72,6 +76,7 @@
     try {
       if (halyardReader) board = await pollHalyard(board, halyardReader, {}, () => new Date());
       if (audienceReader) board = await pollAudience(board, audienceReader, {}, () => new Date());
+      if (feedbackReader) board = await pollFeedback(board, feedbackReader, {}, () => new Date());
       if (localReader) board = await pollLocal(board, localReader);
     } finally {
       pulling = false;
@@ -129,6 +134,7 @@
     'app-plugin': 'APP',
     manual: 'MANUAL',
     local: 'LOCAL',
+    feedback: 'FEEDBACK',
   };
 
   // §8 #2: actions deep-link OUT. Tauri's opener handles custom + http schemes; in a
