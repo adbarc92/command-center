@@ -3,6 +3,7 @@ import {
   newBoard,
   pollHalyard,
   pollAudience,
+  pollFeedback,
   pollLocal,
   seedFleet,
   applyFleetPhase,
@@ -15,6 +16,7 @@ import {
 } from './store';
 import type { HalyardReader } from './adapters/halyard';
 import type { AudienceReader } from './adapters/audience';
+import type { FeedbackReader, TelltaleIssue } from './adapters/feedback';
 import type { LocalReader } from './adapters/local';
 import type { Snapshot } from '../types';
 
@@ -29,6 +31,18 @@ const audienceReader = (alive: boolean, posts: any[] = []): AudienceReader => ({
   health: async () => alive,
   posts: async () => posts,
 });
+const feedbackIssue = (over: Partial<TelltaleIssue> = {}): TelltaleIssue => ({
+  repo: 'adbarc92/hexy', number: 1, title: 'crash on launch', body: '',
+  kind: 'crash', project: 'hexy', isOpen: true, hasAssignee: false,
+  createdIso: '2026-06-08T12:00:00Z', updatedIso: '2026-06-08T12:00:00Z',
+  labels: ['telltale', 'telltale:crash'],
+  url: 'https://github.com/adbarc92/hexy/issues/1',
+  ...over,
+});
+const feedbackReader = (
+  issues: TelltaleIssue[] = [],
+  errors: Array<{ project: string; message: string }> = [],
+): FeedbackReader => ({ issues: async () => ({ issues, errors }) });
 
 describe('board composition', () => {
   it('composes cards from multiple sources, keyed by projectId', async () => {
@@ -178,3 +192,49 @@ function fleetCardStub(id: string, stage: any) {
     updatedIso: '2026-06-09T12:00:00Z', staleAfterSec: 120, health: 'ok' as const,
   };
 }
+
+// ── Intake lane (§6) ────────────────────────────────────────────────────────
+// The transport for this source landed after the adapter did, so these pin the
+// store seam specifically: that `pollFeedback` writes under the 'feedback'
+// source and that one bad repo cannot take the lane down with it.
+describe('feedback poll', () => {
+  it('writes cards under the feedback source', async () => {
+    let board = newBoard();
+    board = await pollFeedback(board, feedbackReader([feedbackIssue()]), {}, NOW);
+
+    const cards = cardList(board).filter((c) => c.source === 'feedback');
+    expect(cards.length).toBe(1);
+    expect(cards[0].projectId).toBe('feedback:hexy');
+  });
+
+  it('replaces only the feedback lane, leaving other sources standing', async () => {
+    let board = newBoard();
+    board = await pollHalyard(
+      board,
+      halyardReader([{ release_id: 'r1', app: 'aurora', surface: 'web', version: '4.2', state: 'live', flag: null, waiting_on: '' }]),
+      {},
+      NOW,
+    );
+    board = await pollFeedback(board, feedbackReader([feedbackIssue()]), {}, NOW);
+    // A second poll returning nothing must clear feedback and touch nothing else.
+    board = await pollFeedback(board, feedbackReader([]), {}, NOW);
+
+    expect(cardList(board).some((c) => c.source === 'halyard')).toBe(true);
+    expect(cardList(board).filter((c) => c.source === 'feedback').length).toBe(0);
+  });
+
+  it('§6.3 — a project that failed to answer does not blank the lane', async () => {
+    let board = newBoard();
+    board = await pollFeedback(
+      board,
+      feedbackReader([feedbackIssue({ project: 'hexy' })], [{ project: 'lineage', message: 'config_error: no token' }]),
+      {},
+      NOW,
+    );
+
+    // The healthy project still renders; the failure is surfaced, not swallowed.
+    const cards = cardList(board).filter((c) => c.source === 'feedback');
+    expect(cards.some((c) => c.projectId === 'feedback:hexy')).toBe(true);
+    expect(JSON.stringify(cards)).toContain('lineage');
+  });
+});

@@ -13,6 +13,11 @@
 //!  - HALYARD_CONFIG_DIR (default ".") — CWD for the spawn; Halyard resolves config
 //!    relative to CWD.
 //!  - AUDIENCE_API_URL (default "http://localhost:8080").
+//!  - TELLTALE_BASE_URL — the Worker origin, e.g.
+//!    "https://telltale.openbarclay.workers.dev". No default: unset means the
+//!    Intake lane is simply not configured, which is different from unreachable.
+//!  - TELLTALE_TOKEN — the operator read token (`OPERATOR_READ_TOKEN` on the
+//!    Worker). The desktop host holds it so it never reaches the webview.
 
 use serde_json::Value;
 use std::process::Command;
@@ -97,6 +102,47 @@ pub async fn audience_posts() -> Result<Value, String> {
         .map_err(|e| format!("audience /posts body was not JSON: {e}"))?;
 
     Ok(unwrap_posts(body))
+}
+
+fn telltale_base() -> Option<String> {
+    // No default. An unset base URL means "Intake is not configured on this
+    // machine", which the adapter must be able to tell apart from "configured but
+    // unreachable" — the second greys a lane, the first should not invent one.
+    std::env::var("TELLTALE_BASE_URL").ok().filter(|s| !s.trim().is_empty())
+}
+
+/// `GET {TELLTALE_BASE_URL}/v1/issues` → `{ issues, errors }` (spec §6.3), passed
+/// through to the feedback adapter unchanged.
+///
+/// The shape is pinned on both sides by the wire contract in
+/// `adapters/contracts/telltale-issues.contract.json`; this command deliberately
+/// does no reshaping, so there is exactly one place the payload is understood.
+///
+/// §6.3's per-repo `errors` array is why this returns the whole envelope rather
+/// than just the issues: one bad repo must not blank the entire feedback lane.
+#[tauri::command]
+pub async fn feedback_issues() -> Result<Value, String> {
+    let base = telltale_base().ok_or_else(|| "TELLTALE_BASE_URL is not set".to_string())?;
+    let token = std::env::var("TELLTALE_TOKEN")
+        .map_err(|_| "TELLTALE_TOKEN is not set".to_string())?;
+
+    let url = format!("{}/v1/issues", base.trim_end_matches('/'));
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("telltale /v1/issues request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        // Deliberately does not echo the body: a 401 from this endpoint is an
+        // operator-token problem, and the body is not worth risking in a log.
+        return Err(format!("telltale /v1/issues returned {}", resp.status()));
+    }
+
+    resp.json::<Value>()
+        .await
+        .map_err(|e| format!("telltale /v1/issues body was not JSON: {e}"))
 }
 
 /// Normalize the `/posts` body to a JSON array — tolerate a bare array or a common

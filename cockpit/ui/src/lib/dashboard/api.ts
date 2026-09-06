@@ -9,6 +9,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { HalyardReader, HalyardReleaseStatus, HalyardProposal } from './adapters/halyard';
 import type { AudienceReader, AudiencePost } from './adapters/audience';
+import type { FeedbackReader, FeedbackIssuesResponse } from './adapters/feedback';
 
 /** Reads Halyard by spawning the `halyard` CLI (Rust side parses stdout JSON). */
 export const tauriHalyardReader: HalyardReader = {
@@ -20,4 +21,11 @@ export const tauriHalyardReader: HalyardReader = {
 export const tauriAudienceReader: AudienceReader = {
   health: () => invoke<boolean>('audience_health'),
   posts: () => invoke<AudiencePost[]>('audience_posts'),
+};
+
+/** §6.3 — the whole `{ issues, errors }` envelope, not just the array. A repo that
+ *  failed to answer must reach the adapter; dropping `errors` would let one bad
+ *  repo silently blank the lane instead of flagging it. */
+export const tauriFeedbackReader: FeedbackReader = {
+  issues: () => invoke<FeedbackIssuesResponse>('feedback_issues'),
 };

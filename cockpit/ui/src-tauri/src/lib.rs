@@ -66,6 +66,7 @@ pub fn run() {
             dashboard::halyard_queue,
             dashboard::audience_health,
             dashboard::audience_posts,
+            dashboard::feedback_issues,
             local_projects::scan_local_projects,
         ])
         .setup(|app| {
