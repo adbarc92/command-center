@@ -14,6 +14,10 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 dotenvy = { workspace = true }
 rusqlite = { workspace = true }
+# CORS. The one crate this adds to the graph (`tower` 0.5.3 is already resolved via
+# axum). Hand-rolling the headers is where `Vary: Origin` cache-poisoning bugs live,
+# and preflight is fiddly enough to be worth a maintained implementation.
+tower-http = { version = "0.6", features = ["cors"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
@@ -21,3 +25,6 @@ tokio = { version = "1", features = ["test-util"] }
 # already resolves, so no new crates enter the lock graph).
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+# `ServiceExt::oneshot` for router-level request tests. Already in the lock graph
+# via axum, so this adds no new crate.
+tower = { version = "0.5", features = ["util"] }
