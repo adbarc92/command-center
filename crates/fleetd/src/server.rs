@@ -29,11 +29,12 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
     },
-    http::StatusCode,
+    http::{header, HeaderValue, Method, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use fleet_core::{Command, Event, GateConfig, Phase, Tier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -138,6 +139,53 @@ impl Default for AppState {
     }
 }
 
+/// Origins permitted to call the daemon from a browser context.
+///
+/// **Deliberately an allowlist, never `Any`.** fleetd binds loopback but exposes
+/// command endpoints (`POST /missions`, `POST /units/:id/commands`); with a
+/// permissive origin, any page the operator happened to visit could drive the
+/// daemon, because "localhost" is reachable from every website in the browser.
+/// The bind address is not a security boundary against a browser.
+///
+/// Defaults cover the Tauri webview (whose origin differs by platform) and the
+/// Vite dev server. `FLEETD_ALLOWED_ORIGINS` overrides with a comma-separated
+/// list, for a cockpit served from somewhere else.
+fn allowed_origins() -> Vec<HeaderValue> {
+    const DEFAULTS: &[&str] = &[
+        "tauri://localhost",      // Tauri v2, macOS/Linux
+        "http://tauri.localhost", // Tauri v2, Windows
+        "http://localhost:5173",  // Vite dev
+        "http://127.0.0.1:5173",
+    ];
+
+    match std::env::var("FLEETD_ALLOWED_ORIGINS") {
+        Ok(raw) if !raw.trim().is_empty() => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|o| !o.is_empty())
+            .filter_map(|o| HeaderValue::from_str(o).ok())
+            .collect(),
+        _ => DEFAULTS
+            .iter()
+            .filter_map(|o| HeaderValue::from_str(o).ok())
+            .collect(),
+    }
+}
+
+/// D-3. Without this every browser `fetch` from the cockpit fails and the FLEET
+/// ops grid is empty — `store.reconnect()` calls `listUnits()` over HTTP before
+/// opening any stream, so a missing CORS layer blocks discovery entirely rather
+/// than degrading it.
+///
+/// Credentials are NOT allowed: the daemon has no cookie or Authorization auth,
+/// so enabling them would only widen what a permitted origin can do.
+fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(allowed_origins()))
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE])
+}
+
 /// Build the router.
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -151,6 +199,7 @@ pub fn router(state: AppState) -> Router {
         .route("/swarms", post(create_swarm).get(list_swarms))
         .route("/swarms/:id", get(get_swarm))
         .with_state(state)
+        .layer(cors_layer())
 }
 
 #[derive(Deserialize)]
@@ -2221,6 +2270,97 @@ mod tests {
         assert!(
             lanes.iter().all(|l| l.unit_id.is_none()),
             "nothing launched"
+        );
+    }
+
+    // ── D-3 · CORS ──────────────────────────────────────────────────────────
+    // Without these headers the cockpit cannot reach the daemon at all: the FLEET
+    // ops grid calls `listUnits()` over HTTP before opening any stream, so a
+    // missing layer blocks discovery rather than degrading it. The negative case
+    // matters as much as the positive one — fleetd takes commands on loopback,
+    // and loopback is reachable from every website in the browser.
+
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt; // `oneshot`
+
+    const ALLOWED: &str = "http://localhost:5173";
+    const HOSTILE: &str = "https://evil.example";
+
+    #[tokio::test]
+    async fn preflight_on_a_command_route_is_answered_not_405() {
+        // The measured D-3 symptom was `OPTIONS /missions` → 405.
+        let res = router(AppState::default())
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/missions")
+                    .header("origin", ALLOWED)
+                    .header("access-control-request-method", "POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            res.status().is_success(),
+            "preflight must be answered, got {}",
+            res.status()
+        );
+        assert_eq!(
+            res.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .map(|v| v.to_str().unwrap()),
+            Some(ALLOWED),
+        );
+        let methods = res
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default();
+        assert!(methods.contains("POST"), "POST must be allowed, got {methods:?}");
+    }
+
+    #[tokio::test]
+    async fn an_allowed_origin_gets_the_header_on_a_real_response() {
+        let res = router(AppState::default())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("origin", ALLOWED)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            res.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .map(|v| v.to_str().unwrap()),
+            Some(ALLOWED),
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_origin_gets_no_allow_origin_header() {
+        // The check that makes the allowlist mean something. If this ever passes a
+        // header back, any page the operator visits can POST /missions.
+        let res = router(AppState::default())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("origin", HOSTILE)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            res.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(),
+            "an unlisted origin must not be granted access",
         );
     }
 }
