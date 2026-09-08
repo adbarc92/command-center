@@ -12,11 +12,37 @@ import { resolveStage, applyOverride } from '../stage';
 export const AUDIENCE_SOURCE: Source = 'audience';
 
 /** One element of `GET /posts` (the fields the dashboard reads). */
+/**
+ * §6.2's status vocabulary, taken from Audience's own generated contract
+ * (`packages/contracts/src/generated/enums.ts`, `PostStatusSchema`) and pinned in
+ * `contracts/audience-post-status.contract.json`.
+ *
+ * ⚠ The spec's original list — `draft → generating → approval-pending → published`
+ * plus `rejected`/`failed` — was derived from a written digest rather than from the
+ * schema, and three of those six strings Audience never emits. The adapter
+ * implemented the spec faithfully and was therefore wrong: `awaiting_approval`,
+ * the approve-before-post gate, fell through to `default` and never blocked.
+ */
+export type AudiencePostStatus =
+  | 'draft'
+  | 'generating'
+  | 'ready_for_review'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'publishing'
+  | 'fully_published'
+  | 'partially_published'
+  | 'failed';
+
+/** One item of `GET /posts`'s `{ items: [...] }` envelope, as the API returns it. */
 export interface AudiencePost {
   id: string;
-  status: string; // draft | generating | approval-pending | published | rejected | failed
+  /** Widened to `string` on purpose: the wire can carry a status this build has not
+   *  heard of, and `pipelineFor` must classify it rather than crash. */
+  status: string;
   text?: string;
-  platforms?: string[];
+  createdAt?: string;
+  updatedAt?: string | null;
 }
 
 export interface AudienceReader {
@@ -26,27 +52,48 @@ export interface AudienceReader {
 }
 
 // §6.2 mapping table — Audience native post status → canonical pipeline stage.
-function pipelineFor(status: string): {
+type Classification = {
   stage: 'Spec' | 'Build' | 'Live' | 'Archived' | null;
   gate: boolean;
   terminal: boolean;
-} {
-  switch (status) {
-    case 'draft':
-      return { stage: 'Spec', gate: false, terminal: false };
-    case 'generating':
-      return { stage: 'Build', gate: false, terminal: false };
-    case 'approval-pending':
-      return { stage: null, gate: true, terminal: false }; // → Blocked
-    case 'published':
-      return { stage: 'Live', gate: false, terminal: false };
-    case 'rejected':
-      return { stage: 'Archived', gate: false, terminal: false };
-    case 'failed':
-      return { stage: null, gate: false, terminal: true }; // → Failed
-    default:
-      return { stage: null, gate: false, terminal: false };
-  }
+};
+
+/**
+ * Exhaustive by construction: `Record<AudiencePostStatus, …>` fails to compile if
+ * Audience adds a status and this table does not grow with it. That is the whole
+ * point — the previous `switch` had a silent `default`, so five of Audience's nine
+ * statuses classified as "nothing" and no test noticed.
+ */
+const CLASSIFY: Record<AudiencePostStatus, Classification> = {
+  // Straight from the spec's mapping table.
+  draft: { stage: 'Spec', gate: false, terminal: false },
+  generating: { stage: 'Build', gate: false, terminal: false },
+  fully_published: { stage: 'Live', gate: false, terminal: false },
+  failed: { stage: null, gate: false, terminal: true },
+
+  // The spec's "approve-before-post human gate", under its real name.
+  awaiting_approval: { stage: null, gate: true, terminal: false },
+
+  // In flight, no human owed anything.
+  approved: { stage: 'Build', gate: false, terminal: false },
+  publishing: { stage: 'Build', gate: false, terminal: false },
+
+  // ⚠ Two product judgments the spec never contemplated, called out rather than
+  // buried. Both are gated on the principle that the board exists to surface what
+  // needs a person; change them here if the intent differs.
+  //   ready_for_review   — a human must look before it can advance to approval.
+  //   partially_published — some targets published and some did not; someone has to
+  //                         decide about the rest, and `failed` (terminal) is wrong
+  //                         because part of it did ship.
+  ready_for_review: { stage: null, gate: true, terminal: false },
+  partially_published: { stage: null, gate: true, terminal: false },
+};
+
+function pipelineFor(status: string): Classification {
+  // An unknown status is classified as nothing rather than guessed at — the same
+  // posture as the old `default`, but now reachable only by a status genuinely
+  // absent from the pinned contract, not by five of the nine real ones.
+  return CLASSIFY[status as AudiencePostStatus] ?? { stage: null, gate: false, terminal: false };
 }
 
 export interface AudienceAdapterOpts {
@@ -112,7 +159,12 @@ export async function audienceCards(
 
   // Rollup policy: if per-post granularity would swamp the board, emit one card.
   if (posts.length > rollupThreshold) {
-    const awaiting = posts.filter((p) => p.status === 'approval-pending').length;
+    // Derived from the same classification the per-post path uses, never from a
+    // literal. This line previously hardcoded 'approval-pending' independently of
+    // `pipelineFor`, so it would have kept reporting 0 even after the mapping was
+    // corrected — and the rollup is precisely the high-volume case an operator
+    // relies on, where a missed gate hides the most work.
+    const awaiting = posts.filter((p) => pipelineFor(p.status).gate).length;
     const blocked: BlockedInfo | null =
       awaiting > 0
         ? { gate: 'approval', action: `Approve ${awaiting} post${awaiting > 1 ? 's' : ''}`, deepLink: 'audience:///queue' }
@@ -152,7 +204,7 @@ export async function audienceCards(
       source: AUDIENCE_SOURCE,
       name: p.text ? p.text.slice(0, 48) : `post ${p.id}`,
       stage,
-      detail: stage === 'Blocked' || override ? `${p.status} · ${(p.platforms ?? []).join(', ')}` : p.status,
+      detail: p.status,
       blocked,
       stageSource,
       override,
