@@ -1328,6 +1328,31 @@ mod tests {
         assert_eq!(parse_blockers(&["nothing here".into()]), 0);
     }
 
+    #[test]
+    fn parse_blockers_treats_an_absent_marker_as_clean() {
+        // ⚠ KNOWN GAP, asserted so it is a decision rather than a surprise.
+        //
+        // An absent marker is indistinguishable from a clean review, so a reviewer
+        // that crashed, ran out of budget mid-sentence, or simply wrote prose scores
+        // ZERO blockers and satisfies the review gate. That is stronger than allowing
+        // the turn: it actively passes it.
+        //
+        // Under DOCTRINE I1 as amended 2026-09-03 these are two different failures -
+        // a check that ran and found nothing versus a check that could not report -
+        // and they must not share an outcome. Fixing it means returning Option<u32>
+        // and routing None to NeedsHuman, which is a state-machine change and so is
+        // deliberately NOT bundled with the W2 prompt transplant.
+        //
+        // The prompt half of the mitigation is in place: `steps::review` now demands
+        // the line be emitted even when N is 0, pinned by
+        // `steps::tests::the_review_prompt_states_the_parse_contract_the_driver_relies_on`.
+        assert_eq!(
+            parse_blockers(&["the model wrote an essay and stopped".into()]),
+            0
+        );
+        assert_eq!(parse_blockers(&[]), 0);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn rate_limited_step_retries_then_succeeds() {
         // Oracle rate-limits once (signal on stderr), then succeeds; floor-1 cycle.
