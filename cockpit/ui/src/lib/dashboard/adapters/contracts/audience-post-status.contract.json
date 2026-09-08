@@ -1,0 +1,25 @@
+{
+  "contract": "audience GET /v1/posts — post status vocabulary",
+  "version": 1,
+  "producer": "audience · packages/contracts/src/generated/enums.ts · PostStatusSchema",
+  "consumer": "command-center · cockpit/ui/src/lib/dashboard/adapters/audience.ts · pipelineFor",
+  "note": "Generated on the producer side from its schema. Copied here verbatim; the order is the producer's.",
+  "statuses": [
+    "draft",
+    "generating",
+    "ready_for_review",
+    "awaiting_approval",
+    "approved",
+    "publishing",
+    "fully_published",
+    "partially_published",
+    "failed"
+  ],
+  "itemFields": {
+    "id": "string",
+    "status": "PostStatus",
+    "text": "string",
+    "createdAt": "string (iso)",
+    "updatedAt": "string (iso) | null"
+  }
+}

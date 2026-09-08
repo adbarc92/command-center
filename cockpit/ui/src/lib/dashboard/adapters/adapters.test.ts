@@ -85,12 +85,21 @@ describe('audience adapter', () => {
     return { health: async () => alive, posts: async () => posts };
   }
 
-  it('maps post status onto canonical stages', async () => {
+  // Every status below is one Audience actually emits, taken from its generated
+  // PostStatusSchema and pinned in audience.contract.test.ts. The previous version of
+  // this block asserted on 'published', 'rejected' and 'approval-pending' — three
+  // strings Audience has never emitted — so it was green against an invention.
+  it('maps every real post status onto a canonical stage', async () => {
     const cases: Array<[string, string]> = [
       ['draft', 'Spec'],
       ['generating', 'Build'],
-      ['published', 'Live'],
-      ['rejected', 'Archived'],
+      ['ready_for_review', 'Blocked'],
+      ['awaiting_approval', 'Blocked'],
+      ['approved', 'Build'],
+      ['publishing', 'Build'],
+      ['fully_published', 'Live'],
+      ['partially_published', 'Blocked'],
+      ['failed', 'Failed'],
     ];
     for (const [status, expected] of cases) {
       const cards = await audienceCards(reader(true, [{ id: '1', status }]), { now: NOW });
@@ -98,10 +107,19 @@ describe('audience adapter', () => {
     }
   });
 
-  it('approval-pending → Blocked (approval gate)', async () => {
-    const cards = await audienceCards(reader(true, [{ id: '1', status: 'approval-pending', platforms: ['x'] }]), { now: NOW });
+  it('awaiting_approval → Blocked (the approve-before-post gate)', async () => {
+    // The defect this replaces: Audience emits `awaiting_approval`, the adapter
+    // looked for `approval-pending`, so the one gate that must stop for a human
+    // fell through to `default` and never fired.
+    const cards = await audienceCards(reader(true, [{ id: '1', status: 'awaiting_approval' }]), { now: NOW });
     expect(cards[0].stage).toBe('Blocked');
     expect(cards[0].blocked?.gate).toBe('approval');
+  });
+
+  it('a status absent from the contract classifies as nothing, and does not throw', async () => {
+    const cards = await audienceCards(reader(true, [{ id: '1', status: 'a_status_from_the_future' }]), { now: NOW });
+    expect(cards[0].stage).not.toBe('Blocked');
+    expect(cards[0].stage).not.toBe('Live');
   });
 
   it('failed → Failed', async () => {
@@ -117,7 +135,7 @@ describe('audience adapter', () => {
   });
 
   it('rolls up past the threshold into one card', async () => {
-    const posts = Array.from({ length: 12 }, (_, i) => ({ id: `${i}`, status: i < 3 ? 'approval-pending' : 'published' }));
+    const posts = Array.from({ length: 12 }, (_, i) => ({ id: `${i}`, status: i < 3 ? 'awaiting_approval' : 'fully_published' }));
     const cards = await audienceCards(reader(true, posts), { now: NOW, rollupThreshold: 8 });
     expect(cards).toHaveLength(1);
     expect(cards[0].stage).toBe('Blocked');

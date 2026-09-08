@@ -254,9 +254,20 @@ written against a small interface so the two read paths are swappable without to
 
 ### 6.2 Audience adapter — post-run + backend status
 
-**Native vocabulary** (from the Audience digest): post status
-(`draft → generating → approval-pending → published`, plus `rejected`/`failed`) read via
-`GET /posts` / `GET /posts/:id`; plus **backend liveness** via `GET /health` (`:8080`).
+> **⚠ Corrected 2026-09-08 — the vocabulary below was wrong, and the adapter was wrong because it
+> was faithful to it.** It was taken *"from the Audience digest"* — a prose summary — rather than
+> from Audience's own generated `PostStatusSchema`. Three of the six strings
+> (`approval-pending`, `published`, `rejected`) are ones Audience has **never** emitted, and five of
+> its nine real statuses had no row at all. The practical cost: `awaiting_approval` — this table's
+> own approve-before-post gate — fell through to `default` and **never blocked**, on the per-post
+> path and again in the rollup, which counted the fictional string independently. Pinned now in
+> `adapters/contracts/audience-post-status.contract.json`.
+
+**Native vocabulary** (from `audience/packages/contracts/src/generated/enums.ts`, `PostStatusSchema`):
+post status is one of `draft`, `generating`, `ready_for_review`, `awaiting_approval`, `approved`,
+`publishing`, `fully_published`, `partially_published`, `failed` — read via `GET /posts` (which
+returns an `{ items: [...] }` envelope of `{id, status, text, createdAt, updatedAt}`; note it carries
+**no** `platforms` field) / `GET /posts/:id`; plus **backend liveness** via `GET /health` (`:8080`).
 
 **Mapping to canonical stage:**
 
@@ -265,10 +276,17 @@ written against a small interface so the two read paths are swappable without to
 | backend `/health` down | Idle + `health: "unknown"` | stack not running ⇒ no live project state |
 | `draft` | Spec | composed, not yet generating |
 | `generating` | Build | AI generation in flight |
-| `approval-pending` | **Blocked** (`gate: "approval"`, deep-link `/queue`) | the approve-before-post human gate |
-| `published` | Live | posted to platforms |
-| `rejected` | Archived | (`detail: "rejected"`) |
+| `ready_for_review` | **Blocked** (`gate: "approval"`) | ⚠ *judgment, 2026-09-08* — a human must look before it can advance. The board exists to surface what needs a person |
+| `awaiting_approval` | **Blocked** (`gate: "approval"`, deep-link `/queue`) | the approve-before-post human gate — this row's original intent, under its real name |
+| `approved` | Build | cleared the gate, publish pending; nobody is owed anything |
+| `publishing` | Build | in flight to the platforms |
+| `fully_published` | Live | posted to every target |
+| `partially_published` | **Blocked** (`gate: "approval"`) | ⚠ *judgment, 2026-09-08* — some targets shipped and some did not; `failed` is wrong because part of it is live, and someone must decide about the rest |
 | `failed` | Failed | terminal publish failure |
+
+*The two rows marked ⚠ are product decisions this spec never contemplated, recorded rather than
+buried. Both are gated on the principle that the board surfaces what needs a person; change them in
+`CLASSIFY` if the intent differs.*
 
 Audience contributes **its own status** (per `§4` of the roadmap) — one `ProjectCard` per active
 post run, or a single rolled-up card "Audience: N awaiting approval" if per-post granularity is too
