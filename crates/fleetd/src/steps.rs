@@ -138,8 +138,7 @@ pub fn review(remaining_usd: f64, wall_secs: u64) -> Vec<String> {
     // W5 caveat, unfixable from inside this prompt: the reviewer is the same model in
     // the same container as the writer. Asking it to be adversarial is not the same as
     // it being independent.
-    let prompt = 
-        "# Review\n\
+    let prompt = "# Review\n\
          \n\
          Review the current working-tree diff against the base branch. You did not \
          write it; do not defend it.\n\
@@ -167,7 +166,7 @@ pub fn review(remaining_usd: f64, wall_secs: u64) -> Vec<String> {
          \n\
          where N is the count of must-fix issues, 0 if none. This line is parsed by \
          machine. Emit it even when N is 0, and emit it last."
-            .to_string();
+        .to_string();
     claude_argv(prompt, remaining_usd, wall_secs)
 }
 
@@ -224,7 +223,10 @@ mod tests {
     fn the_oracle_is_told_not_to_implement_and_to_fail_first() {
         let p = prompt_of(&oracle(&spec(), 1.0));
         assert!(p.contains("do NOT implement") || p.contains("You do NOT implement"));
-        assert!(p.contains("MUST fail"), "a test that already passes defines nothing");
+        assert!(
+            p.contains("MUST fail"),
+            "a test that already passes defines nothing"
+        );
         assert!(p.contains("add sum(a,b)"), "the task must reach the agent");
     }
 
@@ -242,7 +244,11 @@ mod tests {
     fn the_builder_is_given_the_outstanding_findings() {
         // Review findings that never reach the next build round make the review loop
         // decorative - it would re-raise the same blockers forever.
-        let p = prompt_of(&build(&spec(), "CRITICAL src/x.js:12 - unchecked null", 1.0));
+        let p = prompt_of(&build(
+            &spec(),
+            "CRITICAL src/x.js:12 - unchecked null",
+            1.0,
+        ));
         assert!(p.contains("CRITICAL src/x.js:12 - unchecked null"));
     }
 
@@ -255,7 +261,10 @@ mod tests {
         assert!(p.contains("BLOCKERS=N"));
         assert!(p.contains("Emit it even when N is 0"));
         for criterion in ["Security", "Correctness", "Scope", "Quality"] {
-            assert!(p.contains(criterion), "missing review criterion {criterion}");
+            assert!(
+                p.contains(criterion),
+                "missing review criterion {criterion}"
+            );
         }
     }
 

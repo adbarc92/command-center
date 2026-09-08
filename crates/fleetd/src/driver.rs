@@ -1346,7 +1346,10 @@ mod tests {
         // The prompt half of the mitigation is in place: `steps::review` now demands
         // the line be emitted even when N is 0, pinned by
         // `steps::tests::the_review_prompt_states_the_parse_contract_the_driver_relies_on`.
-        assert_eq!(parse_blockers(&["the model wrote an essay and stopped".into()]), 0);
+        assert_eq!(
+            parse_blockers(&["the model wrote an essay and stopped".into()]),
+            0
+        );
         assert_eq!(parse_blockers(&[]), 0);
     }
 
