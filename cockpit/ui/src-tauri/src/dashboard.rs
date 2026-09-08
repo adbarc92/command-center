@@ -108,7 +108,9 @@ fn telltale_base() -> Option<String> {
     // No default. An unset base URL means "Intake is not configured on this
     // machine", which the adapter must be able to tell apart from "configured but
     // unreachable" — the second greys a lane, the first should not invent one.
-    std::env::var("TELLTALE_BASE_URL").ok().filter(|s| !s.trim().is_empty())
+    std::env::var("TELLTALE_BASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
 /// `GET {TELLTALE_BASE_URL}/v1/issues` → `{ issues, errors }` (spec §6.3), passed
@@ -123,8 +125,8 @@ fn telltale_base() -> Option<String> {
 #[tauri::command]
 pub async fn feedback_issues() -> Result<Value, String> {
     let base = telltale_base().ok_or_else(|| "TELLTALE_BASE_URL is not set".to_string())?;
-    let token = std::env::var("TELLTALE_TOKEN")
-        .map_err(|_| "TELLTALE_TOKEN is not set".to_string())?;
+    let token =
+        std::env::var("TELLTALE_TOKEN").map_err(|_| "TELLTALE_TOKEN is not set".to_string())?;
 
     let url = format!("{}/v1/issues", base.trim_end_matches('/'));
     let resp = reqwest::Client::new()

@@ -34,7 +34,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use tower_http::cors::{AllowOrigin, CorsLayer};
 use fleet_core::{Command, Event, GateConfig, Phase, Tier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -44,6 +43,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, mpsc, Semaphore};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -2319,7 +2319,10 @@ mod tests {
             .get(header::ACCESS_CONTROL_ALLOW_METHODS)
             .map(|v| v.to_str().unwrap().to_string())
             .unwrap_or_default();
-        assert!(methods.contains("POST"), "POST must be allowed, got {methods:?}");
+        assert!(
+            methods.contains("POST"),
+            "POST must be allowed, got {methods:?}"
+        );
     }
 
     #[tokio::test]
@@ -2359,7 +2362,9 @@ mod tests {
             .unwrap();
 
         assert!(
-            res.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(),
+            res.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none(),
             "an unlisted origin must not be granted access",
         );
     }
