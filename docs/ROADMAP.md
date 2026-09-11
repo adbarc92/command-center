@@ -3,7 +3,11 @@
 > Cross-cutting roadmap for the Command Center. App-plugins-specific roadmap items live in
 > [`docs/superpowers/specs/2026-06-07-app-plugins-design.md` §5](superpowers/specs/2026-06-07-app-plugins-design.md);
 > this file holds the broader product + workflow backlog.
-> Last updated: **2026-07-16** (work-audit reconcile: #36 Local-Tracker Phase 1 shipped; hardening
+> Last updated: **2026-09-11** (work-audit reconcile: **P3 and P4 are resolved and the embedding work
+> shipped in #49**, merged 2026-08-16; the Telltale `feedback` adapter shipped (#65–#67); **D-3 fixed**
+> by #68 so the cockpit can reach fleetd; the CI-billing note below is moot — the repo went public
+> 2026-07-25 and Actions is free for public repos).
+> 2026-07-16 (work-audit reconcile: #36 Local-Tracker Phase 1 shipped; hardening
 > backlog H1–H4 all merged; vision sharpened to "one-stop shop for agentic engineering"; Remote
 > Control added as a future pillar; auth-foundation-first build order locked).
 > 2026-06-25: H1–H3 shipped (PR #31), H4 (PR #34). 2026-06-11: items 1, 4, 5 shipped; 2, 3, 6 partial.
@@ -34,22 +38,23 @@ goal.** Use it to accept or reject roadmap items. Every item below is an express
 1. **Local-Tracker Phase 2 dispatch** — the keystone that turns the board from a *viewer* into a
    *command surface*. Its daemon-wide loopback-auth migration (tracker spec §7.4) is **also the exact
    security foundation Remote Control needs** — build it once, here.
-2. **Resolve P4 → dispatch the app-plugin + view-plugin embedding swarms** — hosts the other tools
-   inside the shell (the "no alt-tabbing" promise).
+2. ✅ **SHIPPED — the app-plugin + view-plugin embedding work landed in #49** (merged 2026-08-16,
+   `e2fc3ce`), hosting the other tools inside the shell (the "no alt-tabbing" promise).
 3. **Design overhaul** — make the one-stop shop pleasant to live in (blocked on Claude Design output).
 4. **Remote Control** — its own brainstorm→spec, *after* Phase-2 auth lands (rides on it).
 
 Legend — **Status:** 💡 idea · 🛠️ in progress · 🔗 blocked on a dependency · ✅ shipped.
 **Lane:** `workflow` (how the agent operates — hooks/skills/harness) · `product` (Command Center app code).
 
-> **In flight (current build, not a roadmap item):** **app-plugins** — host whole web apps
-> (proving app: Audience) in the cockpit. Phases 2–5.1 done (backend lifecycle complete: 17 Rust +
-> 2 JS tests green, clippy clean); gated on a hands-on Phase-0 webview spike before the embedding
-> phases. **P3 status (2026-07-16):** the `spike_show` hang is fixed (async commands, off-main-thread
-> webview creation) and the hide/show finding is captured in the spec — **effectively done, pending
-> only the go/no-go writeup in `SPIKE-RESULTS.md`.** See [the spec](superpowers/specs/2026-06-07-app-plugins-design.md) and
+> **✅ SHIPPED (2026-08-16) — app-plugins + view-plugins are in the shell.** #49 unified both into the
+> cockpit plugin runtime. The interactive smoke ran to completion (run 3, packaged) at
+> **9 PASS / 2 BLOCKED / 2 NOT RUN / 0 FAIL**, closing five defects — including **D-8**, where the
+> packaged bundle shipped **no plugin root at all**, so no shipped build could have loaded a
+> view-plugin, and **D-2**, where every plugin was granted every capability (now fails closed).
+> See [the spec](superpowers/specs/2026-06-07-app-plugins-design.md) and
 > [plan](superpowers/plans/2026-06-07-app-plugins.md). Its own roadmap items (third-party isolation,
-> production auth, host↔app bridge, secrets, external-nav hardening) live in the spec's §5.
+> production auth, host↔app bridge, secrets, external-nav hardening) live in the spec's §5, and
+> **#61** tracks the loading model (blank tabs with no loading or failure affordance).
 
 ---
 
@@ -62,21 +67,22 @@ out-of-repo procurement. Everything downstream of them is already built or dispa
 
 | # | Item | Why only you | Unblocks |
 |---|---|---|---|
-| **P3** | **App-plugin webview spike — write up the verdict.** Hang fixed + hide/show finding captured (see In-flight note); the spike is *effectively done* — just needs the go/no-go recorded to `spikes/SPIKE-RESULTS-app-plugins.md` so the embedding swarm is formally unblocked. | Interactive/visual judgment already done; only the writeup remains. | **App-plugin embedding** feature swarm (`app-plugins-design.md` §6). |
-| **P4** | **View-plugin handshake spike — one debugging session from a verdict.** First watched run: **all 100 rounds dropped** (systematic, not a race). Leading hypothesis (documented, unverified): module scripts fetched CORS-mode → `sdk.js` never runs → no `plugin-hello`. Cheap fix identified (`Access-Control-Allow-Origin: *` on the scheme handler). **Re-run watched `tauri dev`, confirm the fix, record 100/100.** | Needs a watched run across dev + packaged builds. | **View-plugin runtime** swarm (+ the `feat/view-plugins` de-stale pre-step). |
+| ~~**P3**~~ | ✅ **RESOLVED — shipped in #49** (merged 2026-08-16). The app-plugin webview spike is closed and the embedding work is on `main`. | — | Done; nothing is gated on it. |
+| ~~**P4**~~ | ✅ **RESOLVED — shipped in #49.** The view-plugin runtime is on `main`, and the packaged smoke (run 3) exercised it end to end. The dropped-handshake hypothesis was superseded by the real defects found and fixed: **D-7** (view-plugins received no state — `DataCloneError` posting Svelte `$state` proxies) and **D-8** (no plugin root in the bundle). | — | Done; nothing is gated on it. |
 | **S3** | **One live paid T1 mission.** Set `ANTHROPIC_API_KEY`; dispatch a real T1 mission oracle→build→review→PR on a throwaway repo, human-watched. | Real credential + real token spend + live observation. The last unproven slice of the SP1 spine. | Confidence in the end-to-end spine on real tokens. |
 | **Certs** | **Code-signing certs.** Apple Developer ID ($99/yr + notarization) + Windows Authenticode. Wiring + exact secret names already done — see [`docs/release/signing-and-updates.md`](release/signing-and-updates.md) §4; `release.yml` consumes them by name. | Procurement (CA / Apple Developer Program) — out of repo. | The **signed cross-platform release run** (CI is otherwise ready). |
 
 **Status of the rest:** human-authority overlays (PR #22) + packaging/release hardening (PR #23)
-shipped; **Project Dashboard + Local-Tracker Phase 1 shipped (PR #36, 2026-07-12).** Once P3/P4 each
-record a "go", the two **blocked feature swarms** (app-plugin embedding, view-plugin runtime) are
-dispatch-ready. Per the locked build order, **Local-Tracker Phase 2 dispatch is the next build** (it
-also lays the Remote-Control auth foundation). Remaining to **shippable** = certs + one signed release
-run + one live paid T1 mission (S3).
+shipped; **Project Dashboard + Local-Tracker Phase 1 shipped (PR #36, 2026-07-12)**; **both embedding
+swarms shipped (#49, 2026-08-16)** — P3/P4 are closed, so nothing is dispatch-blocked any more. The
+Telltale `feedback` adapter shipped (#65–#67) and **D-3 is fixed** (#68), so the cockpit can reach
+fleetd. Per the locked build order, **Local-Tracker Phase 2 dispatch is the next build** (it also lays
+the Remote-Control auth foundation). Remaining to **shippable** = certs + one signed release run + one
+live paid T1 mission (S3).
 
-> **Note (verify):** CI runner allocation was blocked by a GitHub Actions billing failure. #36 merged
-> 2026-07-12, which *suggests* billing may now be resolved — confirm with a fresh `gh run` before
-> relying on green CI.
+> **Resolved 2026-07-25 — CI billing is moot.** The repo went public, and Actions is free for public
+> repos. CI has run on every PR since; it now runs nine checks, though **only `cargo test (workspace)`
+> is *required***, which is how three PRs merged past a red `fmt + clippy` gate in September.
 
 ---
 

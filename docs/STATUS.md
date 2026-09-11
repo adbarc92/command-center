@@ -1,7 +1,7 @@
 ---
 stage: Build
 readiness: "control plane publication-ready; product shell on roadmap"
-updated: "2026-08-30"
+updated: "2026-09-11"
 name: "Command Center"
 base_branch: "main"
 test_cmd: "cargo test --workspace"
@@ -36,6 +36,18 @@ the fixes that followed, closed **five** defects: **D-7** (view-plugins received
 Across both runs, **`db74a47` is CONFIRMED twice** — 1,127 samples in dev and 632 in packaged, zero
 unresponsive in either.
 
+**September 2026 — the Telltale integration shipped and D-3 is fixed.** Seven PRs landed between
+08-31 and 09-08. The `feedback` source adapter is **no longer unstarted**: #65 landed the adapter and
+its read seam, #66 pinned the wire contract consumer-side, and #67 wired the `feedback_issues` Tauri
+command — without which the adapter had nothing to read at runtime. **#68 fixed D-3**: fleetd serves a
+CORS allowlist (deliberately never `Any` — the daemon binds loopback but takes commands, and loopback
+is reachable from every website the operator's browser visits). **#69** corrected the Announce lane,
+which switched on a status vocabulary Audience has never emitted — `awaiting_approval`, the
+approve-before-post gate, classified as nothing and **silently never blocked**. **#70** transplanted
+reqdrive's prompt discipline into the engine (W2) and recorded that W2's story-shaped half depends on
+W6, a dependency the convergence plan never stated. **#71** ran rustfmt after the fmt gate had been red
+since #67.
+
 **✅ Telltale has moved OUT of this repo (2026-08-30) — the pivot is complete.** A feedback pipeline
 — authenticated bug reports deduplicated into GitHub issues — was built as a `telltale/`
 subdirectory here (PR #64, 82 tests, fully reviewed). That was the wrong repository. It now lives at
@@ -52,22 +64,30 @@ recording six defects in its own reference code, all fixed in `src/`.
 merged.** Extraction detail and the six defects are in
 [`docs/handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md`](handoffs/31f0a85d-8bcc-4d27-a849-e9e950749558.md).
 
-**What remains here is the integration only, and it is NOT started:** a `feedback` source adapter
-for the Project Dashboard reading Telltale's `GET /v1/issues` (design spec §6 in the Telltale repo).
-Its change surface is eight files across `cockpit/ui`. Three things that spec settles and are easy
-to get wrong: cards are **`Idle`, never `Build`** (`sortedCards` ranks `Build` above `Live`, so one
-old bug would outrank a live production project); **`Blocked` only for an open `telltale:crash`
-issue with no assignee** (`blockedCount` is the board's "NEEDS YOU" headline — a condition that
-never clears poisons it); and **`family` is inert** — written by three adapters, read by nothing.
-A command-center-side adapter spec gets written when P3 begins, rather than maintained in two
-places while the work is unstarted.
+**The integration is BUILT (2026-09-06).** The `feedback` source adapter reads Telltale's
+`GET /v1/issues` through the `feedback_issues` Tauri command (#65 → #66 → #67). All three traps the
+spec settles were honoured: cards are **`Idle`, never `Build`** (`sortedCards` ranks `Build` above
+`Live`, so one old bug would outrank a live production project); **`Blocked` only for an open
+`telltale:crash` issue with no assignee** (`blockedCount` is the board's "NEEDS YOU" headline — a
+condition that never clears poisons it); and **`family` remains inert** — written by three adapters,
+read by nothing. `TELLTALE_BASE_URL` has **no default**: unset means "Intake is not configured on this
+machine", which the adapter must distinguish from "configured but unreachable". **Not yet exercised
+against a live Telltale instance.**
 
-**⚠ Intermittent race in the fleetd spend cap, unrelated to the above.**
-`server::tests::concurrent_missions_cannot_both_breach_the_cap` failed on PR #64 with **both**
-concurrent missions admitted past the $20 global cap (`left: 2, right: 1`) — the condition its own
-comment calls "an open race" — then passed on a re-run of the identical tree. `create_mission` holds
-the store lock across check and insert, so the obvious explanation does not apply; the `.ok()` that
-swallows `upsert_unit`'s error is the first thing to look at. Not investigated further.
+**✅ The fleetd spend-cap race is root-caused (2026-09-11), and the cap is not broken.**
+`server::tests::concurrent_missions_cannot_both_breach_the_cap` went red again on `main` at `e1e8ab7`
+([run 34279913946](https://github.com/adbarc92/command-center/actions/runs/34279913946)) inside
+`cargo test (workspace)` — the **only required check**, so it could block any merge at random.
+Instrumenting the admission check with the value it observes proved the atomicity the test asserts
+**is held**: 200/200 runs read `16.00` then `21.00` and refused. The flake was the *scenario*.
+`create_mission` spawns a real driver; a `demo` unit reaches `done` almost immediately; and
+`committed_spend` counts a **terminal** unit by its actual `cost` rather than its
+`MAX(usd_cap, cost)` reservation (deliberate, for a rolling-24h cap). So a unit that finished first
+dropped the total from `21.00` to **`16.09`**, and the second mission was **correctly** admitted.
+Seeding 19.95 rather than 16 makes the refusal hold either way — `24.95` live, `20.04` finished.
+Filed as **#72**; fix on `fix/flaky-cap-race-test`. The `.ok()` that swallows `upsert_unit`'s error,
+long the prime suspect, is **exonerated as the cause** — though it remains a latent fail-open
+(a failed insert would admit a mission with no reservation recorded) worth its own issue.
 
 **Vision (unchanged):** the Command Center is the operator's **one-stop shop for agentic
 engineering** — dispatch work, see every project's stage, act without alt-tabbing, host the other
@@ -77,20 +97,21 @@ launch.**
 **Locked build order (auth-foundation-first):**
 1. **Local-Tracker Phase 2 dispatch** — the keystone (viewer → command surface) + the loopback-auth
    foundation Remote Control reuses. Specced (Option A), **not built**.
-2. **Embedding swarms — BUILT, in draft PR #49**, pending the interactive smoke. Not "roadmap"
-   any more; this line was wrong for three weeks.
+2. **Embedding swarms — SHIPPED.** #49 merged 2026-08-16 (`e2fc3ce`); the cockpit plugin runtime is
+   on `main`.
 3. **Design overhaul** (needs Claude Design output).
 4. **Remote Control** — brainstorm→spec after Phase-2 auth lands.
 
-**Open PRs.** **#49 — READY FOR REVIEW** (no longer draft), cockpit plugin runtime, HEAD `05c95ca`.
-`MERGEABLE`, `mergeStateStatus: CLEAN`, **18/18 CI checks pass**. Every previous merge blocker is
-resolved: D-7 fixed and confirmed live, D-8 found and fixed, D-2 fixed, and the packaged Part 2 run
-end to end (`spikes/SPIKE-RESULTS.md` → **"Smoke run 3"**). **It needs a human merge decision.**
+**Open PRs.** None open on GitHub. `fix/flaky-cap-race-test` (#72) is pushed and green locally, but
+**its PR is not yet open**: the repo's TDD-gate hook blocks `gh pr create` because the diff adds no
+new `#[test]`, even though every changed line is inside `mod tests`. It needs a gate exemption or a
+human-run `gh pr create`. #49 merged 2026-08-16.
 
-Items 1.2 / 1.4a / 1.7 remain **BLOCKED** behind **D-3**, a *pre-existing* `main` defect — fleetd
-serves no CORS headers, so every browser `fetch` from the cockpit to the daemon fails. Confirmed by
-`git diff origin/main...HEAD` being empty for `crates/fleetd/`. **Not a #49 regression; it needs its
-own issue.** It does make the FLEET ops grid non-functional today.
+Items 1.2 / 1.4a / 1.7 were **BLOCKED** behind **D-3** and are now **unblocked**: #68 (merged
+2026-09-08) gives fleetd a CORS allowlist covering the Tauri webview on both platforms (the origin
+differs — `tauri://localhost` vs `http://tauri.localhost`) and the Vite dev server, overridable via
+`FLEETD_ALLOWED_ORIGINS`, credentials disabled. **The three smoke items have not been re-run since**,
+so the ops grid is *expected* to populate but that is unverified.
 
 **Testing plan.** `docs/testing/PLAN.md` (first run 2026-08-13) ranks gaps by likelihood × impact
 across seven tiers. **Reconciled by hand on 2026-08-16** (§1 "Reconciliation") because it had gone
@@ -163,50 +184,62 @@ The TDD-gate hook is **not** path-blind: it is content-aware and counts `#[test]
 failure was a **stale local `main`**. Resolved 2026-08-09: branch protection, the digest rewrite, and
 the branch/worktree pruning below._
 
-**Next steps.** _All open work is tracked as GitHub issues (#51–#59); this list is the ordering._
-_For #51 specifically, work from the handoff brief:_
-[`docs/handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md`](handoffs/ae18cd84-95fa-45e7-a26f-d09f64a96826.md)
-_— it is self-contained and supersedes the abbreviated instructions in this list._
-1. **MERGE #49.** It is ready for review, `CLEAN`, 18/18 CI checks green, and every blocker that
-   existed on 2026-08-15 is resolved. This is a decision, not work. ~~D-7~~, ~~D-2~~ and ~~#51 the
-   packaged smoke~~ are **all done** — see the Session log entry for 2026-08-16.
-2. **File D-3 as its own issue against `main`.** fleetd serves no CORS headers, so every browser
-   `fetch` from the cockpit fails and the FLEET ops grid is empty. Pre-existing, **not** a #49
-   regression (`git diff origin/main...HEAD` is empty for `crates/fleetd/`). It blocks smoke items
-   1.2 / 1.4a / 1.7 permanently until fixed, and it is the reason the ops grid looks broken today.
-3. **Re-run `testing-plan`.** `docs/testing/PLAN.md` was hand-reconciled on 2026-08-16 but needs a
-   real scan: retire `GAP-006`/`GAP-008`/`GAP-010`/`GAP-012` with the run-2/run-3 evidence, refresh
-   the `in_ci` flags (CI now runs nine checks, not three), and rank the new **`GAP-132`** properly.
-4. **Do `GAP-132`'s cheap half.** Add a CI step that unzips a `tauri build` artifact and asserts
+**Next steps.** _Ordering. Open issues: #52, #54–#59, #61, #72._
+1. **Open and merge the PR for `fix/flaky-cap-race-test`** (#72). It takes the only required check off
+   a random failure. Blocked on the TDD-gate hook — needs an exemption or a human `gh pr create`.
+2. **Make `fmt + clippy` a required status check.** Only `cargo test (workspace)` is required today,
+   which is how #67, #68 and #71 all merged past a **red** fmt gate. A check that cannot block is not
+   a gate. One settings change, and it cannot be made from a coding session.
+3. **File the two fail-opens.** `parse_blockers` treats an **absent** `BLOCKERS=` marker as zero, so a
+   reviewer that crashed or ran out of budget mid-sentence *actively passes* the review gate (#70
+   documented it deliberately unfixed; the fix is `Option<u32>` with `None` → `NeedsHuman`, a
+   state-machine change). And `create_mission` discards `upsert_unit`'s result with `.ok()`.
+4. **Re-run `testing-plan`.** Still hand-reconciled, never scanned: retire `GAP-006`/`GAP-008`/
+   `GAP-010`/`GAP-012` on the run-2/run-3 evidence, refresh the `in_ci` flags (nine checks, not
+   three), and rank **`GAP-132`** properly.
+5. **Do `GAP-132`'s cheap half.** A CI step that unzips a `tauri build` artifact and asserts
    `plugins/reference/index.html` + `plugin-sdk/index.js` are present. That one assertion would have
    caught D-8 on the commit that introduced it, and the artifacts already exist.
-5. **Decide D-4's second half** — `stop_all_owned` synchronous in the `RunEvent` callback. Now
-   measured at **5.27 s** packaged (vs ~2.5 min in dev), so: fix, or accept with the measurement.
-   Note the handoff's "prebuilt images skip the build" premise is **wrong** — `compose build` runs
-   regardless. Record under "Smoke run 2 — Part 2".
-4. **File D-3 upstream** — fleetd has no CORS layer (`OPTIONS /missions` → 405, no ACAO on any
-   response). Pre-existing on `main`, blocks 1.2 / 1.4a / 1.7 and the whole FLEET ops grid.
-2. **Decide the lingering-`app`-process anomaly** (Gate 5's second half) — dev artifact or real bug.
-3. **#52 — File the GitHub Support ticket** to GC unreachable objects. Needs no build and no GUI;
-   it is the cheapest open item and the only one closing a real exposure.
-4. **#54 — Retire the spike branches/worktrees**, but *only after* #49 merges — still the sole
-   working reproduction.
-5. **Reconcile `docs/ROADMAP.md`** (last touched 2026-07-16, `cf92aec`). It still calls P3/P4
-   unresolved spikes and the embedding swarms "blocked / dispatch-ready", which this file contradicts
-   outright, and it carries a stale "verify CI billing" note. It is now the misleading doc — the same
-   role it played in the three-week stranded-swarm misread. Not yet done; deliberately deferred until
-   #49 merges so it is written against reality.
-6. Run `git config core.hooksPath "<abs>/.githooks"` (**absolute**) in every other clone; per-clone
-   config, does **not** travel with a merge.
-7. Resume the roadmap: **#55 Local-Tracker Phase 2** (keystone + auth foundation), then **#56** the
-   design pass, then **#57** Remote Control. Sequence Phase 2 **after** #49 merges — it must touch
-   `App.svelte` and `store.svelte.ts`, the two files #49 rewrites most.
+6. **Decide D-4's second half** — `stop_all_owned` synchronous in the `RunEvent` callback, measured at
+   **5.27 s** packaged (vs ~2.5 min in dev): fix, or accept with the measurement attached. Note the
+   handoff's "prebuilt images skip the build" premise is **wrong** — `compose build` runs regardless.
+7. **#52 — file the GitHub Support ticket** to GC unreachable objects. No build, no GUI; the cheapest
+   open item and the only one closing a real exposure.
+8. **Re-run smoke items 1.2 / 1.4a / 1.7**, which #68 unblocked and nobody has exercised since.
+9. **Resume the roadmap: #55 Local-Tracker Phase 2** (keystone + loopback-auth foundation), then
+   **#56** the design pass, then **#57** Remote Control.
+10. Run `git config core.hooksPath "<abs>/.githooks"` (**absolute**) in every other clone; per-clone
+    config, does **not** travel with a merge.
 
-_Also open: **#58** (signing certs → first signed release), **#59** (README screenshot). **#53 is
-resolved** — merging `main` into `feat/plugin-runtime` on 2026-08-10 brought the `.gitignore` entry
-across from #47; close it._
+_Also open: **#54** (retire the spike branches/worktrees — the three stale worktrees were pruned
+2026-09-11; the local-only branch deletions await a go-ahead), **#58** (signing certs → first signed
+release), **#59** (README screenshot), **#61** (plugin loading model: blank tabs with no loading or
+failure affordance). **#51** (the packaged smoke) and **#53** are resolved._
 
 ## Session log
+
+### 2026-09-11 — Work audit: reconciled the records, root-caused the spend-cap race
+
+**The records had drifted badly.** This file was last rewritten 2026-08-30, before **seven PRs
+(#65–#71)** landed between 08-31 and 09-08. It still called the feedback integration "NOT started"
+(it shipped), still listed "file D-3 as its own issue" as a next step (#68 fixed it), and still had
+"**MERGE #49**" as next step 1 while asserting elsewhere that #49 was merged — with a Next-steps list
+numbered 1–5 and then 4, 2, 3, 4, 5. `CLAUDE.md` still carried the `feat/plugin-runtime` pickup block
+whose own last line says to delete it once the branch changes. `ROADMAP.md` still called P3/P4
+unresolved spikes and carried a stale "verify CI billing" note. All three are corrected here.
+
+**The spend-cap race is not a cap bug.** `concurrent_missions_cannot_both_breach_the_cap` failed CI on
+`main` at `e1e8ab7`, in `cargo test (workspace)` — the only required check, so it could block any
+merge. Instrumenting the admission check showed check+insert *is* one atomic critical section
+(200/200 refusals, observed `21.00`). The test was racing the demo driver `create_mission` spawns:
+once a unit reaches `done`, its `$5` reservation is replaced by `$0.09` of actual spend and the total
+falls back under the ceiling. Seed `19.95` instead of `16` and the refusal holds either way. Filed
+**#72**, fix pushed; the long-suspected `.ok()` is exonerated as the cause.
+
+**Found, not fixed** (each now in Next steps): `fmt + clippy` is not a required check, so three PRs
+merged past it while red; `parse_blockers` counts an absent marker as zero blockers; `create_mission`
+discards `upsert_unit`'s error. **Cleaned:** three worktrees pointing at the pre-reorg
+`D:/MajorProjects/CURRENT/` path were pruned.
 
 ### 2026-08-30 — Built the Telltale Worker here, then pivoted it out; removed the embargo guard
 
