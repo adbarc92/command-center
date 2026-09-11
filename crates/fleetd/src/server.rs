@@ -1871,16 +1871,23 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_missions_cannot_both_breach_the_cap() {
-        // Global cap is $20. Pre-load committed spend so exactly ONE more default
-        // $5-cap unit crosses the ceiling: seed reserves 16, first admit pushes
-        // committed to 21 (>=20) so the second is refused — but ONLY if check+insert
-        // are atomic. An open race would let both observe 16<20 and both admit.
+        // Global cap is $20. The property under test: check+insert share ONE critical
+        // section, so an open race would let both callers observe 19.95 < 20 and both
+        // admit. Seeding 19.95 makes the refusal hold whichever way the first unit's
+        // driver has raced — 19.95 + 5.00 reservation = 24.95 while it is live, and
+        // 19.95 + 0.09 of actual demo spend = 20.04 once it reaches `done`.
+        //
+        // Seeding 16 instead made this test depend on the first unit still being
+        // non-terminal: `committed_spend` counts a terminal unit's cost rather than
+        // its reservation, so a unit that finished first dropped the total to 16.09
+        // and the second mission was correctly admitted. That is what made this
+        // intermittently red on CI — see #72.
         let store = std::sync::Arc::new(std::sync::Mutex::new(Store::open_memory().unwrap()));
         {
             let s = store.lock().unwrap();
             let mut r = building_row("seed");
             r.phase = "building".into();
-            r.usd_cap = 16.0;
+            r.usd_cap = 19.95;
             r.cost = 0.0;
             s.upsert_unit(&r, now_ms()).unwrap();
         }
