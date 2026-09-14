@@ -528,3 +528,19 @@ passed** (+3, the new ratchet) · `npm test` **139 passed** (+2, the D-7 proxy l
 `npm run check` **354 files, 0 errors / 0 warnings**.
 
 **Residue after the run:** 0 `audience` containers, 0 `app`/`fleetd-serve` processes, port 8787 free.
+
+### Smoke run 4 — 2026-09-14 (dev) → **1.10 PASS**; 1.2 and 1.7 dropped
+
+Run alongside NEXUS `SMOKE-LAP-01` items 8–12 (results are recorded there). Cockpit started with
+`npm run desktop` on `main` @ `5982958`. The sidecar health-gated at `http://127.0.0.1:8787/health`
+and logged `health OK — cockpit may connect`.
+
+| Item | Result |
+|---|---|
+| 1.2 fleet regression canary | **DROPPED** by the operator. It needs real units in `fleetd`, meaning agent containers and real spend. Deferred until Dispatch (NEXUS GAP-S05) exists. |
+| 1.7 park-on-overlay | **DROPPED** for the same reason: it needs a unit parked in `awaiting_oracle_approval`. |
+| **1.10 HMR under host CSP** | **PASS.** With the devtools Console open, the agent changed `Dashboard.svelte`'s wordmark to `PROJECT BOARD · HMR`. The operator saw it **"changed in place"**, with no blank flash or reload, and **"no new red errors"** in the Console, so nothing `Refused to connect` and no CSP violation. The Vite log agrees: `[vite] (client) hmr update /src/views/Dashboard.svelte`, not a page reload. The edit was reverted, and `git diff` is empty. |
+
+This is the first rigorous 1.10 result: run 2 recorded *"worked incidentally, operator did not
+observe"*. `GAP-011` in `docs/testing/PLAN.md` can take this as its manual pass on the next
+testing-plan run. Its `status` is human-owned and was not edited here.
