@@ -1,6 +1,6 @@
 ---
 plan-format: 1
-next_id: 133
+next_id: 134
 
 # RATIFICATION PENDING (proposed 2026-08-13, first run) — the Impact axis, 1-5 per module.
 # Nothing here was derived from call-graph fan-in; these are judgments about blast radius.
@@ -39,7 +39,8 @@ tier_map:
     runners: ["cargo test --manifest-path cockpit/ui/src-tauri/Cargo.toml"]
     globs:   [cockpit/ui/src-tauri/**]
     trust:   reports-dne
-    in_ci:   false          # standalone [workspace]; see GAP for the CI hole
+    in_ci:   true           # 2026-09-11: #60 added jobs.test-cockpit (`cargo test (cockpit)`).
+                            # ADVISORY ONLY — not a required status check; see GAP-133.
     parse_spec:
       ok: '^test (?<test>\S+) \.\.\. ok$'
       summary: '^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out'
@@ -47,15 +48,21 @@ tier_map:
     runners: ["npm test (cwd cockpit/ui)"]
     globs:   [cockpit/ui/src/**]
     trust:   reports-dne
-    in_ci:   false
+    in_ci:   true           # 2026-09-11: #60 added jobs.test-ui (`vitest (cockpit/ui)`).
+                            # ADVISORY ONLY — not a required status check; see GAP-133.
     parse_spec:
       ok: '^ . (?<file>src/\S+) \((?<n>\d+) tests?\)'
       summary: '^\s*Tests\s+(\d+) passed \((\d+)\)$'
-  node-embargo:
-    runners: ["node --test scripts/embargo-guard.test.mjs"]
+  node-embargo:           # ORPHANED 2026-09-11 — retained pending ratification (R7), not deleted.
+    # The runner no longer exists: scripts/embargo-guard.test.mjs, the guard, both git hooks,
+    # the denylist and the CI job were all removed in cb11214 (2026-08-30). This tier can never
+    # execute again, and no pass/fail rows for it appear in this run's inventory. It is kept
+    # here rather than dropped because removing a tier changes what `in_ci` claims mean for the
+    # entries that cite it (GAP-122, GAP-123) — a human should retire tier and entries together.
+    runners: ["node --test scripts/embargo-guard.test.mjs   # DELETED in cb11214"]
     globs:   [scripts/**]
-    trust:   reports-dne
-    in_ci:   true
+    trust:   unverified     # no runner -> no captured pass/fail -> (static-only)
+    in_ci:   false          # the `embargo` CI job was removed with it
     parse_spec:
       ok: '^ok (?<n>\d+) - (?<test>.+)$'
       summary: '^# pass (\d+)$'
@@ -96,10 +103,15 @@ tier_map:
 
 | | |
 |---|---|
-| **Run** | 2026-08-13 (first run — bootstrap) |
-| **Commit** | `a3edc78` on `feat/plugin-runtime` |
-| **Working tree at scan time** | `M cockpit/ui/src-tauri/src/plugins/manager.rs`, `?? cockpit/ui/src-tauri/tests/` — **concurrent work by another agent**, see the carve-out in §2 |
-| **Repo age** | 223 commits, first commit 2026-06-04 (70 days) |
+| **Run** | 2026-09-11 (second run — first real re-scan) |
+| **Commit** | `10150fd` on `docs/testing-plan-rerun-2026-09-11` (clean tree) |
+| **Previous run** | 2026-08-13 @ `a3edc78` (bootstrap), hand-reconciled 2026-08-16, never re-scanned until now |
+| **Repo age** | 266 commits, first commit 2026-06-04 (99 days) |
+| **Churn window** | **143 of 266 commits now fall OUTSIDE the 90-day window** (123 inside). At bootstrap the window covered the repo's whole history, so churn skewed high across the board; this run is the first where it discriminates. Likelihood fell for many entries as a direct result. |
+| **Scope** | Lane B re-verified **all 132 entries across 13 modules**. Lane A (new-gap scanning) was **deliberately not dispatched** — see R11. |
+| **Phase 3** | 7 demotion-shaped proposals refuted adversarially: **1 confirmed, 6 refuted**. Without this phase four entries would have closed wrongly, two of them on tests that are tautological. |
+
+_Prior run stamp, retained: 2026-08-13 @ `a3edc78` on `feat/plugin-runtime`, working tree `M cockpit/ui/src-tauri/src/plugins/manager.rs` + `?? cockpit/ui/src-tauri/tests/` (concurrent work by another agent), 223 commits / 70 days._
 
 ### Reconciliation — 2026-08-16 (not a rescan; a correction of known-stale facts)
 
@@ -131,23 +143,40 @@ The true gap is that **nothing asserts what is inside the bundle**, which is why
 
 ### Per-tier results this run
 
-| Tier | Runner | Runs in CI? | This run |
+The green predicate is `exit == 0 AND failures == 0 AND dne == 0 AND methods > 0 AND summary found`
+— **not an exit code**. Two tiers pass a naive exit-code check and fail this one.
+
+| Tier | Runner | In CI? | This run (2026-09-11) |
 |---|---|---|---|
-| `rust-workspace` | `cargo test --workspace` | **yes** | **not run** — the cargo build was held by a concurrent agent; stamped `(static-only)` |
-| `tauri-host` | `cargo test` in `cockpit/ui/src-tauri` | **NO** | **not run** — same reason; stamped `(static-only)` |
-| `vitest` | `npm test` in `cockpit/ui` | **NO** | **GREEN** — 19 files, 135 tests, 135 passed, 0 failed, 0 skipped, 0 todo (209 s) |
-| `node-embargo` | `node --test scripts/embargo-guard.test.mjs` | **yes** | **GREEN** — 13 tests, 13 pass, 0 fail, 0 skipped, 0 todo |
+| `rust-workspace` | `cargo test --workspace` | **yes, and REQUIRED** | **NOT GREEN** — exit 0, 128 passed, 0 failed, but **3 ignored** (`provision_commit_export_roundtrip`, `full_pipeline_opens_a_real_mergeable_pr`, `git_doc_source_clones_reads_and_cleans_up`). libtest's `ignored` IS this tier's did-not-execute field, so `dne != 0` and **no `open → covered` transition was licensed for any of its 46 entries** |
+| `tauri-host` | `cargo test --manifest-path cockpit/ui/src-tauri/Cargo.toml` | **yes** (advisory) | **GREEN** — 40 passed, 0 failed, 0 ignored |
+| `vitest` | `npm test` in `cockpit/ui` | **yes** (advisory) | **GREEN** — 23 files, 166 tests, 0 failed, 0 skipped, 0 todo (suite grew from 135) |
+| `node-embargo` | ~~`node --test scripts/embargo-guard.test.mjs`~~ | **gone** | **RUNNER DELETED** — removed with the whole embargo guard in `cb11214` (2026-08-30). The tier can never execute again; zero rows in this run's inventory. Tier and its entries (`GAP-122`, `GAP-123`) need retiring together — R7 |
 | `node-session-state` | `node --test "plugins/session-state/test/*.test.mjs"` | **NO** | **GREEN** — 52 tests, 52 pass, 0 fail, 0 skipped, 0 todo |
-| `pytest` (budget-checkpoint) | `uv run pytest` | **NO** | **GREEN** — 24 passed |
-| `pytest` (cache-countdown) | `uv run pytest` | **NO** | **GREEN** — 29 passed |
-| `manual` | watched GUI session | n/a | **1 of 12 rows PASS**; 1 FAIL-then-fixed-but-never-re-watched; 1 undiagnosed ANOMALY; 9 never run |
+| `pytest` (budget-checkpoint) | `uv run pytest` | **NO** | **COULD NOT RUN** — `Failed to canonicalize script path`, exit 1. The `.venv` shims (`pytest.exe`, `py.test.exe`) embed the pre-reorg `D:\MajorProjects\CURRENT\…` path. `(static-only)`; no transition licensed — R8 |
+| `pytest` (cache-countdown) | `uv run pytest` | **NO** | **COULD NOT RUN** — same cause, same disposition |
+| `manual` | watched GUI session | n/a | Runs 2 and 3 executed the checklist end to end; **most rows now carry a recorded result**. Still never executed: 1.2 and 1.7 (both BLOCKED by D-3, now fixed by #68 but not re-run) and 1.10 (recorded explicitly as *"NOT RIGOROUSLY VERIFIED — worked incidentally, operator did not observe"*) |
+
+**Executed-test inventory captured this run:** 246 rows — rust-workspace 128 + 3 ignored, tauri-host 40,
+node-session-state 52, vitest 23 file-level. Artifact (b), the test→symbol map, is 937 rows
+(211 `direct` / 726 `inferred`) and is **name-matched, therefore noisy**: agents independently caught
+three false positives in it (a Rust integration test "calling" TypeScript `fold`; `render` colliding
+with `@testing-library/svelte`'s; a Rust test "calling" a module-private `.mjs` `sleep`). Only `direct`
+rows are evidence, and even a `direct` row is void where the test mocks the module — `store.sink.svelte.test.ts`
+`vi.mock('./api')`s every export, so its `direct` rows prove nothing about `api.ts`.
 
 ### Coverage holes — read these before trusting any number above
 
-1. **Five of the seven automated tiers never run in CI.** `.github/workflows/ci.yml` has exactly
-   three jobs: `embargo`, `test` (`cargo test --workspace`), and `build` (`tauri build` ×3 OS).
-   Only `rust-workspace` and `node-embargo` gate a pull request. 135 vitest tests, 28 Tauri-host
-   Rust tests, 52 session-state tests and 53 pytest tests are **advisory**, not gating.
+1. ~~**Five of the seven automated tiers never run in CI.**~~ **SUPERSEDED 2026-09-11.** The
+   "exactly three jobs: `embargo`, `test`, `build`" premise is dead twice over: #60 (`3cc1ae6`)
+   added three more, and `cb11214` deleted `embargo` entirely. `ci.yml` now defines **six** jobs —
+   `lint` (`fmt + clippy`), `check` (`svelte-check + tsc`), `test-ui` (`vitest (cockpit/ui)`),
+   `test` (`cargo test (workspace)`), `test-cockpit` (`cargo test (cockpit)`) and `build`
+   (`tauri build` ×3 OS). **The real hole is now enforcement, not existence:** only
+   `cargo test (workspace)` is a required status check, rulesets are empty, so the other four run
+   **advisory and cannot block a merge** — demonstrated, not theoretical, since #67, #68 and #71
+   all merged with a red gate. Filed as **`GAP-133`**. Still genuinely ungated by anything:
+   the session-state suite and both Python suites (`GAP-112`).
 2. **`cargo test --workspace` does not reach the Tauri host crate.** `cockpit/ui/src-tauri/Cargo.toml`
    declares a bare `[workspace]`, so the root workspace (`crates/fleet-core`, `crates/fleetd`) excludes
    it. CI compiles that crate via `tauri build` and never executes one of its tests.
@@ -168,15 +197,19 @@ The true gap is that **nothing asserts what is inside the bundle**, which is why
 
 ## 2. Trust verdicts
 
-| Tier · runner | Trust | Basis |
+| Tier · runner | Trust | Basis (re-established 2026-09-11 against a real captured run) |
 |---|---|---|
-| `rust-workspace` · `cargo test --workspace` | `reports-dne` | libtest's summary carries a real `ignored` count and `#[ignore]` is a first-class primitive this repo actually uses. **But not run this session** — `(static-only)`. |
-| `tauri-host` · `cargo test` | `reports-dne` | same runner grammar. **Not run this session**, and never run by CI at all. |
-| `vitest` · `npm test` | `reports-dne` | vitest's summary distinguishes `passed` / `skipped` / `todo`; this run reported 0 of the latter two. Verified against a real captured run. |
-| `node-embargo` · `node --test` | `reports-dne` | TAP emits `# skipped` and `# todo` separately from `# pass`. Captured: both 0. |
-| `node-session-state` · `node --test` | `reports-dne` | same. Captured: both 0. |
-| `pytest` · `uv run pytest` | `reports-dne` | pytest's summary line reports `skipped` separately. Captured: neither suite skipped. |
-| `manual` · watched GUI | `unverified` | A human writes PASS/FAIL prose into `spikes/SPIKE-RESULTS.md` by hand. Nothing distinguishes "ran and passed" from "was not reached" except the author's discipline. |
+| `rust-workspace` · `cargo test --workspace` | `reports-dne` | libtest's `ignored` count is real and this repo uses `#[ignore]`. **Ran this session and FAILED the green predicate:** 3 ignored. The DNE mechanism worked exactly as intended — it is what withheld 46 entries from `covered`. |
+| `tauri-host` · `cargo test` | `reports-dne` | Same grammar. **Ran GREEN** (40/0/0). Now also runs in CI via `jobs.test-cockpit` — advisory only. |
+| `vitest` · `npm test` | `reports-dne` | Summary distinguishes `passed`/`skipped`/`todo`; captured 0 of the latter two across 23 files / 166 tests. Now in CI via `jobs.test-ui` — advisory only. |
+| `node-embargo` · ~~`node --test`~~ | **n/a — runner deleted** | The tier's runner file was removed in `cb11214`. There is no `(tier, runner)` pair left to attach a trust level to. Not silently dropped: see R7. |
+| `node-session-state` · `node --test` | `reports-dne` | TAP emits `# skipped` and `# todo` separately from `# pass`; captured both 0 across 52 tests. |
+| `pytest` · `uv run pytest` | `cannot-distinguish` → **no captured run at all** | Downgraded from `reports-dne`, not because the framework changed but because **the runner cannot execute on this machine**: the `.venv` console shims embed the pre-reorg path. A tier whose runner will not start yields no pass/fail, so every Python claim below is `(static-only)`. |
+| `manual` · watched GUI | `unverified` | A human writes PASS/FAIL prose into `spikes/SPIKE-RESULTS.md` by hand. Nothing distinguishes "ran and passed" from "was not reached" except the author's discipline — and run 3 supplies a live example: the operator's own answer on item 2.5 was *"I'm not sure, I looked away"*, scored by instrument alone. |
+
+**A finding about the instrument itself.** The 1 Hz `Process.Responding` sampler that produced the
+1,127- and 632-sample responsiveness evidence **is not committed anywhere in this repo**. The strongest
+quantitative evidence the manual tier has ever produced cannot currently be reproduced from the tree.
 
 **`manual-baseline: partial.`** One of the twelve manual rows (Gate 5 container teardown) carries a
 recorded pass at `2026-08-10 @ 725b630`. Ten have never carried a result. One carries a FAIL that was
@@ -210,7 +243,12 @@ Durable — carried across runs until a human answers. Nothing below has been ap
 | R3 | Phase-3 dispatch shape | On this bootstrap run the scanners returned ~200 candidates. Risk-tiered solo refutation of every one was not affordable, so refuters were dispatched **grouped by module** over the highest-risk and live-defect-asserting claims; the remainder are written `(unverified)`. Ratify this as the standing policy for large bootstrap runs, or require a second pass. |
 | R4 | Manual checklist home | `spikes/SPIKE-RESULTS.md` was seeded as the single manual-QA source. `docs/handoff/2026-06-24-human-gated-spikes-runbook.md` and `2026-06-25-spikes-handoff.md` also contain human-gated procedures but are marked SUPERSEDED. Confirm SPIKE-RESULTS is canonical, or name a real checklist file. |
 | R5 | Carve-out release | `GAP-005`, `GAP-009`, `GAP-010` are parked as "covered separately". Release them back into the ranking once the concurrent app-plugin-runtime test work lands, or mark them `covered` with the covering test. |
-| R6 | Tier `in_ci` key | `tier_map` here carries a non-standard `in_ci` boolean per tier. It is the single most load-bearing fact this plan discovered and there was nowhere else in the schema to put it. Ratify the key or move it. |
+| R6 | Tier `in_ci` key | `tier_map` here carries a non-standard `in_ci` boolean per tier. It is the single most load-bearing fact this plan discovered and there was nowhere else in the schema to put it. Ratify the key or move it. **2026-09-11: the key proved its worth and also proved insufficient** — `in_ci: true` no longer distinguishes a gate that blocks from one that merely reports. Consider `in_ci` + `required`. |
+| **R7** | Retire the `node-embargo` tier **and** `GAP-122` / `GAP-123` together | Their whole subject — guard, test file, both git hooks, denylist and CI job — was deleted in `cb11214`. Rename-follow was performed on all three anchors and terminates at that commit with no successor. **"The subject code was deleted" is not one of the twelve legal transitions**, so no status was moved. A human must decide: retire the entries, and drop the tier from `tier_map`, in one edit. |
+| **R8** | The `pytest` tier cannot run on this machine | `uv run pytest` fails in both tools with `Failed to canonicalize script path`; the `.venv` console shims embed the pre-reorg `D:\MajorProjects\CURRENT\…` path. This is the **fourth** instance of reorg fallout (after the Rust build cache and the audience venv, both recorded in #67). The fix is `uv sync`, which mutates the working tree — out of scope for this skill, which writes only this file. Ratify whether a broken-runner tier should keep `reports-dne` or drop to `cannot-distinguish` permanently. |
+| **R9** | `GAP-110`'s closure conditions | It is the run's ONE confirmed demotion, but its refuter attached four conditions, two of which are now satisfied here (`tier_map` flags flipped; the per-tier table and coverage hole #1 rewritten). Still outstanding: **no regression pin exists** — `scripts/ci-shape.test.mjs` is absent, so deleting `jobs.test-ui` would trip no test — and the entry's title still says "135 tests" where the suite is now 166. |
+| **R10** | `GAP-005`, `GAP-009`, `GAP-010` — proposed `covered`, all three REFUTED | Each is human-marked, so nothing moved. The refutations are substantive, not procedural: `GAP-009`'s proposed covering tests are the half `manager.rs`'s own comments disclaim, and one of them asserts a condition satisfied by a `std::mem::take` *before any thread spawns*; `GAP-010`'s guard test passes unchanged if you delete the call site that fixed the defect. For `GAP-005` the responsiveness **fact** was not refuted — only the claim that two existing tests cover it — so its `last_manual_pass` has been updated to the run-2/run-3 evidence and R5 still needs a human answer. |
+| **R11** | Lane A was not dispatched this run | Only Lane B (re-verification) ran, across all 13 modules. New-gap scanning was skipped deliberately: the register already holds 132 entries, the stated objective was retirement and reconciliation, and R3 sets the precedent for bounding dispatch on large runs. **Consequence to accept or reject:** genuinely new gaps in the 13 changed modules were not looked for this run. |
 
 ## 4. Index
 
@@ -221,150 +259,150 @@ tie-break is `(impact desc, likelihood desc, GAP id asc)`.
 
 | rank | id | risk | title |
 |---:|---|---:|---|
-| **1** | **`GAP-132`** | **25** (L5×I5) | **CI bundles the app on three OSes and never looks inside the bundle** — the register entry for the pattern behind D-1/D-2/D-4/D-7/D-8 (added 2026-08-16) |
-| ~~1~~ | `GAP-006` | ~~25~~ | ~~Smoke 1.6: rect glue on resize~~ — **VERIFIED** run 2 (dev) + run 3 (packaged, item 2.6). Retire on next scan |
-| ~~2~~ | `GAP-008` | ~~25~~ | ~~Smoke 1.8: no leak on switch~~ — **VERIFIED AND MEASURED** run 3 (item 2.8): 3 switch cycles, webview2 procs 31→31, mem +0.19%. Retire on next scan |
-| ~~3~~ | `GAP-010` | ~~25~~ | ~~Smoke 1.9b: app process survives window close~~ — **ROOT-CAUSED AND FIXED** (D-4, `2ab1b49`); re-verified packaged: exit in **0.23 s** cold / **5.27 s** with 10 containers. No longer "undiagnosed". Retire on next scan |
-| 4 | `GAP-013` | **25** (L5×I5) | Overlay input-block over a LIVE view-plugin iframe is unverified (new manual row) |
-| 5 | `GAP-014` | **25** (L5×I5) | Rect glue under DPI, monitor, and window-move changes (new manual row) |
-| 6 | `GAP-015` | **25** (L5×I5) | Cockpit behaviour after fleetd restarts or the socket drops (new manual row) |
-| 7 | `GAP-017` | **25** (L5×I5) | `agent_exec` awaits the agent with no timeout and no cancellation |
-| 8 | `GAP-033` | **25** (L5×I5) | Driver-plus-real-Docker resume has never been verified by machine or human |
-| 9 | `GAP-002` | **20** (L4×I5) | Smoke 1.2: Fleet ops-grid regression canary (manual) |
-| 10 | `GAP-007` | **20** (L4×I5) | Smoke 1.7: native webview parks off-screen while a host overlay is open (manual) |
-| 11 | `GAP-011` | **20** (L4×I5) | Smoke 1.10: Vite HMR still works under the host CSP (manual) |
-| ~~12~~ | `GAP-012` | ~~20~~ | ~~Smoke Part 2: the packaged build has never been launched~~ — **LAUNCHED AND RUN END TO END**, run 3 (2026-08-16). 9 PASS / 2 BLOCKED / 2 NOT RUN / 0 FAIL. Retire on next scan; the two NOT RUN rows (packaged no-network, policed-launch ack) need their own entries |
-| 13 | `GAP-018` | **20** (L4×I5) | `Runner::health` is implemented twice and called from nowhere, so `Trigger::Stall` is unreachable |
-| 14 | `GAP-019` | **20** (L4×I5) | Resumed T2/T3: rejecting the oracle is a silent no-op |
-| 15 | `GAP-021` | **20** (L4×I5) | A successful T3 ship orphans the unit's named volume |
-| 16 | `GAP-022` | **20** (L4×I5) | `poll_mergeability` fires ten `gh` calls back to back with no delay |
-| 17 | `GAP-023` | **20** (L4×I5) | The whole host-side git/GitHub failure surface is unexecuted because `FakeForge` cannot fail |
-| 18 | `GAP-024` | **20** (L4×I5) | Every command-validity decision is written out four times |
-| 19 | `GAP-057` | **20** (L4×I5) | The Tauri host crate is a standalone workspace, so CI never runs one of its tests |
-| 20 | `GAP-058` | **20** (L4×I5) | The sidecar supervisor's restart loop has no test, no attempt cap, and no deadline |
-| 21 | `GAP-059` | **20** (L4×I5) | `health_gate` does not restart on timeout, contradicting its own doc, and wedges the app in Starting |
-| 22 | `GAP-062` | **20** (L4×I5) | `view_plugins::respond` is the only guard between plugin URLs and `fs::read`, with 14 untested branches |
-| 23 | `GAP-063` | **20** (L4×I5) | Dev/packaged plugin-root precedence is the seam every remaining smoke row stands on, untested |
-| 24 | `GAP-064` | **20** (L4×I5) | `WebviewPool::touch_and_evict` is the whole "no leak on switch" guarantee and is pure arithmetic nobody tests |
-| 25 | `GAP-065` | **20** (L4×I5) | The `app::<id>` webview-label scheme is encoded in three places with a "MUST" nobody enforces |
-| 26 | `GAP-066` | **20** (L4×I5) | The `ccplugin://` origin is written three ways, and the CSP form is Windows-only |
-| 27 | `GAP-067` | **20** (L4×I5) | `127.0.0.1:8787` is hand-mirrored in four places and only one of them honours `CC_ADDR` |
-| 28 | `GAP-068` | **20** (L4×I5) | The updater is registered against an empty pubkey and a `.example` endpoint |
-| 29 | `GAP-069` | **20** (L4×I5) | `lib.rs:run`'s ExitRequested ordering is load-bearing and enforced only by statement order |
-| 30 | `GAP-078` | **20** (L4×I5) | `api.ts` has no test file at all, and `openStream` wires no close or error handler |
-| 31 | `GAP-081` | **20** (L4×I5) | `phaseClass` and `progress` drive every tile's colour and rail and have no direct assertion |
-| 32 | `GAP-111` | **20** (L4×I5) | `npm run check` (353 files) is not in CI, and two source files are typechecked by nothing |
-| 33 | `GAP-113` | **20** (L4×I5) | No lint, format, or static-analysis gate exists anywhere |
-| 34 | `GAP-122` | **20** (L4×I5) | The embargo guard's `--all` mode, its skip paths, and its only write path are untested |
-| 35 | `GAP-123` | **20** (L4×I5) | The git hooks and CI's inline commit-message range are shell nothing executes |
-| 36 | `GAP-016` | **20** (L5×I4) | Starting a real mission with Docker stopped or the agent image absent (new manual row) |
-| 37 | `GAP-043` | **20** (L5×I4) | No `busy_timeout` anywhere: a second writer loses events silently |
-| 38 | `GAP-044` | **20** (L5×I4) | Every driver event does two synchronous SQLite writes inside a global mutex on a tokio worker |
-| 39 | `GAP-045` | **20** (L5×I4) | `events_since` replays from 0 with no retention, pagination, or bound |
-| 40 | `GAP-049` | **20** (L5×I4) | `router()` mounts nine routes with no auth, no origin check, and no CORS layer |
-| 41 | `GAP-092` | **20** (L5×I4) | The hostile-plugin kill-and-revert path is covered by neither a test nor a checklist row |
-| 42 | `GAP-119` | **20** (L5×I4) | Failed and halted units keep their volumes forever, and nothing has ever looked |
-| 43 | `GAP-047` | **16** (L4×I4) | `env_f64` accepts a zero cap, bricking every mission with a 429 |
-| 44 | `GAP-048` | **16** (L4×I4) | `stream_to_socket` drops events permanently on broadcast lag and never notices a dead peer |
-| 45 | `GAP-050` | **16** (L4×I4) | `post_command` is the entire inbound control surface and no test drives it over HTTP |
-| 46 | `GAP-053` | **16** (L4×I4) | `spawn_driver_for` and `rehydrate` duplicate the real-mode construction and both dispatch on `_` |
-| 47 | `GAP-055` | **16** (L4×I4) | `bin/serve.rs:main` has no tests, no graceful shutdown, and panics on a held port |
-| 48 | `GAP-056` | **16** (L4×I4) | `get_swarm` computes the swarm "done" verdict at read time with no test and no consumer |
-| 49 | `GAP-087` | **16** (L4×I4) | `policeCommand`'s only numeric bound, `min_review_rounds`, is untested |
-| 50 | `GAP-088` | **16** (L4×I4) | `loader.ts`'s traversal guard has one test case and disagrees with the Rust guard |
-| 51 | `GAP-089` | **16** (L4×I4) | The shipped SDK has no lifetime story: unsubscribes untested, no `close()`, and a killed session hangs every pending promise |
-| 52 | `GAP-090` | **16** (L4×I4) | The reference plugin's `esc`/`render` are structurally untestable, and `esc` guards `innerHTML` |
-| 53 | `GAP-116` | **16** (L4×I4) | `FakeRunner` cannot fail, so the Docker error arms are unreachable from CI |
-| 54 | `GAP-117` | **16** (L4×I4) | `trial_merge`'s Conflict half and cleanup are testable with git alone and are tested nowhere |
-| 55 | `GAP-118` | **16** (L4×I4) | `local_docker`'s pure validators and exit-code mappings are untested, and two write paths swallow failure |
-| 56 | `GAP-001` | **15** (L3×I5) | Smoke 1.1: switcher shows all four destinations (manual) |
-| 57 | `GAP-005` | **15** (L3×I5) | Smoke 1.5: AUDIENCE app-plugin activation stays responsive (manual) — PARKED, covered separately |
-| 58 | `GAP-009` | **15** (L3×I5) | Smoke 1.9a: Gate 5 container teardown on quit (manual) — PARKED, covered separately |
-| 59 | `GAP-020` | **15** (L3×I5) | A `Ship` delivered to a `Halted` unit destroys it |
-| 60 | `GAP-025` | **15** (L3×I5) | The red-checks feedback loop has no test and no iteration ceiling |
-| 61 | `GAP-026` | **15** (L3×I5) | The wall-clock cap's driver-side use is dead code in the entire suite |
-| 62 | `GAP-027` | **15** (L3×I5) | `fail_closed` bypasses the state machine and is never executed |
-| 63 | `GAP-028` | **15** (L3×I5) | `ClaudePlanner::plan` spawns a real `claude` process with no timeout and no test |
-| 64 | `GAP-029` | **15** (L3×I5) | The USD-cap check is copy-pasted at five call sites, three of them unexercised |
-| 65 | `GAP-030` | **15** (L3×I5) | `steps::build` and `steps::review` are untested, and `review`'s prompt is half a contract |
-| 66 | `GAP-032` | **15** (L3×I5) | `retry.rs:env_secs` and its three wrappers are untested |
-| 67 | `GAP-060` | **15** (L3×I5) | `fleetd://status` is emitted to nobody |
-| 68 | `GAP-061` | **15** (L3×I5) | The `ccplugin://` response headers are three load-bearing security invariants with no assertion |
-| 69 | `GAP-070` | **15** (L3×I5) | `run_halyard` shells out with no timeout from a synchronous Tauri command |
-| 70 | `GAP-071` | **15** (L3×I5) | The Audience HTTP commands have no client timeout and an unasserted error-policy asymmetry |
-| 71 | `GAP-073` | **15** (L3×I5) | `App.svelte`'s app-plugin compositing effect never exercises the overlay park/restore pair |
-| 72 | `GAP-074` | **15** (L3×I5) | The ResizeObserver rect-glue effect is asserted nowhere, teardown included |
-| 73 | `GAP-075` | **15** (L3×I5) | No test in the repo ever mounts a view-plugin iframe from `App.svelte` |
-| 74 | `GAP-076` | **15** (L3×I5) | `onKill` — the plugin-misbehaviour escape hatch — has no App-level test |
-| 75 | `GAP-077` | **15** (L3×I5) | `selectApp` has no in-flight guard, so a double-click starts two docker builds |
-| 76 | `GAP-079` | **15** (L3×I5) | `FleetStore.dispose` leaves the store un-restartable |
-| 77 | `GAP-080` | **15** (L3×I5) | `fleet.ts:fold` matches Rust-side reason strings by exact equality, with no test on either side |
-| 78 | `GAP-082` | **15** (L3×I5) | Phase-eligibility policy for the action buttons lives in three places with no assertion on any |
-| 79 | `GAP-110` | **15** (L3×I5) | `npm test` — 135 tests over the whole cockpit UI — is not in CI |
-| 80 | `GAP-112` | **15** (L3×I5) | Three whole test suites outside the Rust workspace are invoked by no gate |
-| 81 | `GAP-114` | **15** (L3×I5) | `release.yml` signs and publishes without running a single test |
-| 82 | `GAP-115` | **15** (L3×I5) | The Docker integration tests run nowhere, on any schedule |
-| 83 | `GAP-121` | **15** (L3×I5) | The load-bearing sidecar-before-bundle order is written four times and CI does not reuse it |
-| 84 | `GAP-093` | **15** (L5×I3) | The dashboard's local scan root is a hardcoded developer drive letter |
-| 85 | `GAP-041` | **12** (L3×I4) | `Store::open` is the only constructor any real process uses and no test calls it |
-| 86 | `GAP-042` | **12** (L3×I4) | `Store::init`'s migration ALTERs swallow every error, so a failed upgrade reads as an empty fleet |
-| 87 | `GAP-046` | **12** (L3×I4) | `docker_ok` has no timeout and no single-flight guard, and `create_swarm` awaits it in-handler |
-| 88 | `GAP-051` | **12** (L3×I4) | The `/units`, `/health` and `/units/:id` JSON shapes are a hand-mirrored contract nothing gates |
-| 89 | `GAP-052` | **12** (L3×I4) | `create_mission` and `create_swarm`'s real-mode money guards are unexecuted |
-| 90 | `GAP-054` | **12** (L3×I4) | `spawn_forwarder` discards store write errors, then broadcasts the event as if durable |
-| 91 | `GAP-083` | **12** (L3×I4) | Capabilities are negotiated, thrown away, and never enforced |
-| 92 | `GAP-084` | **12** (L3×I4) | The bridge's rate/flood buckets are never driven end to end |
-| 93 | `GAP-085` | **12** (L3×I4) | The shipped `autoTick: true` default path executes in zero tests |
-| 94 | `GAP-086` | **12** (L3×I4) | Hostile-input handling on the port is exercised only through pure-function tests |
-| 95 | `GAP-091` | **12** (L3×I4) | The host duplicates the reference manifest inline, so the loader's tested code paths are unreachable in the app |
-| 96 | `GAP-120` | **12** (L3×I4) | The fake and the real runner disagree on what a valid `UnitSpec` is |
-| 97 | `GAP-039` | **12** (L4×I3) | `Provisioning` is excluded from `is_agent_active`, so nothing bounds a hung provision |
-| 98 | `GAP-097` | **12** (L4×I3) | Both dashboard adapters map an unrecognised upstream state to a confident "Idle" |
-| 99 | `GAP-101` | **12** (L4×I3) | `model.ts:isOffPipeline` is exported, unreferenced, untested — and `sortedCards` re-derives it inline |
-| 100 | `GAP-124` | **12** (L4×I3) | `demo-restart-recovery.mjs` is the only end-to-end durability check and nothing runs it |
-| 101 | `GAP-125` | **12** (L4×I3) | `index.html` loads Google Fonts against a CSP that has no `font-src` and no such origin |
-| 102 | `GAP-031` | **10** (L2×I5) | `reconcile` and `reconcile_live` re-derive the same decision independently |
-| 103 | `GAP-072` | **10** (L2×I5) | `local_projects`' exclusion list and depth bound are the only brakes on a whole-disk walk, and neither is tested |
-| 104 | `GAP-040` | **9** (L3×I3) | `Phase::is_interruptible` is exported, uncalled, untested, and duplicated inline |
-| 105 | `GAP-094` | **9** (L3×I3) | `Dashboard.svelte`'s entire live-wiring path is unexecuted while looking well tested |
-| 106 | `GAP-095` | **9** (L3×I3) | Every dashboard adapter's degradation contract is unenforced at its edges |
-| 107 | `GAP-096` | **9** (L3×I3) | App-scoped Halyard proposals are written into the map under a key nothing reads |
-| 108 | `GAP-098` | **9** (L3×I3) | `dashboard/api.ts` has no test file and is the only place the four IPC command names appear |
-| 109 | `GAP-099` | **9** (L3×I3) | The dashboard's user-facing affordances — deep links, chips, footers, empty state — are asserted nowhere |
-| 110 | `GAP-100` | **9** (L3×I3) | App-plugin cards can never reach the dashboard board because the prop is never passed |
-| 111 | `GAP-102` | **9** (L3×I3) | The dashboard's "source unreachable" card is hand-copied three times with divergent fields |
-| 112 | `GAP-003` | **8** (L2×I4) | Smoke 1.3: REFERENCE view-plugin renders, handshakes, and cannot reach the network (manual) |
-| 113 | `GAP-004` | **8** (L2×I4) | Smoke 1.4: command policy round-trip and command-ack rejection (manual) |
-| 114 | `GAP-103` | **8** (L4×I2) | The session-state SessionEnd hook has never been observed firing |
-| 115 | `GAP-104` | **8** (L4×I2) | The Stop hook spawns eight sequential git subprocesses against a 5-second budget |
-| 116 | `GAP-106` | **8** (L4×I2) | `withLock` steals a lock from a demonstrably live holder, and `sleep` busy-spins |
-| 117 | `GAP-126` | **8** (L4×I2) | The PowerShell hooks Claude Code actually executes are tested by nothing, in any repo language |
-| 118 | `GAP-127` | **8** (L4×I2) | `deploy_globals.py` mutates the user's real `settings.json` and `CLAUDE.md` with no tests at all |
-| 119 | `GAP-128` | **8** (L4×I2) | `context-offload` has no test infrastructure, and its update path corrupts on any Windows path |
-| 120 | `GAP-129` | **8** (L4×I2) | cache-countdown's headline feature is inert, and its self-test cannot fail |
-| 121 | `GAP-131` | **8** (L4×I2) | Both `install.ps1` scripts are the same 85 lines twice, with an untested `Copy-Item` nesting hazard |
-| 122 | `GAP-034` | **6** (L2×I3) | `gate_met`'s anti-oscillation conjunct is unreachable dead logic |
-| 123 | `GAP-035` | **6** (L2×I3) | `Event`'s wire shape is the cockpit's contract and seven of ten variants are unasserted |
-| 124 | `GAP-036` | **6** (L2×I3) | The snake_case phase vocabulary is hand-duplicated across Rust, SQL and TypeScript |
-| 125 | `GAP-037` | **6** (L2×I3) | `Command::to_trigger` has no production caller while the driver re-implements it twice |
-| 126 | `GAP-038` | **6** (L2×I3) | `OracleTampering`'s transition arm is the trust gate and has no direct test |
-| 127 | `GAP-105` | **6** (L3×I2) | `capture_end` drops a timeline record and deletes the only backup in the same breath |
-| 128 | `GAP-107` | **6** (L3×I2) | Two `repoRoot` spawns per hook, and a torn `git status` renders as a real branch called `null` |
-| 129 | `GAP-108` | **6** (L3×I2) | The session-state hook contract is validated only for file existence |
-| 130 | `GAP-109` | **6** (L3×I2) | `capture_rich`'s four failure arms are the plugin's only user-visible errors and none is tested |
-| 131 | `GAP-130` | **6** (L3×I2) | Both Python tools' console-script entry points are the untested side of the process boundary |
+| **1** | `GAP-010` | **25** (L5×I5) | Smoke 1.9b: the app process survives window close (manual) — root-caused as D-4 and fixed; prompt-exit residual open |
+| **2** | `GAP-015` | **25** (L5×I5) | Cockpit behaviour after fleetd restarts or the socket drops (new manual row) |
+| **3** | `GAP-017` | **25** (L5×I5) | `agent_exec` awaits the agent with no timeout and no cancellation |
+| **4** | `GAP-033` | **25** (L5×I5) | Driver-plus-real-Docker resume has never been verified by machine or human |
+| **5** | `GAP-002` | **20** (L4×I5) | Smoke 1.2: Fleet ops-grid regression canary (manual) |
+| **6** | `GAP-006` | **20** (L4×I5) | Smoke 1.6: native webview stays glued to its rect on resize (manual) |
+| **7** | `GAP-007` | **20** (L4×I5) | Smoke 1.7: native webview parks off-screen while a host overlay is open (manual) |
+| **8** | `GAP-008` | **20** (L4×I5) | Smoke 1.8: no leak or orphaned webview when switching away and back (manual) |
+| **9** | `GAP-011` | **20** (L4×I5) | Smoke 1.10: Vite HMR still works under the host CSP (manual) |
+| **10** | `GAP-012` | **20** (L4×I5) | Smoke Part 2: packaged build launched and run end to end (run 3); bundle contents still unasserted (manual) |
+| **11** | `GAP-013` | **20** (L4×I5) | Overlay input-block over a LIVE view-plugin iframe is unverified (new manual row) |
+| **12** | `GAP-014` | **20** (L4×I5) | Rect glue under DPI, monitor, and window-move changes (new manual row) |
+| **13** | `GAP-018` | **20** (L4×I5) | `Runner::health` is implemented twice and called from nowhere, so `Trigger::Stall` is unreachable |
+| **14** | `GAP-024` | **20** (L4×I5) | Every command-validity decision is written out four times |
+| **15** | `GAP-057` | **20** (L4×I5) | The Tauri host crate is a standalone workspace, so CI never runs one of its tests |
+| **16** | `GAP-059` | **20** (L4×I5) | `health_gate` does not restart on timeout, contradicting its own doc, and wedges the app in Starting |
+| **17** | `GAP-062` | **20** (L4×I5) | `view_plugins::respond` is the only guard between plugin URLs and `fs::read`, with 14 untested branches |
+| **18** | `GAP-063` | **20** (L4×I5) | Dev/packaged plugin-root precedence is the seam every remaining smoke row stands on, untested |
+| **19** | `GAP-064` | **20** (L4×I5) | `WebviewPool::touch_and_evict` is the whole "no leak on switch" guarantee and is pure arithmetic nobody tests |
+| **20** | `GAP-068` | **20** (L4×I5) | The updater is registered against an empty pubkey and a `.example` endpoint |
+| **21** | `GAP-069` | **20** (L4×I5) | `lib.rs:run`'s ExitRequested ordering is load-bearing and enforced only by statement order |
+| **22** | `GAP-078` | **20** (L4×I5) | `api.ts` has no test file at all, and `openStream` wires no close or error handler |
+| **23** | `GAP-092` | **20** (L4×I5) | The hostile-plugin kill-and-revert path is covered by neither a test nor a checklist row |
+| **24** | `GAP-093` | **20** (L4×I5) | The dashboard's local scan root is a hardcoded developer drive letter |
+| **25** | `GAP-111` | **20** (L4×I5) | `npm run check` (353 files) is not in CI, and two source files are typechecked by nothing |
+| **26** | `GAP-113` | **20** (L4×I5) | No lint, format, or static-analysis gate exists anywhere |
+| **27** | `GAP-123` | **20** (L4×I5) | The git hooks and CI's inline commit-message range are shell nothing executes |
+| **28** | `GAP-125` | **20** (L4×I5) | `index.html` loads Google Fonts against a CSP that has no `font-src` and no such origin |
+| **29** | `GAP-132` | **20** (L4×I5) | CI bundles the app on three OSes and never looks inside the bundle |
+| **30** | `GAP-133` | **20** (L4×I5) | Only one CI check can block a merge; the other four are advisory |
+| **31** | `GAP-016` | **20** (L5×I4) | Starting a real mission with Docker stopped or the agent image absent (new manual row) |
+| **32** | `GAP-044` | **20** (L5×I4) | Every driver event does two synchronous SQLite writes inside a global mutex on a tokio worker |
+| **33** | `GAP-045` | **20** (L5×I4) | `events_since` replays from 0 with no retention, pagination, or bound |
+| **34** | `GAP-049` | **20** (L5×I4) | `router()` mounts nine routes with no auth, no origin check, and no CORS layer |
+| **35** | `GAP-043` | **16** (L4×I4) | No `busy_timeout` anywhere: a second writer loses events silently |
+| **36** | `GAP-047` | **16** (L4×I4) | `env_f64` accepts a zero cap, bricking every mission with a 429 |
+| **37** | `GAP-048` | **16** (L4×I4) | `stream_to_socket` drops events permanently on broadcast lag and never notices a dead peer |
+| **38** | `GAP-053` | **16** (L4×I4) | `spawn_driver_for` and `rehydrate` duplicate the real-mode construction and both dispatch on `_` |
+| **39** | `GAP-056` | **16** (L4×I4) | `get_swarm` computes the swarm "done" verdict at read time with no test and no consumer |
+| **40** | `GAP-084` | **16** (L4×I4) | The bridge's rate/flood buckets are never driven end to end |
+| **41** | `GAP-086` | **16** (L4×I4) | Hostile-input handling on the port is exercised only through pure-function tests |
+| **42** | `GAP-087` | **16** (L4×I4) | `policeCommand`'s only numeric bound, `min_review_rounds`, is untested |
+| **43** | `GAP-088` | **16** (L4×I4) | `loader.ts`'s traversal guard has one test case and disagrees with the Rust guard |
+| **44** | `GAP-089` | **16** (L4×I4) | The shipped SDK has no lifetime story: unsubscribes untested, no `close()`, and a killed session hangs every pending promise |
+| **45** | `GAP-090` | **16** (L4×I4) | The reference plugin's `esc`/`render` are structurally untestable, and `esc` guards `innerHTML` |
+| **46** | `GAP-119` | **16** (L4×I4) | Failed and halted units keep their volumes forever, and nothing has ever looked |
+| **47** | `GAP-001` | **15** (L3×I5) | Smoke 1.1: switcher shows all four destinations (manual) |
+| **48** | `GAP-005` | **15** (L3×I5) | Smoke 1.5: AUDIENCE app-plugin activation stays responsive (manual) — measured PASS recorded; no automated cover |
+| **49** | `GAP-009` | **15** (L3×I5) | Smoke 1.9a: Gate 5 container teardown on quit (manual) — PASS recorded; container removal itself still untested |
+| **50** | `GAP-019` | **15** (L3×I5) | Resumed T2/T3: rejecting the oracle is a silent no-op |
+| **51** | `GAP-021` | **15** (L3×I5) | A successful T3 ship orphans the unit's named volume |
+| **52** | `GAP-022` | **15** (L3×I5) | `poll_mergeability` fires ten `gh` calls back to back with no delay |
+| **53** | `GAP-023` | **15** (L3×I5) | The whole host-side git/GitHub failure surface is unexecuted because `FakeForge` cannot fail |
+| **54** | `GAP-025` | **15** (L3×I5) | The red-checks feedback loop has no test and no iteration ceiling |
+| **55** | `GAP-026` | **15** (L3×I5) | The wall-clock cap's driver-side use is dead code in the entire suite |
+| **56** | `GAP-027` | **15** (L3×I5) | `fail_closed` bypasses the state machine and is never executed |
+| **57** | `GAP-028` | **15** (L3×I5) | `ClaudePlanner::plan` spawns a real `claude` process with no timeout and no test |
+| **58** | `GAP-029` | **15** (L3×I5) | The USD-cap check is copy-pasted at five call sites, three of them unexercised |
+| **59** | `GAP-030` | **15** (L3×I5) | `steps::build` and `steps::review` are untested, and `review`'s prompt is half a contract |
+| **60** | `GAP-032` | **15** (L3×I5) | `retry.rs:env_secs` and its three wrappers are untested |
+| **61** | `GAP-058` | **15** (L3×I5) | The sidecar supervisor's restart loop has no test, no attempt cap, and no deadline |
+| **62** | `GAP-060` | **15** (L3×I5) | `fleetd://status` is emitted to nobody |
+| **63** | `GAP-061` | **15** (L3×I5) | The `ccplugin://` response headers are three load-bearing security invariants with no assertion |
+| **64** | `GAP-065` | **15** (L3×I5) | The `app::<id>` webview-label scheme is encoded in three places with a "MUST" nobody enforces |
+| **65** | `GAP-066` | **15** (L3×I5) | The `ccplugin://` origin is written three ways, and the CSP form is Windows-only |
+| **66** | `GAP-067` | **15** (L3×I5) | `127.0.0.1:8787` is hand-mirrored in four places and only one of them honours `CC_ADDR` |
+| **67** | `GAP-070` | **15** (L3×I5) | `run_halyard` shells out with no timeout from a synchronous Tauri command |
+| **68** | `GAP-071` | **15** (L3×I5) | The Audience HTTP commands have no client timeout and an unasserted error-policy asymmetry |
+| **69** | `GAP-073` | **15** (L3×I5) | `App.svelte`'s app-plugin compositing effect never exercises the overlay park/restore pair |
+| **70** | `GAP-074` | **15** (L3×I5) | The ResizeObserver rect-glue effect is asserted nowhere, teardown included |
+| **71** | `GAP-075` | **15** (L3×I5) | No test in the repo ever mounts a view-plugin iframe from `App.svelte` |
+| **72** | `GAP-076` | **15** (L3×I5) | `onKill` — the plugin-misbehaviour escape hatch — has no App-level test |
+| **73** | `GAP-077` | **15** (L3×I5) | `selectApp` has no in-flight guard, so a double-click starts two docker builds |
+| **74** | `GAP-079` | **15** (L3×I5) | `FleetStore.dispose` leaves the store un-restartable |
+| **75** | `GAP-080` | **15** (L3×I5) | `fleet.ts:fold` matches Rust-side reason strings by exact equality, with no test on either side |
+| **76** | `GAP-081` | **15** (L3×I5) | `phaseClass` and `progress` drive every tile's colour and rail and have no direct assertion |
+| **77** | `GAP-082` | **15** (L3×I5) | Phase-eligibility policy for the action buttons lives in three places with no assertion on any |
+| **78** | `GAP-091` | **15** (L3×I5) | The host duplicates the reference manifest inline, so the loader's tested code paths are unreachable in the app |
+| **79** | `GAP-112` | **15** (L3×I5) | Three whole test suites outside the Rust workspace are invoked by no gate |
+| **80** | `GAP-114` | **15** (L3×I5) | `release.yml` signs and publishes without running a single test |
+| **81** | `GAP-115` | **15** (L3×I5) | The Docker integration tests run nowhere, on any schedule |
+| **82** | `GAP-116` | **15** (L3×I5) | `FakeRunner` cannot fail, so the Docker error arms are unreachable from CI |
+| **83** | `GAP-121` | **15** (L3×I5) | The load-bearing sidecar-before-bundle order is written four times and CI does not reuse it |
+| **84** | `GAP-041` | **12** (L3×I4) | `Store::open` is the only constructor any real process uses and no test calls it |
+| **85** | `GAP-042` | **12** (L3×I4) | `Store::init`'s migration ALTERs swallow every error, so a failed upgrade reads as an empty fleet |
+| **86** | `GAP-046` | **12** (L3×I4) | `docker_ok` has no timeout and no single-flight guard, and `create_swarm` awaits it in-handler |
+| **87** | `GAP-050` | **12** (L3×I4) | `post_command` is the entire inbound control surface and no test drives it over HTTP |
+| **88** | `GAP-051` | **12** (L3×I4) | The `/units`, `/health` and `/units/:id` JSON shapes are a hand-mirrored contract nothing gates |
+| **89** | `GAP-052` | **12** (L3×I4) | `create_mission` and `create_swarm`'s real-mode money guards are unexecuted |
+| **90** | `GAP-054` | **12** (L3×I4) | `spawn_forwarder` discards store write errors, then broadcasts the event as if durable |
+| **91** | `GAP-055` | **12** (L3×I4) | `bin/serve.rs:main` has no tests, no graceful shutdown, and panics on a held port |
+| **92** | `GAP-083` | **12** (L3×I4) | Capabilities are negotiated, thrown away, and never enforced |
+| **93** | `GAP-085` | **12** (L3×I4) | The shipped `autoTick: true` default path executes in zero tests |
+| **94** | `GAP-117` | **12** (L3×I4) | `trial_merge`'s Conflict half and cleanup are testable with git alone and are tested nowhere |
+| **95** | `GAP-118` | **12** (L3×I4) | `local_docker`'s pure validators and exit-code mappings are untested, and two write paths swallow failure |
+| **96** | `GAP-039` | **12** (L4×I3) | `Provisioning` is excluded from `is_agent_active`, so nothing bounds a hung provision |
+| **97** | `GAP-097` | **12** (L4×I3) | Both dashboard adapters map an unrecognised upstream state to a confident "Idle" |
+| **98** | `GAP-101` | **12** (L4×I3) | `model.ts:isOffPipeline` is exported, unreferenced, untested — and `sortedCards` re-derives it inline |
+| **99** | `GAP-122` | **12** (L4×I3) | The embargo guard's `--all` mode, its skip paths, and its only write path are untested |
+| **100** | `GAP-124` | **12** (L4×I3) | `demo-restart-recovery.mjs` is the only end-to-end durability check and nothing runs it |
+| **101** | `GAP-031` | **10** (L2×I5) | `reconcile` and `reconcile_live` re-derive the same decision independently |
+| **102** | `GAP-072` | **10** (L2×I5) | `local_projects`' exclusion list and depth bound are the only brakes on a whole-disk walk, and neither is tested |
+| **103** | `GAP-120` | **10** (L2×I5) | The fake and the real runner disagree on what a valid `UnitSpec` is |
+| **104** | `GAP-037` | **9** (L3×I3) | `Command::to_trigger` has no production caller while the driver re-implements it twice |
+| **105** | `GAP-040` | **9** (L3×I3) | `Phase::is_interruptible` is exported, uncalled, untested, and duplicated inline |
+| **106** | `GAP-094` | **9** (L3×I3) | `Dashboard.svelte`'s entire live-wiring path is unexecuted while looking well tested |
+| **107** | `GAP-095` | **9** (L3×I3) | Every dashboard adapter's degradation contract is unenforced at its edges |
+| **108** | `GAP-096` | **9** (L3×I3) | App-scoped Halyard proposals are written into the map under a key nothing reads |
+| **109** | `GAP-098` | **9** (L3×I3) | `dashboard/api.ts` has no test file and is the only place the four IPC command names appear |
+| **110** | `GAP-099` | **9** (L3×I3) | The dashboard's user-facing affordances — deep links, chips, footers, empty state — are asserted nowhere |
+| **111** | `GAP-100` | **9** (L3×I3) | App-plugin cards can never reach the dashboard board because the prop is never passed |
+| **112** | `GAP-102` | **9** (L3×I3) | The dashboard's "source unreachable" card is hand-copied three times with divergent fields |
+| **113** | `GAP-003` | **8** (L2×I4) | Smoke 1.3: REFERENCE view-plugin renders, handshakes, and cannot reach the network (manual) |
+| **114** | `GAP-004` | **8** (L2×I4) | Smoke 1.4: command policy round-trip and command-ack rejection (manual) |
+| **115** | `GAP-103` | **8** (L4×I2) | The session-state SessionEnd hook has never been observed firing |
+| **116** | `GAP-104` | **8** (L4×I2) | The Stop hook spawns eight sequential git subprocesses against a 5-second budget |
+| **117** | `GAP-106` | **8** (L4×I2) | `withLock` steals a lock from a demonstrably live holder, and `sleep` busy-spins |
+| **118** | `GAP-107` | **8** (L4×I2) | Two `repoRoot` spawns per hook, and a torn `git status` renders as a real branch called `null` |
+| **119** | `GAP-126` | **8** (L4×I2) | The PowerShell hooks Claude Code actually executes are tested by nothing, in any repo language |
+| **120** | `GAP-127` | **8** (L4×I2) | `deploy_globals.py` mutates the user's real `settings.json` and `CLAUDE.md` with no tests at all |
+| **121** | `GAP-128` | **8** (L4×I2) | `context-offload` has no test infrastructure, and its update path corrupts on any Windows path |
+| **122** | `GAP-131` | **8** (L4×I2) | Both `install.ps1` scripts are the same 85 lines twice, with an untested `Copy-Item` nesting hazard |
+| **123** | `GAP-020` | **6** (L2×I3) | A `Ship` delivered to a `Halted` unit destroys it |
+| **124** | `GAP-034` | **6** (L2×I3) | `gate_met`'s anti-oscillation conjunct is unreachable dead logic |
+| **125** | `GAP-035` | **6** (L2×I3) | `Event`'s wire shape is the cockpit's contract and seven of ten variants are unasserted |
+| **126** | `GAP-036` | **6** (L2×I3) | The snake_case phase vocabulary is hand-duplicated across Rust, SQL and TypeScript |
+| **127** | `GAP-038` | **6** (L2×I3) | `OracleTampering`'s transition arm is the trust gate and has no direct test |
+| **128** | `GAP-105` | **6** (L3×I2) | `capture_end` drops a timeline record and deletes the only backup in the same breath |
+| **129** | `GAP-108` | **6** (L3×I2) | The session-state hook contract is validated only for file existence |
+| **130** | `GAP-109` | **6** (L3×I2) | `capture_rich`'s four failure arms are the plugin's only user-visible errors and none is tested |
+| **131** | `GAP-129` | **6** (L3×I2) | cache-countdown's headline feature is inert, and its self-test cannot fail |
+| **132** | `GAP-130` | **6** (L3×I2) | Both Python tools' console-script entry points are the untested side of the process boundary |
 
 ### 4.2 By status
 
 | status | count | ids |
 |---|---:|---|
-| `open` | 132 | all entries |
+| `open` | 132 | all other entries |
+| `covered` | 1 | `GAP-110` |
 
 _As of the **2026-08-16 reconciliation** (§1), four ranked rows are verified-but-not-yet-retired —
 `GAP-006`, `GAP-008`, `GAP-010`, `GAP-012` — and are struck through in §4.1. Their `status` fields
 are deliberately left `open` because status is human-owned and retirement belongs to a real scan,
 not a hand edit. The next `testing-plan` run should retire all four with the run-2/run-3 evidence._
-
 _Three entries are parked as **covered separately** pending the concurrent app-plugin-runtime
 test work and are excluded from the call to action even though they appear in the ranking above:
 `GAP-005`, `GAP-009`, `GAP-010` (see §2 and R5)._
@@ -386,10 +424,10 @@ grouping live in the Index (§4), never here.
 | **governs** | `cockpit/ui/src/App.svelte`, `cockpit/ui/src/lib/Switcher.svelte` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L3 × I5 = **15** |
-| **observations** | manual_coverage_pts=3, churn_90d=8 (churn_pts=4), never_verified=true |
+| **observations** | manual_coverage_pts=3, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -415,10 +453,10 @@ this row asks a human to look at except "the segmented control looks right".
 | **governs** | `cockpit/ui/src/App.svelte`, `cockpit/ui/src/lib/fleet.ts`, `cockpit/ui/src/lib/store.svelte.ts` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L4 × I5 = **20** |
-| **observations** | manual_coverage_pts=4, churn_90d=8 (churn_pts=4), never_verified=true |
+| **observations** | manual_coverage_pts=4, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -443,10 +481,10 @@ return with selection intact — which also covers the automatable core of row 1
 | **governs** | `cockpit/ui/src/lib/bridge.ts`, `cockpit/ui/src/lib/loader.ts`, `cockpit/plugin-sdk/**`, `plugins/reference/**`, `cockpit/ui/src-tauri/src/view_plugins.rs` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L2 × I4 = **8** |
-| **observations** | manual_coverage_pts=2, churn_90d=1 (churn_pts=2), never_verified=true |
+| **observations** | manual_coverage_pts=2, churn_90d=3 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -472,10 +510,10 @@ and CSP halves are not and must stay in this row.
 | **governs** | `cockpit/ui/src/lib/bridge.ts`, `cockpit/plugin-sdk/index.js` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L2 × I4 = **8** |
-| **observations** | manual_coverage_pts=2, churn_90d=1 (churn_pts=2), never_verified=true |
+| **observations** | manual_coverage_pts=2, churn_90d=3 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -488,7 +526,7 @@ dead in the suite, and a version-skewed message is dropped silently with no ack.
 this row checks happens over a `MessageChannel`, which jsdom provides natively. This row can be
 retired from the human gate once those land.
 
-### GAP-005 — Smoke 1.5: AUDIENCE app-plugin activation stays responsive (manual) — PARKED, covered separately
+### GAP-005 — Smoke 1.5: AUDIENCE app-plugin activation stays responsive (manual) — measured PASS recorded; no automated cover
 
 | field | value |
 |---|---|
@@ -498,13 +536,13 @@ retired from the human gate once those land.
 | **verified_by** | manual |
 | **anchors** | `spikes/SPIKE-RESULTS.md#smoke-run-1--2026-08-10`, `1.5` |
 | **governs** | `cockpit/ui/src-tauri/src/plugins/**`, `cockpit/ui/src/App.svelte` |
-| **last_manual_pass** | — (FAIL 2026-08-10 @ `725b630`; fixed in `db74a47`, never re-run) |
+| **last_manual_pass** | 2026-08-15 @ `26cbd24` (PASS — 1,127 samples dev / 632 packaged, 0 unresponsive) |
 | **risk** | L3 × I5 = **15** |
-| **observations** | manual_coverage_pts=2, churn_90d=8 (churn_pts=4), never_verified=true |
+| **observations** | manual_coverage_pts=2, churn_90d=6 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
-| **ratification_pending** | `accepted` — in progress, covered separately (see §2 carve-out and R5) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Phase 3 REFUTED the proposed `covered` closure, but NOT the underlying fact. The responsiveness evidence is genuine and strong: Process.Responding sampled at 1 Hz for 1,127 samples across a compose build, a failed up and a 0->3->10 ramp (run 2), plus 632 samples packaged (run 3), zero unresponsive in either. What fails is the covering-test leg. tauri_command_threading.rs is a pure TEXT SCAN — it greps the src tree for `#[tauri::command]` and sets is_async from `sig.contains("async fn")` and dispatches from `body.contains("thread::spawn")`; it never launches the app, starts a runtime or times anything, so blocking work one level down in a callee is invisible to it, as is spawn-then-join. Its own header says 'This is a ratchet, not a clean bill of health', and its MAIN_THREAD_DEBT still lists halyard_status as UNBOUNDED, '**the same shape as the 1.5 defect**'. App.appPlugin.test.ts is two jsdom tests with invoke fully mocked, asserting launch-as-dispatch-ack and composite-on-healthy — main-thread blocking cannot exist in that harness. Nothing automated measures responsiveness anywhere: the 1 Hz sampler that produced the evidence is not committed to the repo. The correct disposition is to RECORD THE MANUAL PASS (done here — last_manual_pass was stale at 'FAIL 2026-08-10 @ 725b630; fixed in db74a47, never re-run') and let a human answer R5, rather than entering a false automated-coverage claim. Note also that run 3's operator answered 'I'm not sure, I looked away', so the row's own residual human step — watch the chip walk starting -> health-probing -> healthy with the window responsive throughout — has still not been performed, and items 2.5/2.6/2.8 ran with CC_APP_PLUGINS_DEV set (packaged binary, dev discovery seam). |
 | **decision** | — |
 | **rationale** | — |
 
@@ -529,11 +567,11 @@ walk `starting → health-probing → healthy` with the window responsive throug
 | **anchors** | `spikes/SPIKE-RESULTS.md#smoke-run-1--2026-08-10`, `1.6` |
 | **governs** | `cockpit/ui/src/App.svelte`, `cockpit/ui/src-tauri/src/embedding.rs` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L5 × I5 = **25** |
-| **observations** | manual_coverage_pts=5, churn_90d=8 (churn_pts=4), never_verified=true |
+| **risk** | L4 × I5 = **20** |
+| **observations** | manual_coverage_pts=5, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -559,10 +597,10 @@ real window — and see `GAP-014` for the DPI/multi-monitor case this row does *
 | **governs** | `cockpit/ui/src/App.svelte`, `cockpit/ui/src-tauri/src/embedding.rs` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L4 × I5 = **20** |
-| **observations** | manual_coverage_pts=4, churn_90d=8 (churn_pts=4), never_verified=true |
+| **observations** | manual_coverage_pts=4, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -587,11 +625,11 @@ over a *view*-plugin that this row does not cover at all.
 | **anchors** | `spikes/SPIKE-RESULTS.md#smoke-run-1--2026-08-10`, `1.8` |
 | **governs** | `cockpit/ui/src/App.svelte`, `cockpit/ui/src/lib/bridge.ts`, `cockpit/ui/src-tauri/src/embedding.rs` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L5 × I5 = **25** |
-| **observations** | manual_coverage_pts=5, churn_90d=8 (churn_pts=4), never_verified=true |
+| **risk** | L4 × I5 = **20** |
+| **observations** | manual_coverage_pts=5, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -604,7 +642,7 @@ the `WebviewPool` LRU entry are all released only by teardown paths nothing chec
 and destroy fifty times and assert the live window-listener count, timer count, and LRU length are
 unchanged. Only "Task Manager shows no orphaned webview process" stays human.
 
-### GAP-009 — Smoke 1.9a: Gate 5 container teardown on quit (manual) — PARKED, covered separately
+### GAP-009 — Smoke 1.9a: Gate 5 container teardown on quit (manual) — PASS recorded; container removal itself still untested
 
 | field | value |
 |---|---|
@@ -616,11 +654,11 @@ unchanged. Only "Task Manager shows no orphaned webview process" stays human.
 | **governs** | `cockpit/ui/src-tauri/src/plugins/manager.rs`, `crates/fleetd/src/local_docker.rs` |
 | **last_manual_pass** | 2026-08-10 @ `725b630` (PASS — `docker ps` empty against a verified 0-container baseline) |
 | **risk** | L3 × I5 = **15** |
-| **observations** | manual_coverage_pts=2, churn_90d=9 (churn_pts=4), never_verified=false |
+| **observations** | manual_coverage_pts=2, churn_90d=6 (churn_pts=4), never_verified=false |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
-| **ratification_pending** | `accepted` — in progress, covered separately (see §2 carve-out and R5) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Phase 3 REFUTED the proposed closure. The four proposed covering tests are the half manager.rs's own comments disclaim ('Only the first half can be tested without a Docker daemon... The execution half stays a human smoke item'), and stop_all_owned_clears_the_running_map asserts a condition satisfied unconditionally by a std::mem::take BEFORE any thread spawns — it would pass if every `docker compose down` failed. No test exercises the ExitRequested -> stop_all_owned path. last_manual_pass still records the D-6-invalidated `docker ps` instrument and should be re-stated against `docker ps -a` scoped to the project. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -631,7 +669,7 @@ concurrently. Recorded here so the ranking is honest about what is and is not al
 **Concrete test.** Owned elsewhere. One gap this row does *not* close, filed separately as `GAP-119`:
 it checks `docker ps` only, never `docker volume ls`, and volumes are deliberately kept on teardown.
 
-### GAP-010 — Smoke 1.9b: the app process survives window close (manual) — PARKED, undiagnosed
+### GAP-010 — Smoke 1.9b: the app process survives window close (manual) — root-caused as D-4 and fixed; prompt-exit residual open
 
 | field | value |
 |---|---|
@@ -643,11 +681,11 @@ it checks `docker ps` only, never `docker volume ls`, and volumes are deliberate
 | **governs** | `cockpit/ui/src-tauri/src/lib.rs`, `cockpit/ui/src-tauri/src/sidecar.rs` |
 | **last_manual_pass** | — (ANOMALY 2026-08-10 @ `725b630`) |
 | **risk** | L5 × I5 = **25** |
-| **observations** | manual_coverage_pts=5, churn_90d=10 (churn_pts=4), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=6 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
-| **ratification_pending** | `accepted` — adjacent to the carve-out (see §2 and R5) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Phase 3 REFUTED the proposed closure, but the 'UNDIAGNOSED' framing is obsolete — D-4 root-caused it (infinite exit loop; 93.9% of a core, 309 s CPU) and 2ab1b49 fixed it, re-verified ~1 s dev / 0.23 s cold and 5.27 s loaded packaged. The named covering test pins only AtomicBool::swap: delete lib.rs:107-109 and the handler reverts to the pre-fix loop while shutdown_guard_tests stays green. Retire only once (a) GAP-069's source-structure ratchet exists and (b) the synchronous stop_all_owned(30_000) residual is re-filed with its measurements. Re-characterize meanwhile rather than holding it at risk 25 as undiagnosed. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -673,10 +711,10 @@ Whether the process actually exits stays human until someone diagnoses the anoma
 | **governs** | `cockpit/ui/src-tauri/tauri.conf.json`, `cockpit/ui/vite.config.ts` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L4 × I5 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=3 (churn_pts=3), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=2 (churn_pts=2), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-10 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -689,7 +727,7 @@ Fonts against a `style-src 'self'` policy). HMR is only the most visible symptom
 assert every origin any code path can request is admitted by the directive that governs it. Whether
 the WebView2 HMR socket actually connects stays human.
 
-### GAP-012 — Smoke Part 2: the packaged build has never been launched (manual)
+### GAP-012 — Smoke Part 2: packaged build launched and run end to end (run 3); bundle contents still unasserted (manual)
 
 | field | value |
 |---|---|
@@ -701,10 +739,10 @@ the WebView2 HMR socket actually connects stays human.
 | **governs** | `cockpit/ui/src-tauri/tauri.conf.json`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `cockpit/ui/scripts/build-sidecar.mjs` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L4 × I5 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=4 (churn_pts=3), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-07-17 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -730,11 +768,11 @@ must be PASS before a draft release is published.
 | **anchors** | `cockpit/ui/src/App.svelte:overlayOpen` |
 | **governs** | `cockpit/ui/src/App.svelte`, `cockpit/ui/src/lib/ApprovalOverlay.svelte` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L5 × I5 = **25** |
-| **observations** | manual_coverage_pts=5, churn_90d=8 (churn_pts=4), never_verified=true |
+| **risk** | L4 × I5 = **20** |
+| **observations** | manual_coverage_pts=5, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -760,11 +798,11 @@ the plugin cannot `.focus()` its way back, and Enter/Escape still hit the modal.
 | **anchors** | `cockpit/ui/src/App.svelte:$effect#rect-glue-resizeobserver` |
 | **governs** | `cockpit/ui/src/App.svelte`, `cockpit/ui/src-tauri/src/embedding.rs` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L5 × I5 = **25** |
-| **observations** | manual_coverage_pts=5, churn_90d=8 (churn_pts=4), never_verified=true |
+| **risk** | L4 × I5 = **20** |
+| **observations** | manual_coverage_pts=5, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -791,10 +829,10 @@ webview is still exactly over the reserved rect.
 | **governs** | `cockpit/ui/src/lib/api.ts`, `cockpit/ui/src/lib/store.svelte.ts`, `crates/fleetd/src/server.rs`, `cockpit/ui/src-tauri/src/sidecar.rs` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L5 × I5 = **25** |
-| **observations** | manual_coverage_pts=5, churn_90d=26 (churn_pts=5), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=6 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -823,10 +861,10 @@ jsdom-testable half is filed as `GAP-078`.
 | **governs** | `crates/fleetd/src/local_docker.rs`, `crates/fleetd/src/server.rs` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L5 × I4 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=26 (churn_pts=5), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=6 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -853,10 +891,10 @@ reclassifiable to CI — see `GAP-116`, `GAP-046` and `GAP-118`.
 | **governs** | `crates/fleetd/src/driver.rs`, `crates/fleetd/src/steps.rs`, `crates/fleetd/src/local_docker.rs` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L5 × I5 = **25** |
-| **observations** | manual_coverage_pts=5, churn_90d=19 (churn_pts=5), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=8 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -883,10 +921,10 @@ returns to full `available_permits()`.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/runner.rs:Runner::health`, `crates/fleetd/src/local_docker.rs:health`, `crates/fleetd/src/fake.rs:health` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5 (no test and no caller), branches=0 (branch_pts=1), churn_90d=9 (churn_pts=4) |
+| **observations** | coverage_pts=5 (no test and no caller), branches=0 (branch_pts=1), churn_90d=4 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -912,11 +950,11 @@ anything today, which is the point.
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/driver.rs:Run::drive#awaiting-oracle-reject-on-resume`, `crates/fleetd/src/driver.rs:Run::drive#spec-oracle-frozen-guard` |
-| **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=19 (churn_pts=5) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -942,11 +980,11 @@ clicking the button, and no checklist row covers it.
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleet-core/src/transition.rs:transition#ship-from-halted`, `crates/fleetd/src/driver.rs:Run::goto#none-arm`, `crates/fleetd/src/server.rs:post_command` |
-| **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=2, branches=2 (branch_pts=1), churn_90d=26 (churn_pts=5) |
+| **risk** | L2 × I3 = **6** |
+| **observations** | coverage_pts=2, branches=2 (branch_pts=1), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -974,11 +1012,11 @@ on human-supplied triggers.
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/driver.rs:Run::drive#pause-cleanup-takes-handle`, `crates/fleetd/src/driver.rs:Run::drive#done-arm-discard` |
-| **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=19 (churn_pts=5) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1004,11 +1042,11 @@ every successful T3 ship, and any Resume→…→Done that passed through a paus
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/driver.rs:Run::poll_mergeability#pending-dirty-and-error-arms`, `crates/fleetd/src/gh_forge.rs:poll_mergeable` |
-| **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=4, branches=4 (branch_pts=2), churn_90d=19 (churn_pts=5) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=4, branches=4 (branch_pts=2), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1034,11 +1072,11 @@ exists), and that it ends in `Blocked` + `PrDirty`.
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/fake.rs:FakeForge#no-failure-knobs`, `crates/fleetd/src/driver.rs:Run::drive#forge-and-export-failure-arms` |
-| **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=19 (churn_pts=5) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1066,10 +1104,10 @@ the container was torn down versus discarded.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/driver.rs:Run::poll_halt`, `crates/fleetd/src/driver.rs:Run::drive#awaiting-oracle-recv`, `crates/fleetd/src/driver.rs:Run::drive#paused-recv`, `crates/fleetd/src/driver.rs:Run::agent_exec#backoff-select` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=3, branches=21 (branch_pts=5), churn_90d=19 (churn_pts=5) |
+| **observations** | coverage_pts=3, branches=21 (branch_pts=5), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 4 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1095,10 +1133,10 @@ rejected-with-an-Error-and-stays-parked — never silently dropped, never a hard
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/driver.rs:Run::drive#checking-red-checks`, `crates/fleetd/src/driver.rs:Run::drive#has-diff-error` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=19 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1124,10 +1162,10 @@ and that a tiny USD cap bounds the loop at `NeedsHuman`.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/driver.rs:Run::drive#wall-clock-backstop`, `crates/fleetd/src/driver.rs:Run::over_wall_clock` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=19 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1154,10 +1192,10 @@ permit release. Companion: a rate-limited run whose `elapsed - rl_elapsed` stays
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/driver.rs:Run::fail_closed` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=19 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1183,10 +1221,10 @@ container was torn down but the volume kept, and that the permit is released.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/planner.rs:ClaudePlanner::plan` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=2 (churn_pts=2) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1212,10 +1250,10 @@ over-cap array). Then assert `plan()` is wrapped in a bounded `tokio::time::time
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/driver.rs:Run::account`, `crates/fleetd/src/driver.rs:Run::remaining` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=2, branches=6 (branch_pts=3), churn_90d=19 (churn_pts=5) |
+| **observations** | coverage_pts=2, branches=6 (branch_pts=3), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1241,10 +1279,11 @@ exec is issued. Plus `remaining_never_goes_negative_and_is_passed_to_claude`.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/steps.rs:build`, `crates/fleetd/src/steps.rs:review`, `crates/fleetd/src/driver.rs:parse_blockers` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=4 (churn_pts=3) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Lane B REFUTED the claim itself: steps::build (steps.rs:235,:247), steps::review (:260) and driver.rs:parse_blockers (:1327,:1350,:1353) all now have direct calls from passing unit tests added by PR #70 (34916a0). NOT moved to covered because the rust-workspace tier failed the suite-green predicate (dne=3). SEPARATE AND MORE SERIOUS: #70's new `parse_blockers_treats_an_absent_marker_as_clean` asserts the DEFECTIVE absent-marker-equals-zero-blockers behaviour as a passing test, so the review-gate hole is now pinned rather than fixed — a candidate for intentionally-red review, and the third instance in this repo of a test defending a defect (after loader.test.ts:52 and bridge.test.ts:360, both since corrected). Tracked as issue #73. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1272,7 +1311,7 @@ are pinned together. Plus `build_prompt_carries_task_and_findings`.
 | **observations** | coverage_pts=2, branches=9 (branch_pts=3), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1296,10 +1335,10 @@ untested sub-path is their **agreement**, which is the whole risk of the duplica
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/retry.rs:env_secs`, `crates/fleetd/src/retry.rs:rl_max_wait_secs` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=3 (churn_pts=3) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1326,10 +1365,10 @@ than to 0.
 | **governs** | `crates/fleetd/src/driver.rs`, `crates/fleetd/src/local_docker.rs`, `crates/fleetd/src/server.rs` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L5 × I5 = **25** |
-| **observations** | manual_coverage_pts=5, churn_90d=19 (churn_pts=5), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=8 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1362,7 +1401,7 @@ teardown, re-provision the same id, assert no re-clone and that a planted `.git/
 | **observations** | coverage_pts=2, branches=3 (branch_pts=2), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1388,10 +1427,10 @@ decision: either delete the conjunct or move the anti-oscillation check somewher
 | **verified_by** | automated |
 | **anchors** | `crates/fleet-core/src/event.rs:Event`, `cockpit/ui/src/lib/types.ts:FleetEvent` |
 | **risk** | L2 × I3 = **6** |
-| **observations** | coverage_pts=2, branches=0 (branch_pts=1), churn_90d=2 (churn_pts=2) |
+| **observations** | coverage_pts=2, branches=0 (branch_pts=1), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1417,10 +1456,10 @@ each back through `from_str`.
 | **verified_by** | automated |
 | **anchors** | `crates/fleet-core/src/phase.rs:Phase`, `crates/fleet-core/src/phase.rs:TERMINAL_PHASE_STRS`, `crates/fleetd/src/store.rs:swarm_rollup`, `cockpit/ui/src/lib/types.ts:Phase` |
 | **risk** | L2 × I3 = **6** |
-| **observations** | coverage_pts=2, branches=0 (branch_pts=1), churn_90d=14 (churn_pts=5) |
+| **observations** | coverage_pts=2, branches=0 (branch_pts=1), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 4 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1447,11 +1486,11 @@ literal list, so adding or renaming one fails CI and forces the mirrors to be up
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleet-core/src/event.rs:Command::to_trigger`, `crates/fleetd/src/driver.rs:Run::drive#awaiting-oracle-recv`, `crates/fleetd/src/driver.rs:Run::drive#paused-recv` |
-| **risk** | L2 × I3 = **6** |
-| **observations** | coverage_pts=2, branches=6 (branch_pts=3), churn_90d=19 (churn_pts=5) |
+| **risk** | L3 × I3 = **9** |
+| **observations** | coverage_pts=2, branches=6 (branch_pts=3), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1474,10 +1513,10 @@ inline mappings with `cmd.to_trigger()` (or assert the inline copies agree with 
 | **verified_by** | automated |
 | **anchors** | `crates/fleet-core/src/transition.rs:transition#oracle-tampering-arm` |
 | **risk** | L2 × I3 = **6** |
-| **observations** | coverage_pts=3, branches=2 (branch_pts=1), churn_90d=3 (churn_pts=3) |
+| **observations** | coverage_pts=3, branches=2 (branch_pts=1), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1504,10 +1543,10 @@ fleetd driver tests; the guard-false side is never exercised for this trigger at
 | **governs** | `crates/fleet-core/src/phase.rs`, `crates/fleetd/src/driver.rs`, `crates/fleetd/src/local_docker.rs` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L4 × I3 = **12** |
-| **observations** | manual_coverage_pts=4, churn_90d=3 (churn_pts=3), never_verified=true |
+| **observations** | manual_coverage_pts=4, churn_90d=8 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1533,10 +1572,10 @@ deliberate decision rather than an accident.
 | **verified_by** | automated |
 | **anchors** | `crates/fleet-core/src/phase.rs:Phase::is_interruptible` |
 | **risk** | L3 × I3 = **9** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=3 (churn_pts=3) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1558,10 +1597,10 @@ variants and wire it into the two arms that currently open-code it.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/store.rs:Store::open` |
 | **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=14 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1587,10 +1626,10 @@ re-seed to the persisted maxima rather than 0.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/store.rs:Store::init#alter-migration-on-preexisting-db` |
 | **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=14 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1618,11 +1657,12 @@ where an ALTER genuinely fails and assert `open()` reports it rather than return
 | **anchors** | `crates/fleetd/src/store.rs:Store::init#pragma-set` |
 | **governs** | `crates/fleetd/src/store.rs`, `crates/fleetd/src/bin/serve.rs`, `cockpit/ui/src-tauri/src/sidecar.rs` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L5 × I4 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=14 (churn_pts=5), never_verified=true |
+| **risk** | L4 × I4 = **16** |
+| **observations** | manual_coverage_pts=5, churn_90d=3 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Rationale drift to soften: sidecar.rs now documents a restart backoff and a /health gate, so respawn is no longer literally 'the instant the old one exits'. The two-writer window and the silent-loss consequence are unchanged — it still neither waits on nor detects a WAL write lock. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1652,10 +1692,10 @@ an unbounded respawn loop.
 | **governs** | `crates/fleetd/src/server.rs`, `crates/fleetd/src/store.rs` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L5 × I4 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=26 (churn_pts=5), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=6 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1684,10 +1724,10 @@ served within a budget while the burst is in flight, and that no events are drop
 | **governs** | `crates/fleetd/src/store.rs`, `crates/fleetd/src/server.rs`, `cockpit/ui/src/lib/store.svelte.ts` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L5 × I4 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=26 (churn_pts=5), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=6 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1713,10 +1753,10 @@ repeated daemon restarts do not monotonically grow the db.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/server.rs:docker_ok`, `crates/fleetd/src/server.rs:create_swarm#docker-preflight` |
 | **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=26 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1743,10 +1783,10 @@ spawn one subprocess), that an injected 60 s probe returns `false` within a stat
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/server.rs:env_f64`, `crates/fleetd/src/server.rs:env_usize` |
 | **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=26 (churn_pts=5) |
+| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1773,10 +1813,10 @@ plus a companion asserting an `AppState` built with `CC_GLOBAL_USD_CAP=0` does n
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/server.rs:stream_to_socket#lagged-recv-arm`, `crates/fleetd/src/server.rs:stream_to_socket#no-recv-loop` |
 | **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=4, branches=11 (branch_pts=4), churn_90d=26 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=11 (branch_pts=4), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1805,10 +1845,10 @@ terminates.
 | **governs** | `crates/fleetd/src/server.rs`, `crates/fleetd/src/bin/serve.rs`, `cockpit/ui/src-tauri/tauri.conf.json` |
 | **last_manual_pass** | — (never_verified) |
 | **risk** | L5 × I4 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=26 (churn_pts=5), never_verified=true |
+| **observations** | manual_coverage_pts=5, churn_90d=6 (churn_pts=4), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1836,11 +1876,11 @@ is chosen, the test freezes it. Add the corresponding human row.
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/server.rs:post_command` |
-| **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=26 (churn_pts=5) |
+| **risk** | L3 × I4 = **12** |
+| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1867,10 +1907,10 @@ same `cmd_id` on that unit's stream.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/server.rs:list_units`, `crates/fleetd/src/server.rs:health`, `crates/fleetd/src/server.rs:get_unit`, `cockpit/ui/src/lib/types.ts:Snapshot` |
 | **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=26 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 4 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1897,10 +1937,10 @@ payload against a literal list, failing on missing **and** extra keys, and that 
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/server.rs:create_mission#real-mode-preflight`, `crates/fleetd/src/server.rs:create_swarm#real-mode-preflight` |
 | **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=2, branches=9 (branch_pts=3), churn_90d=26 (churn_pts=5) |
+| **observations** | coverage_pts=2, branches=9 (branch_pts=3), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1926,10 +1966,10 @@ a rejected request does not burn a swarm id.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/server.rs:spawn_driver_for#real-arm`, `crates/fleetd/src/server.rs:rehydrate#real-arm`, `crates/fleetd/src/server.rs:resume_fan_out` |
 | **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=4, branches=8 (branch_pts=3), churn_90d=26 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=8 (branch_pts=3), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1955,10 +1995,10 @@ is spawned rather than a silent promotion to a real run.
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/server.rs:spawn_forwarder#ignored-store-write-error` |
 | **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=2, branches=6 (branch_pts=3), churn_90d=26 (churn_pts=5) |
+| **observations** | coverage_pts=2, branches=6 (branch_pts=3), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -1982,11 +2022,11 @@ is emitted.
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/bin/serve.rs:main` |
-| **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=5, branches=1 (branch_pts=1), churn_90d=5 (churn_pts=3) |
+| **risk** | L3 × I4 = **12** |
+| **observations** | coverage_pts=5, branches=1 (branch_pts=1), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2015,10 +2055,10 @@ mid-mission leaves a coherent `last_seq` when a second process reads the same db
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/server.rs:get_swarm` |
 | **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=4, branches=6 (branch_pts=3), churn_90d=26 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=6 (branch_pts=3), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2045,10 +2085,11 @@ non-terminal, `done` only when both are terminal, never `done` when `total == 0`
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/Cargo.toml:[workspace]`, `Cargo.toml:workspace.members`, `.github/workflows/ci.yml:jobs.test` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=10 (churn_pts=4) |
+| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Phase 3 REFUTED the proposed closure. `cargo test (cockpit)` now runs on every PR (3cc1ae6), so the literal title is false and risk should fall — but the entry's own Concrete test specified a repo-root guard walking every Cargo.toml to catch the NEXT standalone crate, and no test in any language reads a workflow file or walks manifests. The job is also advisory, not required, which is the harm the entry's rationale names verbatim. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2077,11 +2118,11 @@ crate cannot silently drop out.
 | **anchors** | `cockpit/ui/src-tauri/src/sidecar.rs:supervise` |
 | **governs** | `cockpit/ui/src-tauri/src/sidecar.rs` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L4 × I5 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=1 (churn_pts=2), never_verified=true |
+| **risk** | L3 × I5 = **15** |
+| **observations** | manual_coverage_pts=5, churn_90d=0 (churn_pts=1), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2106,10 +2147,10 @@ Manual row: kill `fleetd-serve` from outside the app and confirm exactly one lis
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/sidecar.rs:health_gate`, `cockpit/ui/src-tauri/src/sidecar.rs:pump_events#gate-spawn` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=5 (branch_pts=2), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=5 (branch_pts=2), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2135,10 +2176,10 @@ doc promises.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/sidecar.rs:emit_status`, `cockpit/ui/src-tauri/src/sidecar.rs:STATUS_EVENT` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2163,10 +2204,10 @@ documents the dead channel rather than leaving it to be rediscovered.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/view_plugins.rs:built`, `cockpit/ui/src-tauri/src/view_plugins.rs:PLUGIN_CSP` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2193,10 +2234,10 @@ module** — `built` takes no `AppHandle`, so it is a plain `#[test]`.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/view_plugins.rs:respond#path-traversal-and-id-validation` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=14 (branch_pts=4), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=14 (branch_pts=4), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2222,10 +2263,10 @@ assert `/id` defaults to `index.html` and `/id/sdk.js` takes the SDK branch.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/view_plugins.rs:plugin_roots#dev-env-precedence`, `cockpit/ui/src-tauri/src/view_plugins.rs:sdk_bytes` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=3 (branch_pts=2), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=3 (branch_pts=2), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2250,10 +2291,10 @@ only its own entry, and that `USERPROFILE` wins over `HOME`. Same shape for `sdk
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/embedding.rs:WebviewPool::touch_and_evict` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=3 (branch_pts=2), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=3 (branch_pts=2), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2282,11 +2323,11 @@ label; `lru.len()` never exceeds `WARM_CAP`.
 | **layer** | tauri-host |
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/embedding.rs:app_label`, `cockpit/ui/src-tauri/capabilities/default.json:app-plugins`, `cockpit/ui/src-tauri/src/embedding.rs:HOST_WINDOW_LABEL` |
-| **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=4 (churn_pts=3) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2314,11 +2355,11 @@ trailing `*` stripped, is a prefix of `app_label("x")`; assert `HOST_WINDOW_LABE
 | **layer** | tauri-host |
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/tauri.conf.json:app.security.csp`, `cockpit/ui/src-tauri/src/view_plugins.rs:PLUGIN_CSP`, `cockpit/ui/src/lib/loader.ts:pluginSrc` |
-| **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=3 (churn_pts=3) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2345,11 +2386,11 @@ the app; smoke rows 1.3/1.10 were Windows-only and are recorded "not run".
 | **layer** | tauri-host |
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/sidecar.rs:FLEETD_ADDR`, `cockpit/ui/src-tauri/tauri.conf.json:app.security.csp`, `cockpit/ui/src/lib/api.ts:BASE`, `crates/fleetd/src/bin/serve.rs:main#cc-addr` |
-| **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=5 (churn_pts=3) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 4 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2373,10 +2414,10 @@ asserted nowhere.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/tauri.conf.json:plugins.updater`, `cockpit/ui/src-tauri/src/lib.rs:run#updater-registration` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=2 (branch_pts=1), churn_90d=10 (churn_pts=4) |
+| **observations** | coverage_pts=5, branches=2 (branch_pts=1), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2402,10 +2443,10 @@ key and verifying pubkey cannot be configured one-sidedly.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/lib.rs:run#exit-requested`, `cockpit/ui/src-tauri/src/lib.rs:run#generate-handler` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=2 (branch_pts=1), churn_90d=10 (churn_pts=4) |
+| **observations** | coverage_pts=5, branches=2 (branch_pts=1), churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2431,10 +2472,11 @@ byte offset than `stop_all_owned`, which precedes `app_handle.exit(0)`; and asse
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/dashboard.rs:run_halyard`, `cockpit/ui/src-tauri/src/dashboard.rs:halyard_status`, `cockpit/ui/src-tauri/src/local_projects.rs:scan_local_projects` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=2 (churn_pts=2) |
+| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Cross-reference correction: the rationale still asserts 'this crate's tests do not run in CI (GAP-057)', which is now false — jobs.test-cockpit runs the guard on every PR. That strengthens the signature ratchet but changes nothing about the untested blocking call, which remains unexercised (no tokio test server and no #[tokio::test] anywhere in the crate). Also worth folding in: feedback_issues (dashboard.rs:126-148, added 2a651af) is a THIRD untimed reqwest::Client::new() with its own third error policy, same defect class, outside the entry's current anchors. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2461,10 +2503,10 @@ within a bounded time, which fails today and forces a timeout to exist.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/dashboard.rs:audience_health`, `cockpit/ui/src-tauri/src/dashboard.rs:audience_posts` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2490,10 +2532,10 @@ failure the adapter is not written to handle.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src-tauri/src/local_projects.rs:discover#excludes-and-max-depth`, `cockpit/ui/src-tauri/src/local_projects.rs:scan_local_projects#pin-dedup` |
 | **risk** | L2 × I5 = **10** |
-| **observations** | coverage_pts=2, branches=5 (branch_pts=2), churn_90d=2 (churn_pts=2) |
+| **observations** | coverage_pts=2, branches=5 (branch_pts=2), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2519,10 +2561,10 @@ with backslashes against forward-slash discovery and assert dedup still holds.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/App.svelte:$effect#app-plugin-compositing` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=4 (branch_pts=2), churn_90d=8 (churn_pts=4) |
+| **observations** | coverage_pts=4, branches=4 (branch_pts=2), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2547,10 +2589,10 @@ assert `plugin_show` count is 2. Plus: no re-issue of `plugin_hide` on an unrela
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/App.svelte:$effect#rect-glue-resizeobserver` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=8 (churn_pts=4) |
+| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2576,10 +2618,10 @@ stops further emissions.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/App.svelte:$effect#view-plugin-bridge`, `cockpit/ui/src/App.svelte:onSwitch#view-prefix-arm` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=8 (churn_pts=4) |
+| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2606,10 +2648,10 @@ and unmounts. Re-enter and assert no accumulation.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/App.svelte:$effect#view-plugin-bridge#onkill-fallback` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=8 (churn_pts=4) |
+| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2634,10 +2676,10 @@ app-plugin parking, 1.8 is leak-on-switch). A human smoke run would essentially 
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/App.svelte:selectApp#no-in-flight-guard` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=8 (churn_pts=4) |
+| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2666,10 +2708,10 @@ already-healthy re-entry short-circuit.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/api.ts:openStream`, `cockpit/ui/src/lib/api.ts:createMission`, `cockpit/ui/src/lib/api.ts:sendCommand` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=3 (branch_pts=2), churn_90d=2 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=3 (branch_pts=2), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2698,10 +2740,10 @@ socket-lifecycle contract, which is where the intended behaviour gets decided.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/store.svelte.ts:dispose`, `cockpit/ui/src/lib/store.svelte.ts:start#started-latch` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=3 (churn_pts=3) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2727,10 +2769,10 @@ contract.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/fleet.ts:fold#blocked-reason-literals`, `crates/fleetd/src/retry.rs:RL_REASON`, `crates/fleetd/src/driver.rs:drive#awaiting-slot-reason` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=19 (churn_pts=5) |
+| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2756,11 +2798,11 @@ that those literals are the ones emitted.
 | **layer** | vitest |
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/fleet.ts:phaseClass`, `cockpit/ui/src/lib/fleet.ts:progress` |
-| **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=4, branches=6 (branch_pts=3), churn_90d=3 (churn_pts=3) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=4, branches=6 (branch_pts=3), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2785,10 +2827,10 @@ expected bucket; assert `progress` is monotonic non-decreasing along the happy p
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/App.svelte:canHalt`, `cockpit/ui/src/App.svelte:canResume`, `cockpit/ui/src/lib/fleet.ts:ATTENTION` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=8 (churn_pts=4) |
+| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2812,10 +2854,11 @@ of RESUME/SHIP/HALT/ABANDON as a table; then assert the set `canHalt` excludes e
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/loader.ts:negotiateCapabilities`, `cockpit/ui/src/lib/bridge.ts:PluginBridge.onWindowMessage#capabilities-fallback`, `cockpit/ui/src/App.svelte:$effect#view-plugin-bridge` |
 | **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=8 (churn_pts=4) |
+| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Phase 3 REFUTED the proposed closure. D-2 is HALF fixed and the halves now contradict: f275c44 changed only PluginBridge.onWindowMessage (bridge.ts:608 -> `?? []`), while PluginSession's constructor (bridge.ts:345) still reads `opts.capabilities ?? [...HOST_CAPABILITIES]` and bridge.ts:613 builds the session from the same opts — so a grant-less handshake ships `init: []` on the wire while the session holds the full host set. Nothing enforces: `this.capabilities` is read only by the `advertisedCapabilities` getter ('for tests/introspection'); tick() posts log-append unconditionally; the real-launch path never checks the grant. Deleting App.svelte:242-243 reinstates the original defect with all 166 tests green. Side effect: bridge.ts:345's surviving host-set default now has zero coverage. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2841,11 +2884,11 @@ negotiated `['log-append']`. Red today, and that is the point.
 | **layer** | vitest |
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/bridge.ts:PluginSession.onCommand#rate-limited`, `cockpit/ui/src/lib/bridge.ts:PluginSession.onCommand#sink-error` |
-| **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=4, branches=7 (branch_pts=3), churn_90d=1 (churn_pts=2) |
+| **risk** | L4 × I4 = **16** |
+| **observations** | coverage_pts=4, branches=7 (branch_pts=3), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2873,10 +2916,10 @@ rejection escaping the `void this.onCommand(m)` call site.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/bridge.ts:PluginSession.onReady#autotick-timer`, `cockpit/ui/src/lib/bridge.ts:PluginSession.onReady#duplicate-ready` |
 | **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2902,11 +2945,11 @@ assert 3+ delta pushes; `destroy()`, advance, and assert no further `state` and
 | **layer** | vitest |
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/bridge.ts:PluginSession.handleMessage#version-skew-drop`, `cockpit/ui/src/lib/bridge.ts:PluginBridge.onWindowMessage#hostile-hello` |
-| **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=4, branches=7 (branch_pts=3), churn_90d=1 (churn_pts=2) |
+| **risk** | L4 × I4 = **16** |
+| **observations** | coverage_pts=4, branches=7 (branch_pts=3), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2934,10 +2977,10 @@ over the port and assert no ack, no sink call, `isAlive` still true, and no exce
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/bridge.ts:policeCommand#min-review-rounds-bounds`, `cockpit/ui/src/lib/bridge.ts:policeCommand#reqid-validation` |
 | **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=4, branches=27 (branch_pts=5), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=4, branches=27 (branch_pts=5), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2965,10 +3008,10 @@ with a non-string `reqId` still produces an ack with `reqId: ''` rather than thr
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/loader.ts:validateManifest#entry-traversal-variants`, `cockpit/ui/src-tauri/src/view_plugins.rs:respond#component-check` |
 | **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=4, branches=15 (branch_pts=4), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=4, branches=15 (branch_pts=4), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -2988,7 +3031,7 @@ a literal `ccplugin://localhost/<id>/` prefix with no `..` segment. Mirror the c
 | field | value |
 |---|---|
 | **status** | `open` |
-| **claim_type** | `untested-symbol` |
+| **claim_type** | `untested-branch` |
 | **layer** | vitest |
 | **verified_by** | automated |
 | **anchors** | `cockpit/plugin-sdk/index.js:attach`, `cockpit/plugin-sdk/index.js:connect#handshake-timeout` |
@@ -2996,7 +3039,8 @@ a literal `ccplugin://localhost/<id>/` prefix with no `..` segment. Mirror the c
 | **observations** | coverage_pts=4, branches=18 (branch_pts=4), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | claim_type corrected from `untested-symbol`: applying that procedure literally FALSIFIES the anchors, because attach and connect are both direct calls from plugin-sdk.test.ts. The real claim is lifetime at branch granularity — the four unsubscribe closures are never invoked, there is no close()/dispose so port.onmessage and the pending map can never be released, #handshake-timeout is unexercised (the single connect test passes no timeoutMs and its fake parent replies synchronously), the kill -> unacked -> hung-promise chain is undriven, and attach takes init.apiVersion on trust. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3031,7 +3075,7 @@ assert `connect({timeoutMs:3000})` rejects at the deadline **and** removes its l
 | **observations** | coverage_pts=5, branches=6 (branch_pts=3), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3059,11 +3103,12 @@ awaiting-approval banner renders with no clickable control.
 | **layer** | vitest |
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/App.svelte:VIEW_PLUGIN_INDEX`, `cockpit/ui/src/lib/loader.ts:devPluginSource`, `plugins/reference/manifest.json` |
-| **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=8 (churn_pts=4) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Sub-claim now stale: the entry states tauri.conf.json declares no bundle.resources, but tauri.conf.json:33-36 now maps ../../../plugins/reference/ and ../../plugin-sdk/index.js (added by #49). The primary duplicated-logic claim is untouched — App.svelte:45-55 still inlines VIEW_PLUGIN_INDEX, loader.ts's devPluginSource/packagedPluginSource are referenced only by loader.test.ts and by no app code, and no test imports plugins/reference/manifest.json. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3093,11 +3138,11 @@ assertion that the plugin and SDK paths are declared as bundle resources.
 | **anchors** | `cockpit/ui/src/App.svelte:selectViewPlugin`, `cockpit/ui/src/lib/bridge.ts:PluginSession.kill` |
 | **governs** | `cockpit/ui/src/App.svelte`, `cockpit/ui/src/lib/bridge.ts` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L5 × I4 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=8 (churn_pts=4), never_verified=true |
+| **risk** | L4 × I5 = **20** |
+| **observations** | manual_coverage_pts=5, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3126,11 +3171,11 @@ handshake. Pre-automate the shell half (`GAP-076`).
 | **anchors** | `cockpit/ui/src/App.svelte:localReader`, `cockpit/ui/src/lib/dashboard/adapters/local.ts:localCards#zero-docs` |
 | **governs** | `cockpit/ui/src/App.svelte`, `cockpit/ui/src/lib/dashboard/adapters/local.ts`, `cockpit/ui/src-tauri/src/local_projects.rs` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L5 × I3 = **15** |
-| **observations** | manual_coverage_pts=5, churn_90d=8 (churn_pts=4), never_verified=true |
+| **risk** | L4 × I5 = **20** |
+| **observations** | manual_coverage_pts=5, churn_90d=5 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3160,7 +3205,7 @@ confirm the LOCAL lane says something.
 | **observations** | coverage_pts=4, branches=4 (branch_pts=2), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3191,7 +3236,7 @@ hold a reader's promise across three intervals and assert `status()` was called 
 | **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3220,10 +3265,10 @@ assert `health: 'unknown'` rather than a throw. `localCards` with pathological `
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/lib/dashboard/adapters/halyard.ts:halyardCards#app-scoped-proposal-key` |
 | **risk** | L3 × I3 = **9** |
-| **observations** | coverage_pts=4, branches=4 (branch_pts=2), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=4, branches=4 (branch_pts=2), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3250,7 +3295,8 @@ assert the card is Blocked with gate `approval`. It is `Live` with no blocked af
 | **observations** | coverage_pts=4, branches=18 (branch_pts=4), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | HALF-CLOSED, 1 of 2 anchor_sites. PR #69 (d1de1c7) rewrote audience pipelineFor into a CLASSIFY record with an explicit fallback and added adapters.test.ts:119 with fixture status 'a_status_from_the_future' — a direct hit on the audience anchor. The halyard default arm (halyard.ts:61) still has no unrecognised-state fixture, so the entry does not close. Consider splitting per-adapter. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3279,7 +3325,7 @@ behaviour so a future mapping change is visible.
 | **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3309,7 +3355,7 @@ constant).
 | **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 4 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3339,10 +3385,10 @@ render with unresolved readers and assert the pre-first-poll state is not the em
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/src/views/Dashboard.svelte:onMount#onpluginstate-guard`, `cockpit/ui/src/App.svelte:dashboard-mount` |
 | **risk** | L3 × I3 = **9** |
-| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=8 (churn_pts=4) |
+| **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3371,7 +3417,7 @@ prop, plus a live-render Dashboard case invoking the captured callback and asser
 | **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3397,7 +3443,8 @@ of "which stages are off-pipeline" can drift silently. Add a fourth off-pipeline
 | **observations** | coverage_pts=3, branches=3 (branch_pts=2), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | STRENGTHENED: feedback.ts:62-73 (c94feac) is a FOURTH hand-copied degraded-card clone alongside halyard.ts:99-114, audience.ts:107-123 and local.ts:52-57, with divergent family/projectId/detail. Each adapter still calls now() twice. Risk should rise, not fall. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3429,7 +3476,7 @@ sources asserting the invariant degraded-card contract and that `Date.parse(nowI
 | **observations** | manual_coverage_pts=5, churn_90d=1 (churn_pts=2), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3463,7 +3510,7 @@ that prune ran. Then repeat with `reason=clear` and assert nothing is appended.
 | **observations** | manual_coverage_pts=5, churn_90d=3 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3494,7 +3541,7 @@ change does rewrite inside the window; a corrupt scratch recovers).
 | **observations** | coverage_pts=4, branches=3 (branch_pts=2), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3523,7 +3570,7 @@ and assert `timeline.jsonl` is unchanged **and** `scratch/<sid>.json` still exis
 | **observations** | coverage_pts=4, branches=11 (branch_pts=4), churn_90d=2 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3551,11 +3598,11 @@ lines), and that `latest.md` is complete rather than a truncated interleave. Add
 | **layer** | node-session-state |
 | **verified_by** | automated |
 | **anchors** | `plugins/session-state/src/keying.mjs:stateDir`, `plugins/session-state/src/keying.mjs:repoKey`, `plugins/session-state/src/gitfacts.mjs:collectGitFacts#status-failure` |
-| **risk** | L3 × I2 = **6** |
+| **risk** | L4 × I2 = **8** |
 | **observations** | coverage_pts=4, branches=9 (branch_pts=3), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3586,7 +3633,7 @@ the result is rejected or clearly marked degraded rather than reporting `branch:
 | **observations** | coverage_pts=4, branches=4 (branch_pts=2), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3616,7 +3663,7 @@ set. Assert every entry has `type: 'command'`, `command: 'node'`, an `args[0]` u
 | **observations** | coverage_pts=4, branches=7 (branch_pts=3), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3638,16 +3685,19 @@ contains a space, and asserting the printed retry command is absolute and shell-
 
 | field | value |
 |---|---|
-| **status** | `open` |
+| **status** | `covered` |
 | **claim_type** | `untested-symbol` |
 | **layer** | build_ci_gate |
 | **verified_by** | automated |
 | **anchors** | `.github/workflows/ci.yml:jobs`, `cockpit/ui/package.json:scripts.test` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=4 (churn_pts=3) |
+| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | closure carries four conditions: mint GAP-133 for the enforcement gap; no regression pin exists (scripts/ci-shape.test.mjs absent); tier_map.vitest in_ci and the §1 per-tier row must flip in the same edit; title's "135 tests" is now 166 |
+| **covered_since** | `3cc1ae6` (2026-08-15, PR #60) |
+| **covering_test** | `.github/workflows/ci.yml:jobs.test-ui` (`vitest (cockpit/ui)` -> `npm test` -> `vitest run`) |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3672,10 +3722,10 @@ Fails today; passes once the step is added.
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/package.json:scripts.check`, `cockpit/ui/tsconfig.node.json:include` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=4 (churn_pts=3) |
+| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3702,10 +3752,10 @@ enabling `noUnusedLocals`/`noFallthroughCasesInSwitch`, applied to exactly one 9
 | **verified_by** | automated |
 | **anchors** | `.github/workflows/ci.yml:jobs.test`, `plugins/session-state/test`, `tools/budget-checkpoint/pyproject.toml:[tool.pytest.ini_options]`, `tools/cache-countdown/pyproject.toml:[tool.pytest.ini_options]` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=4 (churn_pts=3) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 4 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3731,10 +3781,11 @@ degrades every future Claude Code session, and 105 passing tests would never not
 | **verified_by** | automated |
 | **anchors** | `.github/workflows/ci.yml:jobs` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=4 (churn_pts=3) |
+| **observations** | coverage_pts=5, branches=0 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Phase 3 REFUTED the proposed closure. Split proposed: retire the Rust fmt+clippy sub-claim (evidence 3cc1ae6/#60), keep open (a) no JS/TS lint or format gate anywhere — eslint/prettier absent repo-wide, svelte-check/tsc are type checkers; (b) the job is advisory, not required; (c) no ci-shape assertion pins it. Risk should fall from 20 but not to zero. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3759,10 +3810,10 @@ the root workspace **and** over `cockpit/ui/src-tauri` (which needs its own `--m
 | **verified_by** | automated |
 | **anchors** | `.github/workflows/release.yml:jobs.release` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=5, branches=2 (branch_pts=1), churn_90d=2 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=2 (branch_pts=1), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3787,10 +3838,10 @@ does, before the `tauri-action` step. Cheapest real fix: `uses: ./.github/workfl
 | **verified_by** | automated |
 | **anchors** | `.github/workflows/ci.yml:jobs.test#ignored-its`, `crates/fleetd/tests/local_docker_it.rs`, `crates/fleetd/tests/preflight_it.rs` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=4 (churn_pts=3) |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3815,11 +3866,11 @@ workflow exists so the gap cannot be quietly forgotten.
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/fake.rs:provision#no-failure-knob`, `crates/fleetd/src/fake.rs:list_unit_containers#no-failure-knob`, `crates/fleetd/src/driver.rs:drive#provisioning-err-arm` |
-| **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=10 (churn_pts=4) |
+| **risk** | L3 × I5 = **15** |
+| **observations** | coverage_pts=4, branches=0 (branch_pts=1), churn_90d=8 (churn_pts=4) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3847,11 +3898,11 @@ arm's full contract, and assert `reconcile_on_startup`/`reconcile_tick` emit no 
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/gh_forge.rs:trial_merge`, `crates/fleetd/src/gh_forge.rs:ensure_clone`, `crates/fleetd/src/gh_forge.rs:open_pr` |
-| **risk** | L4 × I4 = **16** |
+| **risk** | L3 × I4 = **12** |
 | **observations** | coverage_pts=4, branches=1 (branch_pts=1), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3880,11 +3931,11 @@ program names injectable and drive `open_pr` against stub scripts emitting canne
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/local_docker.rs:valid_repo_url`, `crates/fleetd/src/local_docker.rs:has_diff#exit-code-polarity`, `crates/fleetd/src/local_docker.rs:commit_all#nothing-to-commit`, `crates/fleetd/src/local_docker.rs:discard#swallowed-result` |
-| **risk** | L4 × I4 = **16** |
-| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=9 (churn_pts=4) |
+| **risk** | L3 × I4 = **12** |
+| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=3 (churn_pts=3) |
 | **anchor_sites** | 4 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3916,11 +3967,11 @@ volume_name(unit_id)` over hostile ids including ones containing `cc_` internall
 | **anchors** | `crates/fleetd/src/local_docker.rs:teardown`, `crates/fleetd/src/local_docker.rs:reap_unit` |
 | **governs** | `crates/fleetd/src/local_docker.rs`, `crates/fleetd/src/reconcile.rs` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L5 × I4 = **20** |
-| **observations** | manual_coverage_pts=5, churn_90d=9 (churn_pts=4), never_verified=true |
+| **risk** | L4 × I4 = **16** |
+| **observations** | manual_coverage_pts=5, churn_90d=3 (churn_pts=3), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3948,11 +3999,11 @@ row. Automate the decision half now: assert a unit terminating in `Failed` bumps
 | **layer** | rust-workspace |
 | **verified_by** | automated |
 | **anchors** | `crates/fleetd/src/fake.rs:provision#skips-spec-validation`, `crates/fleetd/src/local_docker.rs:provision#spec-validation`, `crates/fleetd/src/gh_forge.rs:guard_branch` |
-| **risk** | L3 × I4 = **12** |
-| **observations** | coverage_pts=2, branches=4 (branch_pts=2), churn_90d=10 (churn_pts=4) |
+| **risk** | L2 × I5 = **10** |
+| **observations** | coverage_pts=2, branches=4 (branch_pts=2), churn_90d=4 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -3980,10 +4031,10 @@ Separately assert `valid_git_branch(s) == guard_branch(s).is_ok()` over one shar
 | **verified_by** | automated |
 | **anchors** | `cockpit/ui/package.json:scripts.bundle`, `.github/workflows/ci.yml:jobs.build`, `cockpit/ui/scripts/build-sidecar.mjs:dest` |
 | **risk** | L3 × I5 = **15** |
-| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=7 (churn_pts=4) |
+| **observations** | coverage_pts=4, branches=2 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4012,11 +4063,12 @@ exactly what `externalBin` resolves.
 | **layer** | node-embargo |
 | **verified_by** | automated |
 | **anchors** | `scripts/embargo-guard.mjs:modeAll`, `scripts/embargo-guard.mjs:runOverFiles#skip-paths`, `scripts/embargo-guard.mjs:modeAddEntry` |
-| **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=4, branches=6 (branch_pts=3), churn_90d=3 (churn_pts=3) |
+| **risk** | L4 × I3 = **12** |
+| **observations** | coverage_pts=4, branches=6 (branch_pts=3), churn_90d=4 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Subject code DELETED. All three anchors point into scripts/embargo-guard.mjs, removed wholesale in cb11214 ('chore: remove the embargo guard', 2026-08-30) along with its test file, the CI job, both git hooks and the denylist. Rename-follow performed: git log --follow terminates at cb11214 with no successor, and git log -S 'modeAll' shows the symbol added in aff09e9 and removed in cb11214, never relocated. 'The subject was deleted' is not one of the twelve legal transitions, so this needs human adjudication rather than a status move. The node-embargo TIER is orphaned by the same commit and should be removed from tier_map. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4047,10 +4099,11 @@ file, that re-adding exits 1, and that a second add preserves the first entry.
 | **verified_by** | automated |
 | **anchors** | `.githooks/pre-commit:GUARD_ROOT`, `.githooks/commit-msg:GUARD_ROOT`, `.github/workflows/ci.yml:jobs.embargo#base-ref-fallback` |
 | **risk** | L4 × I5 = **20** |
-| **observations** | coverage_pts=5, branches=2 (branch_pts=1), churn_90d=4 (churn_pts=3) |
+| **observations** | coverage_pts=5, branches=2 (branch_pts=1), churn_90d=5 (churn_pts=3) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Subject code DELETED, same commit cb11214: .githooks/pre-commit (-24), .githooks/commit-msg (-19) and ci.yml's embargo job (-65 lines). Rename-follow confirms removal, not relocation; .githooks/ no longer exists and ci.yml has no embargo job among its six. Needs the same human adjudication as GAP-122 — the claim has no subject rather than being covered. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4082,7 +4135,7 @@ Extract the CI shell into `scripts/collect-commit-messages.sh` and cover both br
 | **observations** | coverage_pts=5, branches=8 (branch_pts=3), churn_90d=1 (churn_pts=2) |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4109,11 +4162,11 @@ the same check the script prints, but as an assertion inside `cargo test --works
 | **anchors** | `cockpit/ui/index.html:head` |
 | **governs** | `cockpit/ui/index.html`, `cockpit/ui/src-tauri/tauri.conf.json` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L4 × I3 = **12** |
-| **observations** | manual_coverage_pts=5, churn_90d=1 (churn_pts=2), never_verified=true |
+| **risk** | L4 × I5 = **20** |
+| **observations** | manual_coverage_pts=5, churn_90d=2 (churn_pts=2), never_verified=true |
 | **anchor_sites** | 1 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4140,10 +4193,10 @@ intentional rather than accidental fallback.
 | **verified_by** | automated |
 | **anchors** | `tools/budget-checkpoint/hooks/budget-checkpoint.ps1:script`, `tools/cache-countdown/hooks/cache-timer-write.ps1:script`, `tools/cache-countdown/hooks/cache-timer-resume.ps1:script` |
 | **risk** | L4 × I2 = **8** |
-| **observations** | coverage_pts=5, branches=9 (branch_pts=3), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=9 (branch_pts=3), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4176,10 +4229,10 @@ and a drive-root `cwd`. Extract the shared body into one `Write-CacheTimer -Stop
 | **verified_by** | automated |
 | **anchors** | `tools/lane-z-integration/deploy_globals.py:merge_settings`, `tools/lane-z-integration/deploy_globals.py:append_claude_md`, `tools/lane-z-integration/deploy_globals.py:deploy_tools`, `tools/lane-z-integration/deploy_globals.py:recall_command` |
 | **risk** | L4 × I2 = **8** |
-| **observations** | coverage_pts=5, branches=13 (branch_pts=4), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=13 (branch_pts=4), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 4 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4209,12 +4262,13 @@ config dir containing a space.
 | **claim_type** | `untested-branch` |
 | **layer** | pytest |
 | **verified_by** | automated |
-| **anchors** | `tools/context-offload/offload.py:upsert_index#regex-replacement-escape`, `tools/context-offload/offload.py:resolve_memory_dir#unsanitized-slug`, `tools/context-offload/recall.py:main` |
+| **anchors** | `tools/context-offload/offload.py:upsert_index#regex-replacement-escape`, `tools/context-offload/offload.py:main#unsanitized-slug`, `tools/context-offload/recall.py:main` |
 | **risk** | L4 × I2 = **8** |
-| **observations** | coverage_pts=5, branches=7 (branch_pts=3), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=7 (branch_pts=3), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Second anchor RE-ANCHORED: the #unsanitized-slug condition is real but does not live at resolve_memory_dir, which never receives --slug. The bypass is main:134 (`slug = args.slug or slugify(args.title)`) flowing into write_note:83. Re-anchored rather than dropped. #regex-replacement-escape confirmed at offload.py:103-113: the caller-supplied summary is passed as the replacement argument to line_re.sub, so a backslash path or \1/\g<0> is interpreted — and only on the update branch. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4246,11 +4300,11 @@ that a 500-entry index stays inside the 5 s budget.
 | **anchors** | `tools/cache-countdown/src/cache_countdown/core.py:cost_at_stake`, `tools/cache-countdown/src/cache_countdown/ticker.py:_self_test` |
 | **governs** | `tools/cache-countdown/**` |
 | **last_manual_pass** | — (never_verified) |
-| **risk** | L4 × I2 = **8** |
-| **observations** | manual_coverage_pts=5, churn_90d=1 (churn_pts=2), never_verified=true |
+| **risk** | L3 × I2 = **6** |
+| **observations** | manual_coverage_pts=5, churn_90d=0 (churn_pts=1), never_verified=true |
 | **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4282,12 +4336,13 @@ either wire a `cached_tokens` writer or document the feature as inert.
 | **claim_type** | `untested-symbol` |
 | **layer** | pytest |
 | **verified_by** | automated |
-| **anchors** | `tools/budget-checkpoint/src/budget_checkpoint/hook.py:main`, `tools/cache-countdown/src/cache_countdown/ticker.py:main`, `tools/budget-checkpoint/src/budget_checkpoint/core.py:count_turns` |
+| **anchors** | `tools/budget-checkpoint/src/budget_checkpoint/hook.py:main`, `tools/cache-countdown/src/cache_countdown/ticker.py:main` |
 | **risk** | L3 × I2 = **6** |
-| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=1 (churn_pts=2) |
-| **anchor_sites** | 3 |
+| **observations** | coverage_pts=4, branches=5 (branch_pts=2), churn_90d=0 (churn_pts=1) |
+| **anchor_sites** | 2 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Third anchor DROPPED: core.py:count_turns has a genuine direct call (test_core.py:41-70, four tests), so under the untested-symbol procedure that anchor fails and cannot carry the entry. The two `main` anchors do carry it — neither module's main is imported or invoked, and no test uses subprocess or sys.stdin, so the console-script process boundary is unexecuted. The residual perf concern about count_turns is a different claim and needs its own entry if wanted. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4319,10 +4374,11 @@ scaled perf assertion on `count_turns` against a 40 k-line transcript.
 | **verified_by** | automated |
 | **anchors** | `tools/budget-checkpoint/install.ps1:script`, `tools/cache-countdown/install.ps1:script`, `tools/cache-countdown/install.ps1:Get-HookEntries` |
 | **risk** | L4 × I2 = **8** |
-| **observations** | coverage_pts=5, branches=3 (branch_pts=2), churn_90d=1 (churn_pts=2) |
+| **observations** | coverage_pts=5, branches=3 (branch_pts=2), churn_90d=0 (churn_pts=1) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-13 |
-| **last_verified** | 2026-08-13 @ `a3edc78` (static-only) |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Wording correction proposed: '85 lines twice' is overstated. The files are 74 and 88 lines with ~43 non-blank lines common verbatim — identical param/$InstallDir block, identical four-call Copy-Item sequence, identical uv block, identical trailing ConvertTo-Json; cache is a superset, not a copy. Both shared hazards stand and are untested: the recursive Copy-Item nesting hazard is byte-identical in both, and neither file carries '#requires -Version', so the ConvertTo-Json single-element-unwrap hazard under PowerShell 5.1 is undefended in both. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4348,17 +4404,18 @@ JSON has an array of matcher objects. Then factor the shared body into one param
 | field | value |
 |---|---|
 | **status** | `open` <!-- human --> |
-| **claim_type** | `absent-coverage` |
-| **layer** | build/packaging |
+| **claim_type** | `untested-symbol` |
+| **layer** | build_ci_gate |
 | **verified_by** | manual |
-| **anchors** | `.github/workflows/ci.yml:311`, `cockpit/ui/src-tauri/tauri.conf.json`, `spikes/SPIKE-RESULTS.md#smoke-run-3` |
+| **anchors** | `.github/workflows/ci.yml:jobs.build`, `cockpit/ui/src-tauri/tauri.conf.json`, `spikes/SPIKE-RESULTS.md#smoke-run-3` |
 | **governs** | `cockpit/ui/src-tauri/tauri.conf.json`, `cockpit/ui/src-tauri/src/view_plugins.rs`, `.github/workflows/ci.yml` |
 | **last_manual_pass** | 2026-08-16 (found by inspection during Smoke run 3 preflight) |
-| **risk** | L5 × I5 = **25** |
-| **observations** | produced_a_real_defect=true (D-8), instances_of_pattern=5 |
+| **risk** | L4 × I5 = **20** |
+| **observations** | coverage_pts=5 (no gate inspects a produced bundle at all), branches=0 (a workflow job has no counted branches), produced_a_real_defect=true (D-8), instances_of_pattern=5, churn_90d=6 (churn_pts=4) |
 | **anchor_sites** | 3 |
 | **first_seen** | 2026-08-16 |
-| **last_verified** | 2026-08-16 @ `05c95ca` |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **ratification_pending** | Three machine-owned format defects corrected this run: claim_type was `absent-coverage`, which is outside the closed taxonomy; layer was `build/packaging` while every sibling uses build_ci_gate; and the anchor was `.github/workflows/ci.yml:311`, a file:line anchor the format forbids — which had ALREADY drifted (tauri build is now at :310 and 311 is blank), the exact failure the anchor rule exists to prevent. Substance unchanged: nothing on HEAD inspects a produced bundle. PR #76 proposes three assertion steps but is OPEN, so it is not credited. Partial mitigation the entry predates: packaged_plugin_root.rs guards D-8's class at CONFIG level and is CI-gated via jobs.test-cockpit, but never opens a bundle. |
 | **decision** | — |
 | **rationale** | — |
 
@@ -4396,9 +4453,100 @@ Second, structural: a smoke-test lane that **launches the built artifact headles
 handshake completes would have caught D-1, D-7 and D-8 together. That is the general fix; the unzip
 assertion is the cheap one to do first.
 
+### GAP-133 — Only one CI check can block a merge; the other four are advisory
+
+| field | value |
+|---|---|
+| **status** | `open` |
+| **claim_type** | `untested-branch` |
+| **layer** | build_ci_gate |
+| **verified_by** | automated |
+| **anchors** | `.github/workflows/ci.yml:jobs.lint`, `.github/workflows/ci.yml:jobs.check`, `.github/workflows/ci.yml:jobs.test-ui`, `.github/workflows/ci.yml:jobs.test-cockpit` |
+| **governs** | `.github/workflows/ci.yml` |
+| **risk** | L4 × I5 = **20** |
+| **observations** | coverage_pts=5 (nothing asserts which contexts are required), branches=0, churn_90d=4 (churn_pts=3) |
+| **anchor_sites** | 4 |
+| **first_seen** | 2026-09-11 |
+| **last_verified** | 2026-09-11 @ `10150fd` |
+| **decision** | — |
+| **rationale** | — |
+
+**Risk rationale.** Branch protection on `main` lists exactly one required context —
+`cargo test (workspace)` — and the ruleset list is empty. So `lint` (`fmt + clippy`), `check`
+(`svelte-check + tsc`), `test-ui` (`vitest`) and `test-cockpit` (`cargo test (cockpit)`) all run on
+every push and pull request, can go red, and **cannot stop a merge**. This is not hypothetical: `cargo fmt`
+was failing on `main` from #67 onward and **#67, #68 and #71 each merged with the gate red** — their
+merge-commit CI runs all record `failure`. It was noticed only when a human read the run list.
+
+This entry exists because three separate Phase-3 refuters reached it independently while trying to
+close `GAP-110`, `GAP-113` and `GAP-057`: each of those entries is written as "no gate exists", each
+is now false as written, and each remains substantively open for the same reason — a check that
+cannot block is a notifier, not a gate. Splitting that shared cause into its own entry is what lets
+those three be narrowed honestly instead of being held open on a premise that has expired.
+
+**Concrete test.** Assert the required-contexts list rather than the job list: in
+`scripts/ci-shape.test.mjs` (which does not yet exist and is also `GAP-110`/`GAP-113`/`GAP-057`'s
+missing pin), parse `ci.yml` for every job `name:`, then compare against a committed allowlist of
+contexts expected to be *required*; fail when a job exists that is not in it. The repo already has
+precedent for managing this deliberately — branch protection was edited when the `embargo guard`
+required check was deleted.
+
 ## 6. Change log
 
 Append-only, newest first. One dated, commit-stamped block per run.
+
+### 2026-09-11 @ `10150fd` — second run (first real re-scan)
+
+**Freshness.** Scanned at `10150fd` on `docs/testing-plan-rerun-2026-09-11`, clean tree. Per-tier:
+`tauri-host` GREEN (40/0/0), `vitest` GREEN (23 files / 166 tests, 0 skipped / 0 todo),
+`node-session-state` GREEN (52/52, 0 skipped / 0 todo). **`rust-workspace` ran but FAILED the green
+predicate** — exit 0 and 0 failures, but 3 `#[ignore]`d integration tests make `dne != 0`, so no
+`open → covered` transition was licensed for any of its 46 entries. **`pytest` could not run at all**
+(broken `.venv` shims, R8) and **`node-embargo`'s runner no longer exists** (R7).
+
+**Churn re-measured, and it moved.** The bootstrap run recorded churn as effectively lifetime churn —
+the repo was 70 days old, so a 90-day window covered everything. At 266 commits and 99 days,
+**143 commits now fall outside the window**. One whole-repo sweep over 88 unique anchor/governs paths
+re-scored every entry; no path came back without history (the deleted embargo files still have history,
+so their churn is measurable even though the files are gone). `churn_pts` now spans 1–4 with **nothing
+at 5**, where bootstrap skewed high, and Likelihood fell across the register as a direct consequence.
+
+**Phase 3 earned its keep: 1 confirmed, 6 refuted.** Seven demotion-shaped proposals were sent to
+solo adversarial refuters. Only `GAP-110` survived. The six refusals were substantive:
+- `GAP-113` and `GAP-057` — the gate exists but **cannot block**, and each entry's own specified
+  guard (`scripts/ci-shape.test.mjs`) was never written. `GAP-113` additionally has a live conjunct:
+  eslint and prettier exist nowhere, so the Svelte/TS surface has no lint *or* format gate.
+- `GAP-083` — **D-2 is only half fixed.** `f275c44` changed the `PluginBridge` fallback only;
+  `PluginSession`'s constructor still defaults to the full host set, so a grant-less handshake now
+  ships `init: []` on the wire while the session holds every capability. Nothing enforces a grant at
+  all, and deleting `App.svelte:242-243` reinstates the original defect with all 166 tests green.
+- `GAP-009` — the proposed covering tests are the half `manager.rs`'s own comments disclaim, and
+  `stop_all_owned_clears_the_running_map` asserts a condition satisfied unconditionally by a
+  `std::mem::take` **before any thread is spawned**; it would pass if every `docker compose down` failed.
+- `GAP-010` — the guard test pins `AtomicBool::swap` and nothing else: delete the call site that
+  fixed D-4 and the handler reverts to the infinite exit loop while the test stays green.
+- `GAP-005` — the responsiveness **fact** stands (1,127 + 632 samples, 0 unresponsive); what fails is
+  the claim that two existing tests cover it. `last_manual_pass` updated to the real evidence instead.
+
+**A pattern worth naming.** Three of those six refusals turn on the same shape as `GAP-132`: a test
+that passes without observing the thing it is credited with covering. Two are outright tautological.
+And #70 added a *new* instance — `parse_blockers_treats_an_absent_marker_as_clean` asserts the
+defective absent-marker behaviour as a passing test, pinning the review-gate hole rather than fixing
+it (tracked as issue #73). That makes three historical instances of a test defending a defect
+(`loader.test.ts:52`, `bridge.test.ts:360`, both since corrected) plus one live.
+
+**Corrections applied to the register's own metadata.** `GAP-132` carried three format defects — an
+out-of-taxonomy `claim_type` (`absent-coverage`), an inconsistent `layer`, and a `file:line` anchor
+that **had already drifted** (`ci.yml:311` is now a blank line), which is precisely the failure the
+anchor rule exists to prevent. Also corrected: `GAP-089`'s `claim_type` (the `untested-symbol`
+procedure literally falsifies its anchors, since `attach`/`connect` are directly called),
+`GAP-130`'s third anchor (dropped — `count_turns` has a direct call), and `GAP-128`'s
+`#unsanitized-slug` discriminator (re-anchored from `resolve_memory_dir`, which never sees the flag,
+to `main`). `GAP-097` is half-closed by #69, `GAP-102` strengthened by a fourth clone, and
+`GAP-030` is the run's only Lane-B refutation (#70 gave `steps::build`/`review`/`parse_blockers`
+direct callers).
+
+**New entry.** `GAP-133` — only `cargo test (workspace)` can block a merge; `next_id` 133 → 134.
 
 ### 2026-08-13 @ `a3edc78` — first run (bootstrap)
 
