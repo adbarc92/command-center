@@ -309,6 +309,70 @@ jobs:
       - name: Build Tauri app (unsigned)
         run: npm run tauri build
 
+      # GAP-132 — look INSIDE the bundle.
+      #
+      # A green `tauri build` says "it compiled and packaged", never "it packaged the
+      # right files". D-8 shipped a bundle containing no plugin root at all and passed
+      # a *successful* build on all three OSes, because nothing ever inspected the
+      # artifact. `src-tauri/tests/packaged_plugin_root.rs` closes the CONFIG half (the
+      # `bundle.resources` mapping exists, and its sources exist on disk); these steps
+      # close the ARTIFACT half.
+      #
+      # The two files asserted are exactly what a packaged handshake needs: the
+      # reference plugin's document, and the SDK module it imports. They are read at
+      # runtime from `resource_dir()` — see `src-tauri/src/view_plugins.rs`.
+      # Each step prints what it did find before failing, so a layout change reports
+      # itself instead of silently passing.
+      - name: Assert the bundle ships the plugin root (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          app=$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          test -n "$app" || { echo "no .app bundle was produced"; exit 1; }
+          for f in "plugins/reference/index.html" "plugin-sdk/index.js"; do
+            test -f "$app/Contents/Resources/$f" || {
+              echo "MISSING: $f is not in $app/Contents/Resources"
+              find "$app/Contents/Resources" -maxdepth 2 | head -50
+              exit 1
+            }
+          done
+          echo "OK: the .app ships the view-plugin root and the SDK"
+
+      - name: Assert the bundle ships the plugin root (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          deb=$(find src-tauri/target/release/bundle/deb -name '*.deb' | head -1)
+          test -n "$deb" || { echo "no .deb bundle was produced"; exit 1; }
+          # Suffix-matched on purpose: assert the entries exist anywhere in the package
+          # rather than hard-coding the /usr/lib/<product-name>/ prefix.
+          listing=$(dpkg-deb --fsys-tarfile "$deb" | tar -t)
+          for f in "plugins/reference/index.html" "plugin-sdk/index.js"; do
+            echo "$listing" | grep -q "$f\$" || {
+              echo "MISSING: $f is not in $deb"
+              echo "$listing" | head -50
+              exit 1
+            }
+          done
+          echo "OK: the .deb ships the view-plugin root and the SDK"
+
+      - name: Assert the bundle ships the plugin root (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # MSI and NSIS are compressed installers, so rather than depend on extraction
+          # tooling this asserts the staging directory the bundler copies
+          # `bundle.resources` into before packaging. If `bundle.resources` were missing
+          # (the D-8 state), these paths would not exist.
+          $root = "src-tauri/target/release"
+          foreach ($f in "plugins/reference/index.html", "plugin-sdk/index.js") {
+            if (-not (Test-Path "$root/$f")) {
+              Write-Host "MISSING: $f is not under $root"
+              Get-ChildItem $root -Depth 2 -ErrorAction SilentlyContinue |
+                Select-Object -First 50 -ExpandProperty FullName
+              exit 1
+            }
+          }
+          Write-Host "OK: staged resources contain the view-plugin root and the SDK"
+
       - name: Upload bundles
         uses: actions/upload-artifact@v4
         with:
