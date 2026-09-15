@@ -35,7 +35,7 @@ impl Session {
             .envs(cfg.env.clone())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .map_err(|e| format!("{program}: {e}"))?;
         let stdin = child.stdin.take();
