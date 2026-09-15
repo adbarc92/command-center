@@ -4,9 +4,9 @@ use crate::fixtures::work_order;
 use crate::session::{Recv, Session};
 use crate::{CaseOutcome, CaseReport, KitConfig, Violation};
 use harness_protocol::{
-    error_code, method, Capabilities, Empty, GateReply, InitializeParams, InitializeResult,
-    MessageKind, Metering, Outcome, RpcMessage, Tier, UnitEvent, UnitResult, WorkOrder,
-    PROTOCOL_VERSION,
+    error_code, method, Capabilities, Empty, GateKind, GateReply, InitializeParams,
+    InitializeResult, MessageKind, Metering, Outcome, RpcMessage, Tier, UnitEvent, UnitResult,
+    WorkOrder, PROTOCOL_VERSION,
 };
 use std::time::Instant;
 
@@ -18,9 +18,7 @@ const INTERRUPT_ID: u64 = 3;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GatePolicy {
     Unexpected,
-    #[allow(dead_code)] // used by the gate cases, Task 6
     Approve,
-    #[allow(dead_code)] // used by the gate cases, Task 6
     Reject,
 }
 
@@ -274,6 +272,136 @@ pub(crate) fn happy_path_t1(cfg: &KitConfig) -> CaseReport {
     }
 }
 
+fn skipped(name: &'static str, why: &str) -> CaseReport {
+    CaseReport {
+        name,
+        outcome: CaseOutcome::Skipped(why.into()),
+    }
+}
+
+fn has_oracle_gate(caps: &Capabilities) -> bool {
+    caps.gates.contains(&GateKind::Oracle)
+}
+
+/// T2: the harness asks for oracle approval before building; approved, it ends well-formed.
+pub(crate) fn gate_approved_t2(cfg: &KitConfig) -> CaseReport {
+    const NAME: &str = "gate_approved_t2";
+    let (mut session, caps) = match start_session(cfg) {
+        Ok(started) => started,
+        Err(v) => return fail(NAME, v),
+    };
+    if !has_oracle_gate(&caps) {
+        return skipped(
+            NAME,
+            "harness declares no oracle gate, so it may only take T1 units",
+        );
+    }
+    match drive(
+        &mut session,
+        cfg,
+        &caps,
+        &work_order(Tier::T2),
+        GatePolicy::Approve,
+        None,
+    ) {
+        Err(v) => fail(NAME, v),
+        Ok(t) => match t.result {
+            None => fail(NAME, Violation::ExitedWithoutResult),
+            Some(ref r) if t.gate_requests == 0 && r.outcome == Outcome::PrOpen => {
+                fail(NAME, Violation::GateNotRequested)
+            }
+            Some(_) => pass(NAME),
+        },
+    }
+}
+
+/// T2: a rejected oracle must never lead to `pr_open`.
+pub(crate) fn gate_rejected_t2(cfg: &KitConfig) -> CaseReport {
+    const NAME: &str = "gate_rejected_t2";
+    let (mut session, caps) = match start_session(cfg) {
+        Ok(started) => started,
+        Err(v) => return fail(NAME, v),
+    };
+    if !has_oracle_gate(&caps) {
+        return skipped(
+            NAME,
+            "harness declares no oracle gate, so it may only take T1 units",
+        );
+    }
+    match drive(
+        &mut session,
+        cfg,
+        &caps,
+        &work_order(Tier::T2),
+        GatePolicy::Reject,
+        None,
+    ) {
+        Err(v) => fail(NAME, v),
+        Ok(t) => match t.result {
+            None => fail(NAME, Violation::ExitedWithoutResult),
+            Some(ref r) if t.gate_requests == 0 && r.outcome == Outcome::PrOpen => {
+                fail(NAME, Violation::GateNotRequested)
+            }
+            Some(_) if t.gate_requests == 0 => skipped(
+                NAME,
+                "harness ended before reaching the gate; the rejection path was not exercised",
+            ),
+            Some(ref r) if r.outcome == Outcome::PrOpen => {
+                fail(NAME, Violation::GateRejectionIgnored)
+            }
+            Some(_) => pass(NAME),
+        },
+    }
+}
+
+/// After the first `unit/event`, send `ctl`; the harness must answer it and exit without a result.
+fn interrupt_case(
+    cfg: &KitConfig,
+    name: &'static str,
+    ctl: &'static str,
+    needs_halt: bool,
+) -> CaseReport {
+    let (mut session, caps) = match start_session(cfg) {
+        Ok(started) => started,
+        Err(v) => return fail(name, v),
+    };
+    if needs_halt && !caps.halt {
+        return skipped(name, "harness declares halt: false");
+    }
+    match drive(
+        &mut session,
+        cfg,
+        &caps,
+        &work_order(Tier::T1),
+        GatePolicy::Unexpected,
+        Some(ctl),
+    ) {
+        Ok(t) if t.result.is_none() => pass(name),
+        Ok(_) => fail(
+            name,
+            Violation::InterruptNotHonored {
+                method: ctl.to_string(),
+            },
+        ),
+        Err(v) => fail(name, v),
+    }
+}
+
+pub(crate) fn halt(cfg: &KitConfig) -> CaseReport {
+    interrupt_case(cfg, "halt", method::UNIT_HALT, true)
+}
+
+pub(crate) fn abandon(cfg: &KitConfig) -> CaseReport {
+    interrupt_case(cfg, "abandon", method::UNIT_ABANDON, false)
+}
+
 pub fn run_all(cfg: &KitConfig) -> Vec<CaseReport> {
-    vec![version_mismatch_refused(cfg), happy_path_t1(cfg)]
+    vec![
+        version_mismatch_refused(cfg),
+        happy_path_t1(cfg),
+        gate_approved_t2(cfg),
+        gate_rejected_t2(cfg),
+        halt(cfg),
+        abandon(cfg),
+    ]
 }

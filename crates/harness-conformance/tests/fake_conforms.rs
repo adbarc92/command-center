@@ -25,3 +25,22 @@ fn conformant_fake_passes_every_case() {
         );
     }
 }
+
+#[test]
+fn run_all_covers_every_case_in_order() {
+    let names: Vec<&str> = run_all(&fake_config("conformant"))
+        .iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "version_mismatch_refused",
+            "happy_path_t1",
+            "gate_approved_t2",
+            "gate_rejected_t2",
+            "halt",
+            "abandon"
+        ]
+    );
+}

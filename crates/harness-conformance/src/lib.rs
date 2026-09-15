@@ -42,17 +42,27 @@ pub enum Violation {
     InitializeRejected(String),
     VersionMismatchAccepted,
     ExitedWithoutResult,
-    Malformed { line: String },
+    Malformed {
+        line: String,
+    },
     InvalidMessage,
-    UnknownMethod { method: String },
+    UnknownMethod {
+        method: String,
+    },
     UnexpectedGateRequest,
-    MessageAfterResult { method: String },
+    /// A tier that requires an oracle ended `pr_open` without ever sending `gate/request`.
+    GateNotRequested,
+    MessageAfterResult {
+        method: String,
+    },
     DidNotExitAfterResult,
     MeteringDeclaredButSilent,
     WallClockExceeded,
     InvalidResult(String),
     GateRejectionIgnored,
-    InterruptNotHonored { method: String },
+    InterruptNotHonored {
+        method: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
