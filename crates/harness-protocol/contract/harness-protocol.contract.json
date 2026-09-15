@@ -1,0 +1,868 @@
+{
+  "$defs": {
+    "ArtifactKind": {
+      "enum": [
+        "branch",
+        "pr",
+        "diff"
+      ],
+      "type": "string"
+    },
+    "Capabilities": {
+      "description": "What a harness guarantees. `fleetd` decides eligibility from this (spec §3).",
+      "properties": {
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        },
+        "gates": {
+          "items": {
+            "$ref": "#/$defs/GateKind"
+          },
+          "type": "array"
+        },
+        "halt": {
+          "type": "boolean"
+        },
+        "isolation": {
+          "$ref": "#/$defs/Isolation"
+        },
+        "metering": {
+          "$ref": "#/$defs/Metering"
+        },
+        "resume": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "isolation",
+        "metering",
+        "gates",
+        "delivery",
+        "resume",
+        "halt"
+      ],
+      "type": "object"
+    },
+    "Caps": {
+      "properties": {
+        "min_review_rounds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "wall_clock_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "usd",
+        "wall_clock_secs",
+        "min_review_rounds"
+      ],
+      "type": "object"
+    },
+    "Delivery": {
+      "enum": [
+        "bundle",
+        "push"
+      ],
+      "type": "string"
+    },
+    "DeliveryEvidence": {
+      "oneOf": [
+        {
+          "properties": {
+            "bundle_path": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "bundle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "bundle_path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "push",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Empty": {
+      "description": "Params/result for messages that carry nothing (`unit/halt`, `unit/resume`, `unit/abandon`).",
+      "type": "object"
+    },
+    "ErrorScope": {
+      "enum": [
+        "docker",
+        "github",
+        "agent",
+        "system",
+        "harness"
+      ],
+      "type": "string"
+    },
+    "Evidence": {
+      "description": "Claims the control plane re-reads from the sinks; never trusted as reported (spec §4).",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "delivery": {
+          "$ref": "#/$defs/DeliveryEvidence"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "oracle_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pr": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "test": {
+          "$ref": "#/$defs/TestRun"
+        }
+      },
+      "required": [
+        "branch",
+        "head_sha",
+        "delivery",
+        "test"
+      ],
+      "type": "object"
+    },
+    "Failure": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ErrorScope"
+        }
+      },
+      "required": [
+        "scope",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "GateKind": {
+      "enum": [
+        "oracle"
+      ],
+      "type": "string"
+    },
+    "GateReply": {
+      "description": "The control plane's answer to `gate/request`.",
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "edited_test_files": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "approved"
+      ],
+      "type": "object"
+    },
+    "GateRequest": {
+      "description": "`gate/request` params (a request the harness blocks on).",
+      "oneOf": [
+        {
+          "properties": {
+            "gate": {
+              "const": "oracle",
+              "type": "string"
+            },
+            "hash": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "test_files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "gate",
+            "test_files",
+            "hash",
+            "summary"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HarnessInfo": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "InitializeParams": {
+      "properties": {
+        "protocol_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol_version"
+      ],
+      "type": "object"
+    },
+    "InitializeResult": {
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "harness": {
+          "$ref": "#/$defs/HarnessInfo"
+        },
+        "protocol_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "harness",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "Isolation": {
+      "enum": [
+        "container",
+        "host",
+        "none"
+      ],
+      "type": "string"
+    },
+    "LogStream": {
+      "enum": [
+        "agent",
+        "check",
+        "system"
+      ],
+      "type": "string"
+    },
+    "Metering": {
+      "enum": [
+        "usd",
+        "none"
+      ],
+      "type": "string"
+    },
+    "Observation": {
+      "description": "What the harness saw. `fleetd` maps each to a `fleet-core` trigger (SP-2).",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "provisioned",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "oracle_frozen",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "build_finished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "checks_passed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "checks_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "empty_diff",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "checks_green": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "review_finished",
+              "type": "string"
+            },
+            "round": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unresolved_blockers": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "round",
+            "unresolved_blockers",
+            "checks_green"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Outcome": {
+      "enum": [
+        "pr_open",
+        "no_change",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "PrRef": {
+      "properties": {
+        "number": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "number"
+      ],
+      "type": "object"
+    },
+    "Repo": {
+      "properties": {
+        "base_branch": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "slug",
+        "base_branch"
+      ],
+      "type": "object"
+    },
+    "Resume": {
+      "properties": {
+        "oracle_frozen": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "oracle_frozen"
+      ],
+      "type": "object"
+    },
+    "RpcError": {
+      "properties": {
+        "code": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "RpcMessage": {
+      "description": "One line on the wire. Which fields are present decides its kind (`RpcMessage::kind`).",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RpcError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "jsonrpc": {
+          "type": "string"
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "params": true,
+        "result": true
+      },
+      "required": [
+        "jsonrpc"
+      ],
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "info",
+        "minor",
+        "blocker"
+      ],
+      "type": "string"
+    },
+    "TestRun": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "exit_code": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command",
+        "exit_code"
+      ],
+      "type": "object"
+    },
+    "Tier": {
+      "enum": [
+        "t1",
+        "t2",
+        "t3"
+      ],
+      "type": "string"
+    },
+    "UnitEvent": {
+      "description": "`unit/event` params (a notification).",
+      "oneOf": [
+        {
+          "properties": {
+            "observation": {
+              "$ref": "#/$defs/Observation"
+            },
+            "type": {
+              "const": "observed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "observation"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Every figure is incremental since the previous `metric` for this unit, not a running total.\nThe control plane sums them into the per-unit spend (spec §4).",
+          "properties": {
+            "cost_usd": {
+              "format": "double",
+              "type": "number"
+            },
+            "elapsed_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tokens_in": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tokens_out": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "metric",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokens_in",
+            "tokens_out",
+            "cost_usd",
+            "elapsed_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "line": {
+              "type": "string"
+            },
+            "stream": {
+              "$ref": "#/$defs/LogStream"
+            },
+            "type": {
+              "const": "log",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "stream",
+            "line"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "file": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resolved": {
+              "type": "boolean"
+            },
+            "round": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "const": "finding",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "round",
+            "severity",
+            "title",
+            "resolved"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/ArtifactKind"
+            },
+            "ref": {
+              "type": "string"
+            },
+            "type": {
+              "const": "artifact",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "ref"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "scope": {
+              "$ref": "#/$defs/ErrorScope"
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "scope",
+            "retryable",
+            "detail"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "UnitResult": {
+      "description": "`unit/result` params — the last message a harness sends.",
+      "properties": {
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Evidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Failure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "WorkItem": {
+      "description": "The id that must travel end to end (SMOKE-LAP-01 item 14: nothing carried it).",
+      "properties": {
+        "fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkItemKind"
+        },
+        "ref": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "type": "object"
+    },
+    "WorkItemKind": {
+      "enum": [
+        "roadmap_item",
+        "issue"
+      ],
+      "type": "string"
+    },
+    "WorkOrder": {
+      "description": "`unit/start` params.",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "caps": {
+          "$ref": "#/$defs/Caps"
+        },
+        "repo": {
+          "$ref": "#/$defs/Repo"
+        },
+        "resume": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Resume"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "type": "string"
+        },
+        "test_cmd": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        },
+        "unit_id": {
+          "type": "string"
+        },
+        "work_item": {
+          "$ref": "#/$defs/WorkItem"
+        }
+      },
+      "required": [
+        "unit_id",
+        "work_item",
+        "tier",
+        "task",
+        "repo",
+        "branch",
+        "test_cmd",
+        "caps"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Exists only to pull every wire type into a single schema document.\nField names say which message each type belongs to.\n\n| Method | Direction | Kind | Params → Result |\n|---|---|---|---|\n| `initialize` | control plane → harness | request | `InitializeParams` → `InitializeResult` |\n| `unit/start` | control plane → harness | request | `WorkOrder` → `Empty` |\n| `unit/event` | harness → control plane | notification | `UnitEvent` |\n| `gate/request` | harness → control plane | request | `GateRequest` → `GateReply` |\n| `unit/halt`, `unit/resume`, `unit/abandon` | control plane → harness | request | `Empty` → `Empty` |\n| `unit/result` | harness → control plane | notification | `UnitResult` |",
+  "properties": {
+    "empty_params": {
+      "$ref": "#/$defs/Empty"
+    },
+    "gate_reply": {
+      "$ref": "#/$defs/GateReply"
+    },
+    "gate_request_params": {
+      "$ref": "#/$defs/GateRequest"
+    },
+    "initialize_params": {
+      "$ref": "#/$defs/InitializeParams"
+    },
+    "initialize_result": {
+      "$ref": "#/$defs/InitializeResult"
+    },
+    "message": {
+      "$ref": "#/$defs/RpcMessage"
+    },
+    "rpc_error": {
+      "$ref": "#/$defs/RpcError"
+    },
+    "unit_event_params": {
+      "$ref": "#/$defs/UnitEvent"
+    },
+    "unit_result_params": {
+      "$ref": "#/$defs/UnitResult"
+    },
+    "unit_start_params": {
+      "$ref": "#/$defs/WorkOrder"
+    }
+  },
+  "required": [
+    "message",
+    "rpc_error",
+    "initialize_params",
+    "initialize_result",
+    "unit_start_params",
+    "unit_event_params",
+    "gate_request_params",
+    "gate_reply",
+    "unit_result_params",
+    "empty_params"
+  ],
+  "title": "ProtocolSchema",
+  "type": "object"
+}

@@ -1,0 +1,17 @@
+[package]
+name = "harness-conformance"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Conformance kit for harness-protocol, plus harness-fake, a scripted harness."
+
+[dependencies]
+harness-protocol = { path = "../harness-protocol" }
+
+[[bin]]
+name = "harness-fake"
+path = "src/bin/harness-fake.rs"
+
+[[bin]]
+name = "harness-conformance"
+path = "src/bin/harness-conformance.rs"
