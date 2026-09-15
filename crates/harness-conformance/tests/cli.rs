@@ -42,6 +42,27 @@ fn exits_one_and_names_the_case_when_the_harness_breaks_the_protocol() {
 }
 
 #[test]
+fn exits_two_when_grace_is_zero() {
+    let out = kit()
+        .args([
+            "--grace-secs",
+            "0",
+            "--",
+            env!("CARGO_BIN_EXE_harness-fake"),
+        ])
+        .output()
+        .expect("harness-conformance runs");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--grace-secs"), "stderr: {stderr}");
+}
+
+#[test]
 fn exits_two_on_a_usage_error() {
     let out = kit().output().expect("harness-conformance runs");
     assert_eq!(out.status.code(), Some(2));

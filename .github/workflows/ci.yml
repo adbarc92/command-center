@@ -7,9 +7,10 @@ name: CI
 # Tauri bundles on all three target OSes. Bundles are uploaded as workflow
 # artifacts so a reviewer can smoke-test a real build.
 #
-# TWO CARGO WORKSPACES: the root one (crates/fleet-core, crates/fleetd) and the
-# standalone cockpit/ui/src-tauri crate. Nothing run from the repo root reaches
-# the latter, so the fmt, clippy and test gates each run once per manifest.
+# TWO CARGO WORKSPACES: the root one (crates/fleet-core, crates/fleetd,
+# crates/harness-protocol, crates/harness-conformance) and the standalone
+# cockpit/ui/src-tauri crate. Nothing run from the repo root reaches the latter,
+# so the fmt, clippy and test gates each run once per manifest.
 #
 # COVERAGE GAP (intentional): the real-Docker integration tests in
 # crates/fleetd/tests/ (local_docker_it.rs, preflight_it.rs, swarm_smoke_it.rs)

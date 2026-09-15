@@ -34,6 +34,11 @@ fn parse(args: Vec<String>) -> Result<KitConfig, String> {
             other => return Err(format!("unknown flag `{other}`\n{USAGE}")),
         }
     }
+    if cfg.grace.is_zero() {
+        return Err(format!(
+            "--grace-secs must be at least 1: a zero grace fails every case\n{USAGE}"
+        ));
+    }
     Ok(cfg)
 }
 
