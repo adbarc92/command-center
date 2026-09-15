@@ -12,3 +12,7 @@ serde_json = { workspace = true }
 [[bin]]
 name = "harness-fake"
 path = "src/bin/harness-fake.rs"
+
+[[bin]]
+name = "harness-conformance"
+path = "src/bin/harness-conformance.rs"
