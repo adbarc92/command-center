@@ -157,6 +157,16 @@ fn exiting_on_halt_without_answering_is_caught() {
 }
 
 #[test]
+fn a_result_before_any_interrupt_opportunity_skips_halt() {
+    assert_skipped("result_without_events", "halt");
+}
+
+#[test]
+fn a_result_before_any_interrupt_opportunity_skips_abandon() {
+    assert_skipped("result_without_events", "abandon");
+}
+
+#[test]
 fn ending_before_the_gate_skips_gate_approved() {
     assert_skipped("fail_before_gate", "gate_approved_t2");
 }

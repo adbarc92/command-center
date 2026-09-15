@@ -20,6 +20,8 @@ pub(crate) enum GatePolicy {
     Unexpected,
     Approve,
     Reject,
+    /// Leave the gate unanswered and send the pending interrupt instead.
+    Hold,
 }
 
 /// What one unit run produced.
@@ -27,6 +29,8 @@ pub(crate) enum GatePolicy {
 pub(crate) struct Transcript {
     pub metrics: usize,
     pub gate_requests: usize,
+    /// Whether the interrupt request was actually sent.
+    pub interrupt_sent: bool,
     /// `None` when the run ended by an honoured interrupt.
     pub result: Option<UnitResult>,
 }
@@ -110,7 +114,8 @@ fn finish(
 }
 
 /// Start `order` and read until the unit ends. `gate` answers any `gate/request`. If `interrupt`
-/// is a method name, it is sent as a request after the first `unit/event`; from then on the harness
+/// is a method name, it is sent as a request after the first `unit/event` or, under
+/// `GatePolicy::Hold`, in place of answering the first `gate/request`. From then on the harness
 /// has `cfg.grace` to answer it and exit, without sending `unit/result`.
 pub(crate) fn drive(
     session: &mut Session,
@@ -179,9 +184,12 @@ pub(crate) fn drive(
                 if matches!(ev, UnitEvent::Metric { .. }) {
                     transcript.metrics += 1;
                 }
-                if let (Some(ctl), None) = (interrupt, interrupt_sent) {
+                if let (Some(ctl), None, true) =
+                    (interrupt, interrupt_sent, gate != GatePolicy::Hold)
+                {
                     session.send(&RpcMessage::request(INTERRUPT_ID, ctl, &Empty {}));
                     interrupt_sent = Some(ctl);
+                    transcript.interrupt_sent = true;
                     deadline = deadline.min(Instant::now() + cfg.grace);
                 }
             }
@@ -208,6 +216,16 @@ pub(crate) fn drive(
                 transcript.gate_requests += 1;
                 let approved = match gate {
                     GatePolicy::Unexpected => return Err(Violation::UnexpectedGateRequest),
+                    GatePolicy::Hold => {
+                        // The gate stays pending: a harness blocked on it must still handle this.
+                        if let (Some(ctl), None) = (interrupt, interrupt_sent) {
+                            session.send(&RpcMessage::request(INTERRUPT_ID, ctl, &Empty {}));
+                            interrupt_sent = Some(ctl);
+                            transcript.interrupt_sent = true;
+                            deadline = deadline.min(Instant::now() + cfg.grace);
+                        }
+                        continue;
+                    }
                     GatePolicy::Approve => true,
                     GatePolicy::Reject => false,
                 };
@@ -365,7 +383,9 @@ pub(crate) fn gate_rejected_t2(cfg: &KitConfig) -> CaseReport {
     }
 }
 
-/// After the first `unit/event`, send `ctl`; the harness must answer it and exit without a result.
+/// Send `ctl` mid-unit; the harness must answer it and exit without a result. With an oracle gate
+/// the unit is T2 and `ctl` is sent while `gate/request` is pending, so delivery does not race the
+/// harness's progress; otherwise the unit is T1 and `ctl` follows the first `unit/event`.
 fn interrupt_case(
     cfg: &KitConfig,
     name: &'static str,
@@ -379,15 +399,16 @@ fn interrupt_case(
     if needs_halt && !caps.halt {
         return skipped(name, "harness declares halt: false");
     }
-    match drive(
-        &mut session,
-        cfg,
-        &caps,
-        &work_order(Tier::T1),
-        GatePolicy::Unexpected,
-        Some(ctl),
-    ) {
+    let (tier, gate) = if has_oracle_gate(&caps) {
+        (Tier::T2, GatePolicy::Hold)
+    } else {
+        (Tier::T1, GatePolicy::Unexpected)
+    };
+    match drive(&mut session, cfg, &caps, &work_order(tier), gate, Some(ctl)) {
         Ok(t) if t.result.is_none() => pass(name),
+        Ok(t) if !t.interrupt_sent => {
+            skipped(name, "unit ended before an interrupt could be delivered")
+        }
         Ok(_) => fail(
             name,
             Violation::InterruptNotHonored {

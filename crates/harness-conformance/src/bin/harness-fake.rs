@@ -29,10 +29,12 @@ enum Mode {
     FailBeforeGate,
     AckHaltLinger,
     SilentHaltExit,
+    ResultWithoutEvents,
 }
 
 fn mode() -> Mode {
     match std::env::var("HARNESS_FAKE_MODE").as_deref() {
+        Ok("result_without_events") => Mode::ResultWithoutEvents,
         Ok("fail_before_gate") => Mode::FailBeforeGate,
         Ok("ack_halt_linger") => Mode::AckHaltLinger,
         Ok("silent_halt_exit") => Mode::SilentHaltExit,
@@ -206,6 +208,19 @@ macro_rules! step {
 
 fn run_unit(mode: Mode, order: &WorkOrder, rx: &Receiver<RpcMessage>) {
     let pace = pace();
+
+    if mode == Mode::ResultWithoutEvents {
+        let result = UnitResult {
+            outcome: Outcome::Failed,
+            evidence: None,
+            failure: Some(Failure {
+                scope: ErrorScope::Agent,
+                detail: "nothing to do".into(),
+            }),
+        };
+        send(&RpcMessage::notification(method::UNIT_RESULT, &result));
+        return;
+    }
 
     observe(Observation::Provisioned);
 
