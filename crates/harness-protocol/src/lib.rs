@@ -7,10 +7,12 @@
 
 mod codec;
 mod rpc;
+mod schema;
 mod types;
 
 pub use codec::{read_message, write_message, ReadError};
 pub use rpc::{error_code, method, version_compatible, MessageKind, RpcError, RpcMessage};
+pub use schema::{schema_json, ProtocolSchema};
 pub use types::*;
 
 /// The protocol version this crate speaks. A peer with a different **major** is refused.
