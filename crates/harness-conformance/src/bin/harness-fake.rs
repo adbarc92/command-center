@@ -23,6 +23,9 @@ enum Mode {
     Hang,
     UnknownMethod,
     AcceptAnyVersion,
+    SkipGate,
+    IgnoreGateRejection,
+    IgnoreHalt,
 }
 
 fn mode() -> Mode {
@@ -34,6 +37,9 @@ fn mode() -> Mode {
         Ok("hang") => Mode::Hang,
         Ok("unknown_method") => Mode::UnknownMethod,
         Ok("accept_any_version") => Mode::AcceptAnyVersion,
+        Ok("skip_gate") => Mode::SkipGate,
+        Ok("ignore_gate_rejection") => Mode::IgnoreGateRejection,
+        Ok("ignore_halt") => Mode::IgnoreHalt,
         _ => Mode::Conformant,
     }
 }
@@ -97,6 +103,16 @@ enum Flow {
 /// Answer a control request. `Some(Flow::Stop)` means the unit must end now, without a result.
 fn handle_control(msg: &RpcMessage) -> Option<Flow> {
     match msg.kind() {
+        MessageKind::Request { id, method: m }
+            if m == method::UNIT_HALT && mode() == Mode::IgnoreHalt =>
+        {
+            send(&RpcMessage::error(
+                id,
+                error_code::METHOD_NOT_FOUND,
+                "halt ignored (ignore_halt mode)",
+            ));
+            None
+        }
         MessageKind::Request { id, method: m }
             if m == method::UNIT_HALT || m == method::UNIT_ABANDON =>
         {
@@ -189,7 +205,7 @@ fn run_unit(mode: Mode, order: &WorkOrder, rx: &Receiver<RpcMessage>) {
         _ => {}
     }
 
-    if order.tier.requires_oracle() {
+    if order.tier.requires_oracle() && mode != Mode::SkipGate {
         observe(Observation::OracleFrozen);
         let gate = GateRequest::Oracle {
             test_files: vec!["tests/fake.test.js".into()],
@@ -203,7 +219,7 @@ fn run_unit(mode: Mode, order: &WorkOrder, rx: &Receiver<RpcMessage>) {
         ));
         match await_gate(rx) {
             None => return,
-            Some(false) => {
+            Some(false) if mode != Mode::IgnoreGateRejection => {
                 let result = UnitResult {
                     outcome: Outcome::Failed,
                     evidence: None,
@@ -215,7 +231,7 @@ fn run_unit(mode: Mode, order: &WorkOrder, rx: &Receiver<RpcMessage>) {
                 send(&RpcMessage::notification(method::UNIT_RESULT, &result));
                 return;
             }
-            Some(true) => {}
+            Some(_) => {}
         }
     }
 
