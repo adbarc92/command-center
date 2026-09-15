@@ -180,6 +180,29 @@ jobs:
         run: cargo test --workspace
 
   # ---------------------------------------------------------------------------
+  # Harness conformance (NEXUS spec 2026-09-14-swappable-harness-design §6.2, §6.7).
+  # Runs the conformance kit's CLI against harness-fake. This check must be
+  # REQUIRED on main: an advisory check here would repeat GAP-133.
+  # ---------------------------------------------------------------------------
+  conformance:
+    name: harness conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build the conformance kit and harness-fake
+        run: cargo build -p harness-conformance --bins
+
+      - name: Run the conformance kit against harness-fake
+        run: target/debug/harness-conformance --wall-clock-secs 30 --grace-secs 5 -- target/debug/harness-fake
+
+  # ---------------------------------------------------------------------------
   # The cockpit crate's own tests — the app-plugin state machine, manifest
   # validation and discovery. `cargo test --workspace` above runs from the repo
   # root and cannot reach them: cockpit/ui/src-tauri is a standalone workspace
