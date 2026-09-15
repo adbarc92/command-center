@@ -26,10 +26,12 @@ enum Mode {
     SkipGate,
     IgnoreGateRejection,
     IgnoreHalt,
+    FailBeforeGate,
 }
 
 fn mode() -> Mode {
     match std::env::var("HARNESS_FAKE_MODE").as_deref() {
+        Ok("fail_before_gate") => Mode::FailBeforeGate,
         Ok("crash") => Mode::Crash,
         Ok("malformed") => Mode::Malformed,
         Ok("event_after_result") => Mode::EventAfterResult,
@@ -189,6 +191,20 @@ fn run_unit(mode: Mode, order: &WorkOrder, rx: &Receiver<RpcMessage>) {
     let pace = pace();
 
     observe(Observation::Provisioned);
+
+    if mode == Mode::FailBeforeGate && order.tier.requires_oracle() {
+        let result = UnitResult {
+            outcome: Outcome::Failed,
+            evidence: None,
+            failure: Some(Failure {
+                scope: ErrorScope::Agent,
+                detail: "failed before gate".into(),
+            }),
+        };
+        send(&RpcMessage::notification(method::UNIT_RESULT, &result));
+        return;
+    }
+
     step!(rx, pace);
 
     match mode {

@@ -32,6 +32,15 @@ fn assert_detects(mode: &str, case: &str, want: Violation) {
     );
 }
 
+/// The case could not exercise its rule, so it must say so rather than pass or fail.
+fn assert_skipped(mode: &str, case: &str) {
+    let reports = run_all(&fake_config(mode));
+    assert!(
+        matches!(outcome_of(&reports, case), CaseOutcome::Skipped(_)),
+        "mode `{mode}`, case `{case}` should be Skipped; all reports: {reports:#?}"
+    );
+}
+
 #[test]
 fn crash_is_exited_without_result() {
     assert_detects("crash", "happy_path_t1", Violation::ExitedWithoutResult);
@@ -116,4 +125,14 @@ fn ignoring_halt_is_caught() {
             method: "unit/halt".into(),
         },
     );
+}
+
+#[test]
+fn ending_before_the_gate_skips_gate_approved() {
+    assert_skipped("fail_before_gate", "gate_approved_t2");
+}
+
+#[test]
+fn ending_before_the_gate_skips_gate_rejected() {
+    assert_skipped("fail_before_gate", "gate_rejected_t2");
 }

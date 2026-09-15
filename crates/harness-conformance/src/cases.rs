@@ -310,6 +310,10 @@ pub(crate) fn gate_approved_t2(cfg: &KitConfig) -> CaseReport {
             Some(ref r) if t.gate_requests == 0 && r.outcome == Outcome::PrOpen => {
                 fail(NAME, Violation::GateNotRequested)
             }
+            Some(_) if t.gate_requests == 0 => skipped(
+                NAME,
+                "harness ended before reaching the gate; the approval path was not exercised",
+            ),
             Some(_) => pass(NAME),
         },
     }
