@@ -184,6 +184,8 @@ pub enum UnitEvent {
     Observed {
         observation: Observation,
     },
+    /// Every figure is incremental since the previous `metric` for this unit, not a running total.
+    /// The control plane sums them into the per-unit spend (spec §4).
     Metric {
         tokens_in: u64,
         tokens_out: u64,

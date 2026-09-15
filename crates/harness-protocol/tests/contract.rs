@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 /// Canonical SHA-256 of `contract/harness-protocol.contract.json`. Set in Task 3 Step 5.
-const CONTRACT_SHA256: &str = "364d3b0e3a772b1f521b3f75967d3130846ab19f4a61cd3294770e5030508b0e";
+const CONTRACT_SHA256: &str = "51c64132b2d3d898791f064820ffb92fdbd2b0d36f71913bd8d85e48f1df9463";
 
 fn contract_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -41,6 +41,10 @@ fn generated_schema_matches_the_committed_contract() {
 
 #[test]
 fn committed_contract_hash_is_pinned() {
+    // A bless run rewrites the file concurrently, so the pin is checked on the next normal run.
+    if std::env::var_os("HARNESS_PROTOCOL_BLESS").is_some() {
+        return;
+    }
     let committed = std::fs::read_to_string(contract_path()).expect("contract file exists");
     assert_eq!(
         canonical_sha256(&committed),

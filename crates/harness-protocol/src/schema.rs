@@ -9,6 +9,15 @@ use schemars::{schema_for, JsonSchema};
 
 /// Exists only to pull every wire type into a single schema document.
 /// Field names say which message each type belongs to.
+///
+/// | Method | Direction | Kind | Params → Result |
+/// |---|---|---|---|
+/// | `initialize` | control plane → harness | request | `InitializeParams` → `InitializeResult` |
+/// | `unit/start` | control plane → harness | request | `WorkOrder` → `Empty` |
+/// | `unit/event` | harness → control plane | notification | `UnitEvent` |
+/// | `gate/request` | harness → control plane | request | `GateRequest` → `GateReply` |
+/// | `unit/halt`, `unit/resume`, `unit/abandon` | control plane → harness | request | `Empty` → `Empty` |
+/// | `unit/result` | harness → control plane | notification | `UnitResult` |
 #[derive(JsonSchema)]
 pub struct ProtocolSchema {
     pub message: RpcMessage,

@@ -568,6 +568,7 @@
           "type": "object"
         },
         {
+          "description": "Every figure is incremental since the previous `metric` for this unit, not a running total.\nThe control plane sums them into the per-unit spend (spec §4).",
           "properties": {
             "cost_usd": {
               "format": "double",
@@ -817,7 +818,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Exists only to pull every wire type into a single schema document.\nField names say which message each type belongs to.",
+  "description": "Exists only to pull every wire type into a single schema document.\nField names say which message each type belongs to.\n\n| Method | Direction | Kind | Params → Result |\n|---|---|---|---|\n| `initialize` | control plane → harness | request | `InitializeParams` → `InitializeResult` |\n| `unit/start` | control plane → harness | request | `WorkOrder` → `Empty` |\n| `unit/event` | harness → control plane | notification | `UnitEvent` |\n| `gate/request` | harness → control plane | request | `GateRequest` → `GateReply` |\n| `unit/halt`, `unit/resume`, `unit/abandon` | control plane → harness | request | `Empty` → `Empty` |\n| `unit/result` | harness → control plane | notification | `UnitResult` |",
   "properties": {
     "empty_params": {
       "$ref": "#/$defs/Empty"
