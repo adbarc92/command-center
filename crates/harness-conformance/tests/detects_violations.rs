@@ -128,6 +128,35 @@ fn ignoring_halt_is_caught() {
 }
 
 #[test]
+fn answering_halt_but_never_exiting_is_caught() {
+    // wall_clock 2 s, grace 1 s: the kit must give up at grace, not at the wall clock.
+    let reports = run_all(&fake_config("ack_halt_linger"));
+    assert_eq!(
+        *outcome_of(&reports, "halt"),
+        CaseOutcome::Fail(Violation::InterruptNotHonored {
+            method: "unit/halt".into(),
+        }),
+        "all reports: {reports:#?}"
+    );
+    assert_eq!(
+        *outcome_of(&reports, "abandon"),
+        CaseOutcome::Pass,
+        "abandon is conformant in this mode; all reports: {reports:#?}"
+    );
+}
+
+#[test]
+fn exiting_on_halt_without_answering_is_caught() {
+    assert_detects(
+        "silent_halt_exit",
+        "halt",
+        Violation::InterruptNotHonored {
+            method: "unit/halt".into(),
+        },
+    );
+}
+
+#[test]
 fn ending_before_the_gate_skips_gate_approved() {
     assert_skipped("fail_before_gate", "gate_approved_t2");
 }

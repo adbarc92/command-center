@@ -27,11 +27,15 @@ enum Mode {
     IgnoreGateRejection,
     IgnoreHalt,
     FailBeforeGate,
+    AckHaltLinger,
+    SilentHaltExit,
 }
 
 fn mode() -> Mode {
     match std::env::var("HARNESS_FAKE_MODE").as_deref() {
         Ok("fail_before_gate") => Mode::FailBeforeGate,
+        Ok("ack_halt_linger") => Mode::AckHaltLinger,
+        Ok("silent_halt_exit") => Mode::SilentHaltExit,
         Ok("crash") => Mode::Crash,
         Ok("malformed") => Mode::Malformed,
         Ok("event_after_result") => Mode::EventAfterResult,
@@ -114,6 +118,19 @@ fn handle_control(msg: &RpcMessage) -> Option<Flow> {
                 "halt ignored (ignore_halt mode)",
             ));
             None
+        }
+        MessageKind::Request { id, method: m }
+            if m == method::UNIT_HALT && mode() == Mode::AckHaltLinger =>
+        {
+            send(&RpcMessage::response(id, &Empty {}));
+            loop {
+                std::thread::sleep(Duration::from_secs(3_600));
+            }
+        }
+        MessageKind::Request { method: m, .. }
+            if m == method::UNIT_HALT && mode() == Mode::SilentHaltExit =>
+        {
+            std::process::exit(0);
         }
         MessageKind::Request { id, method: m }
             if m == method::UNIT_HALT || m == method::UNIT_ABANDON =>

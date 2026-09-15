@@ -110,8 +110,8 @@ fn finish(
 }
 
 /// Start `order` and read until the unit ends. `gate` answers any `gate/request`. If `interrupt`
-/// is a method name, it is sent as a request after the first `unit/event`, and the harness must
-/// then acknowledge it and exit within grace without sending `unit/result`.
+/// is a method name, it is sent as a request after the first `unit/event`; from then on the harness
+/// has `cfg.grace` to answer it and exit, without sending `unit/result`.
 pub(crate) fn drive(
     session: &mut Session,
     cfg: &KitConfig,
@@ -120,30 +120,34 @@ pub(crate) fn drive(
     gate: GatePolicy,
     interrupt: Option<&'static str>,
 ) -> Result<Transcript, Violation> {
-    let deadline = Instant::now() + cfg.wall_clock;
+    let mut deadline = Instant::now() + cfg.wall_clock;
     session.send(&RpcMessage::request(START_ID, method::UNIT_START, order));
     let mut transcript = Transcript::default();
     let mut interrupt_sent: Option<&'static str> = None;
+    let mut interrupt_acked = false;
 
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            session.kill();
-            return Err(Violation::WallClockExceeded);
-        }
-        let msg = match session.recv(remaining) {
+        let received = if remaining.is_zero() {
+            Recv::Timeout
+        } else {
+            session.recv(remaining)
+        };
+        let msg = match received {
             Recv::Message(msg) => msg,
             Recv::Malformed(line) => return Err(Violation::Malformed { line }),
             Recv::Timeout => {
                 session.kill();
-                return Err(Violation::WallClockExceeded);
+                return Err(match interrupt_sent {
+                    Some(ctl) => Violation::InterruptNotHonored {
+                        method: ctl.to_string(),
+                    },
+                    None => Violation::WallClockExceeded,
+                });
             }
             Recv::Eof => {
                 return match interrupt_sent {
-                    Some(ctl) if session.wait_exit(cfg.grace) => {
-                        let _ = ctl;
-                        Ok(transcript)
-                    }
+                    Some(_) if interrupt_acked && session.wait_exit(cfg.grace) => Ok(transcript),
                     Some(ctl) => {
                         session.kill();
                         Err(Violation::InterruptNotHonored {
@@ -157,7 +161,9 @@ pub(crate) fn drive(
 
         match msg.kind() {
             MessageKind::Response { id: START_ID } => {}
-            MessageKind::Response { id: INTERRUPT_ID } if interrupt_sent.is_some() => {}
+            MessageKind::Response { id: INTERRUPT_ID } if interrupt_sent.is_some() => {
+                interrupt_acked = true;
+            }
             MessageKind::ErrorResponse {
                 id: INTERRUPT_ID, ..
             } => {
@@ -176,6 +182,7 @@ pub(crate) fn drive(
                 if let (Some(ctl), None) = (interrupt, interrupt_sent) {
                     session.send(&RpcMessage::request(INTERRUPT_ID, ctl, &Empty {}));
                     interrupt_sent = Some(ctl);
+                    deadline = deadline.min(Instant::now() + cfg.grace);
                 }
             }
             MessageKind::Notification { method: m } if m == method::UNIT_RESULT => {
