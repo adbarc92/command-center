@@ -48,3 +48,24 @@ target/debug/harness-conformance -- path/to/your-harness --its --args
 Exit `0` means no case failed. Cases your harness declares it cannot do are reported `SKIP`, not
 `PASS`. `target/debug/harness-fake` is a reference harness; set `HARNESS_FAKE_MODE` to see what each
 violation looks like.
+
+## What the conformance kit checks
+
+| Rule | Violation |
+|---|---|
+| Refuse an `initialize` from a different protocol major with error code `-32001`. | `VersionMismatchAccepted` |
+| Send no `gate/request` for a T1 unit. This is stricter than the spec, which only requires the gate at T2/T3. | `UnexpectedGateRequest` |
+| At T2/T3 with `gates: [oracle]`, send `gate/request` before any `pr_open`. | `GateNotRequested` |
+| Never end `pr_open` after a rejected gate. | `GateRejectionIgnored` |
+| `pr_open` needs `evidence`; `failed` needs `failure`. | `InvalidResult` |
+| With `metering: usd`, send at least one `metric` before a non-failed result. | `MeteringDeclaredButSilent` |
+| After `unit/result`, send nothing more, and exit within grace. | `MessageAfterResult` / `DidNotExitAfterResult` |
+| Answer `unit/halt` / `unit/abandon`, then exit within grace without `unit/result`. `halt` is tested only when you declare `halt: true`; `abandon` always. With `gates: [oracle]`, the kit sends the interrupt while your `gate/request` is still unanswered. | `InterruptNotHonored` |
+| Request ids are unsigned integers; any other line is not a protocol message. | `Malformed` |
+| Use only the protocol's own methods. | `UnknownMethod` |
+| Finish within the wall clock (`--wall-clock-secs`). | `WallClockExceeded` |
+
+The kit passes your harness's stderr through to its own, so your diagnostics appear next to a
+failing case. Start your harness binary directly, or `exec` it from a wrapper script: a shell or
+launcher that stays alive can leave child processes holding stdout open, so the kit never sees your
+harness exit.
