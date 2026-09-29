@@ -1930,6 +1930,56 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cap_still_binds_after_the_first_unit_goes_terminal() {
+        // Pins the schedule that made the race test flaky on CI (#72): the first
+        // unit reaches a terminal phase BEFORE the second admission, so its $5
+        // reservation has been replaced by its actual demo spend. With 19.95
+        // seeded, the cap must still refuse the second mission (19.95 + 0.09 >= 20).
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        {
+            let s = store.lock().unwrap();
+            let mut r = building_row("seed");
+            r.phase = "building".into();
+            r.usd_cap = 19.95;
+            r.cost = 0.0;
+            s.upsert_unit(&r, now_ms()).unwrap();
+        }
+        let state = AppState::new(store.clone());
+        let req = || {
+            Json(CreateReq {
+                task: "t".into(),
+                tier: TierReq::T1,
+                mode: "demo".into(),
+                min_review_rounds: 1,
+            })
+        };
+        assert!(
+            create_mission(State(state.clone()), req()).await.is_ok(),
+            "first mission admitted"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let terminal = store.lock().unwrap().list_units().unwrap().iter().any(|u| {
+                u.unit_id != "seed" && fleet_core::TERMINAL_PHASE_STRS.contains(&u.phase.as_str())
+            });
+            if terminal {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "first unit never went terminal"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        match create_mission(State(state), req()).await {
+            Err((code, _)) => assert_eq!(code, StatusCode::TOO_MANY_REQUESTS),
+            Ok(_) => panic!("expected 429 — cap must bind once the first unit is terminal"),
+        }
+    }
+
     #[test]
     fn demo_script_has_oracle_plus_three_calls_per_round() {
         let spec = UnitSpec {
