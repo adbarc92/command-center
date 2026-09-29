@@ -3,7 +3,9 @@
 > Cross-cutting roadmap for the Command Center. App-plugins-specific roadmap items live in
 > [`docs/superpowers/specs/2026-06-07-app-plugins-design.md` §5](superpowers/specs/2026-06-07-app-plugins-design.md);
 > this file holds the broader product + workflow backlog.
-> Last updated: **2026-09-11** (work-audit reconcile: **P3 and P4 are resolved and the embedding work
+> Last updated: **2026-09-27** (competitive-gap pass against Herdr, Omarchy and Orca: new section
+> **C** and human-gated decision **P5**; Remote Control (R) gains reference designs).
+> 2026-09-11 (work-audit reconcile: **P3 and P4 are resolved and the embedding work
 > shipped in #49**, merged 2026-08-16; the Telltale `feedback` adapter shipped (#65–#67); **D-3 fixed**
 > by #68 so the cockpit can reach fleetd; the CI-billing note below is moot — the repo went public
 > 2026-07-25 and Actions is free for public repos).
@@ -30,8 +32,9 @@ goal.** Use it to accept or reject roadmap items. Every item below is an express
 |---|---|
 | **Low cost** (intelligent resource use) | 1 Cache timer · 5 Rate-limit retry · 6 Budget discipline |
 | **Context hygiene** | 3 Context offload · 6B ContextCurator |
-| **Ship autonomously & fast** | 2 Swarm Handoff · 4 Project dashboard (+ Local Tracker) |
-| **Remote reach** (future) | **R Remote Control** — drive the fleet from away-from-desk |
+| **Ship autonomously & fast** | 2 Swarm Handoff · 4 Project dashboard (+ Local Tracker) · C1–C6 competitive gap |
+| **Low cost** (cont.) | C7 Plan-usage panel |
+| **Remote reach** (future) | **R Remote Control** — drive the fleet from away-from-desk · C8 Notifications · C9 Remote runners |
 
 ### Build order (locked 2026-07-16) — auth-foundation-first
 
@@ -70,6 +73,7 @@ out-of-repo procurement. Everything downstream of them is already built or dispa
 | ~~**P3**~~ | ✅ **RESOLVED — shipped in #49** (merged 2026-08-16). The app-plugin webview spike is closed and the embedding work is on `main`. | — | Done; nothing is gated on it. |
 | ~~**P4**~~ | ✅ **RESOLVED — shipped in #49.** The view-plugin runtime is on `main`, and the packaged smoke (run 3) exercised it end to end. The dropped-handshake hypothesis was superseded by the real defects found and fixed: **D-7** (view-plugins received no state — `DataCloneError` posting Svelte `$state` proxies) and **D-8** (no plugin root in the bundle). | — | Done; nothing is gated on it. |
 | **S3** | **One live paid T1 mission.** Set `ANTHROPIC_API_KEY`; dispatch a real T1 mission oracle→build→review→PR on a throwaway repo, human-watched. | Real credential + real token spend + live observation. The last unproven slice of the SP1 spine. | Confidence in the end-to-end spine on real tokens. |
+| **P5** | **Positioning decision: engine or environment?** Orca (≈79k★, daily releases) already ships most of the "one-stop shop" surface — dispatch, see-every-agent, hosted tools, mobile remote. None of Herdr/Orca/Omarchy ships the verified-autonomy spine (oracle, evidence verifier, enforced caps, default isolation). Decide whether the cockpit competes as the environment, or whether Command Center positions as the *engine* those environments dispatch into (C3). See §C. | Product-direction call, not an engineering one. | Ordering of C4–C6 vs C3; whether the one-stop-shop synthesis above is restated. |
 | **Certs** | **Code-signing certs.** Apple Developer ID ($99/yr + notarization) + Windows Authenticode. Wiring + exact secret names already done — see [`docs/release/signing-and-updates.md`](release/signing-and-updates.md) §4; `release.yml` consumes them by name. | Procurement (CA / Apple Developer Program) — out of repo. | The **signed cross-platform release run** (CI is otherwise ready). |
 
 **Status of the rest:** human-authority overlays (PR #22) + packaging/release hardening (PR #23)
@@ -221,10 +225,102 @@ item, watch a mission, without being at the machine running the cockpit. The nat
   - **AuthN/Z for a remote human:** device pairing, short-lived tokens, and which actions a remote
     session may take (view-only vs approve-gate vs dispatch).
   - **Push:** "a mission needs you" as an actual push notification to the phone.
+  - **Reference designs (2026-09-27 competitive pass):** Orca's `orca serve --pairing-address` (headless
+    server owns agents; desktop, web, mobile and CLI are clients; one-time pairing code; optional relay)
+    and Herdr's one-client-many-servers model (each machine runs its own server; reconnects are
+    independent per host, so one dropped machine never drops the rest). Both match fleetd's
+    "authoritative daemon, thin renderers" split — study them before specifying R's transport.
 - **Serves:** ship autonomously & fast (the operator supervises from anywhere). **Membership:** passes
   the test — it makes the autonomous fleet *more* usable, not a new unrelated surface.
 - **Depends on:** Local-Tracker Phase 2 auth (hard prerequisite); benefits from the design overhaul
   (a served web shell wants the new design system).
+
+## C. Competitive gap — Herdr, Omarchy, Orca  ·  💡 proposed 2026-09-27  ·  lanes: mixed
+
+A research pass on 2026-09-27 compared the Command Center with three agent-era tools:
+
+- **Herdr** (herdr.dev) — a Rust agent multiplexer: a server owns the PTYs; agent state comes from
+  screen manifests and hooks; a JSON socket API; SSH multi-machine.
+- **Omarchy** (omarchy.org) — DHH's Arch + Hyprland distro. 4.x pre-wires nine agent CLIs, shows
+  a plan-usage panel, and ships Herdr.
+- **Orca** (stablyai/orca) — an Electron "agent development environment": worktree per task, 30–40+
+  agent CLIs, diff review, run/task orchestration with decision gates, `orca serve`, mobile app.
+
+**The gap, in one line:** they are ahead on breadth (agents supported, remote/mobile, interactive
+supervision, adoption); none has the verified-autonomy spine (frozen oracle, fleetd re-reading
+evidence rather than trusting "done", enforced USD/wall-clock caps, credentials kept out of the
+sandbox). Items are ordered **moat first, then parity**. The parity items (C4–C6) are sequenced
+behind decision **P5**.
+
+### Moat — make the differentiator real
+
+- **C1. Close the review-gate fail-open**  ·  lane: product. `parse_blockers` treats a missing
+  `BLOCKERS=` marker as zero blockers, so a crashed reviewer passes `gate_met`. That breaks the one
+  guarantee no competitor offers. Fail closed. Also make `fmt + clippy` a required check (see the CI
+  note above) and fix the flaky cap test (#72). *Done when:* a reviewer that exits without the
+  marker parks the unit at `NeedsHuman`, with a regression test.
+- **C2. Agent breadth through harnesses**  ·  lane: product · 🛠️ SP-2a specced. Herdr and Orca run
+  25–40 agent CLIs; we run one. The SP-2a/b/c → SP-4 track is the path. After `harness-claude-docker`,
+  prioritise **Codex** and **OpenCode** harnesses (the most-supported CLIs across all three tools),
+  each passing `harness-conformance`. Also evaluate a **`harness-herdr`** adapter: Herdr's API maps
+  roughly onto SP-1 (`agent start` ≈ `unit/start`, `blocked` ≈ `gate/request`, `events.subscribe` ≈
+  `unit/event`), which could cover many CLIs at once — but only if it can run inside the container
+  boundary. *Depends on:* SP-2a/b/c.
+- **C3. Engine-as-a-service: dispatch from anywhere**  ·  lanes: product + workflow. Let other tools
+  hand work to fleetd and get back a verified PR: a `fleet` CLI (`fleet dispatch`, `fleet wait`,
+  `fleet status`, JSON output) plus an agent skill that teaches Claude Code — or an agent running
+  inside Orca or Herdr — to dispatch a mission instead of doing risky work inline. The pattern comes
+  from Omarchy's "system skill" and Orca's `orca skills install`. *Depends on:* the Phase-2 auth
+  foundation (C3 is a remote-ish client of a mutating API). **Weight depends on P5.**
+
+### Parity — close the visible gaps (sequenced behind P5)
+
+- **C4. Live unit view + steer**  ·  lane: product. Herdr and Orca let the human watch and type into
+  a running agent; we stream phases but not the agent's own session. Add:
+  - a read-only live transcript of the unit's agent in the detail rail;
+  - a "steer" action that injects a message into a running unit (recorded as an event, capped like
+    everything else);
+  - a "take over" action for `NeedsHuman` units that opens an interactive Claude Code session in
+    the unit's workspace, primed with the failure context. This extends Omarchy's crash→agent
+    handoff idea.
+- **C5. Batched diff review at the ship gate**  ·  lane: product. For T3 (human ship decision) and
+  failed reviews: an in-cockpit diff with line-anchored comments, sent back as **one** revision round
+  that re-enters build → check → review (Orca's "one round of thinking, one revision pass"). This
+  turns a rejection into a loop instead of a dead end.
+- **C6. Best-of-N missions**  ·  lane: product. Fan one mission out to N units (optionally N
+  different harnesses, per C2) against the same frozen oracle. The verifier ranks them on evidence
+  (tests green, blockers, diff size, cost); the human or T1 policy picks the winner, and the losers
+  are torn down. Orca offers "fan to five agents, compare diffs" with human judgement only; ours
+  would be scored by evidence. *Depends on:* C2 for mixed harnesses; plain same-harness N works on
+  today's swarm engine.
+
+### Supporting
+
+- **C7. Plan-usage panel**  ·  lanes: product + workflow. Orca and Omarchy both show subscription
+  windows (5-hour / daily / weekly), resets and burn, with a warning at 80%. Extend `claude_meter.rs`
+  and the cockpit chip from per-unit USD to plan windows, and feed the rolling cap (item 6) so
+  dispatch backs off *before* a plan window runs out. Later: aggregate across machines (C9).
+- **C8. Native "needs you" notifications**  ·  lane: product. OS notifications from the Tauri shell
+  when a unit reaches `NeedsHuman`, an oracle-approval gate, or a T3 ship gate. This is the desk-side
+  precursor to R's phone push; both should share one notification event model.
+- **C9. Remote runners**  ·  lane: product · 🔗 R. Herdr and Orca run agents on SSH hosts while the UI
+  stays local. Add a `Runner` backend that runs units on another machine's Docker (the deferred
+  "remote Linux fleetd", optionally gVisor-hardened), so a laptop cockpit can drive a workstation or
+  VPS fleet. Distinct from R: R moves the *operator*; C9 moves the *compute*. *Depends on:* R's auth
+  and transport.
+- **C10. Refresh the competitor framing**  ·  lane: docs. `docs/command-center-vision.md` names
+  AgentCraft as the main competitor. Add Orca (the primary overlap with the cockpit) and Herdr (the
+  terminal layer) to that section, and restate the moat.
+
+### Considered, not adopted (membership test)
+
+- **An embedded editor or browser, Design Mode** (Orca): this rebuilds an IDE. Hosted app-plugins
+  (#49) already meet "no alt-tabbing" without it.
+- **Deciding agent state by reading the screen** (Herdr): a guess cannot sit in the ship path;
+  fleetd's evidence rule stands. Herdr's approach is acceptable only as a display hint inside a
+  future `harness-herdr`.
+- **OS-level integration** (Omarchy): Command Center stays cross-platform; Windows, macOS and Linux
+  remain hard requirements.
 
 ## Hardening backlog (session-state plugin — item 3 Tier 1)
 
@@ -261,5 +357,12 @@ release gate (H1) and the whole hardening backlog are cleared.
 - **Auth foundation:** **Local-Tracker Phase 2** and **Remote Control (R)** share the daemon-wide
   loopback-auth migration — build it once in Phase 2 and R inherits it. Do not spec R's transport
   until Phase 2's auth model is settled in code.
+- **Competitive gap (C):**
+  - **C1** is independent and small; a strong candidate to land before Phase 2.
+  - **C2** follows the SP-2a→2b→2c→SP-4 track.
+  - **C3** and **C9** ride the Phase-2 / R auth foundation.
+  - **C6** with mixed harnesses needs C2.
+  - **C4–C6** ordering waits on **P5**.
+  - **C7**, **C8** and **C10** can be done any time.
 - **Release gate:** cleared — the entire hardening backlog (H1–H4) is merged (PR #31 + #34); a
   `0.10.x` session-state plugin release is safe whenever convenient.
