@@ -625,7 +625,20 @@ impl<R: Runner, F: Forge> Run<R, F> {
                         self.goto(Trigger::CapBreach, Some("usd cap".into()), None);
                         continue;
                     }
-                    let blockers = parse_blockers(&out.stdout);
+                    // Fail closed: a reviewer that never reported (crash, budget
+                    // cut-off, prose) must not pass the gate as "zero blockers" (#73).
+                    // Modeled as a Stall — the review produced no usable verdict.
+                    let Some(blockers) = parse_blockers(&out.stdout) else {
+                        self.emit(Event::Blocked {
+                            reason: "review reported no verdict".into(),
+                            cap: None,
+                            detail: format!(
+                                "round {round}: no BLOCKERS= marker in reviewer output"
+                            ),
+                        });
+                        self.goto(Trigger::Stall, Some("review unreported".into()), None);
+                        continue;
+                    };
                     self.emit(Event::Finding {
                         round,
                         severity: fleet_core::Severity::Blocker,
@@ -816,16 +829,17 @@ impl<R: Runner, F: Forge> Run<R, F> {
     }
 }
 
-/// Parse a `BLOCKERS=N` line from reviewer output; default 0 if absent.
-fn parse_blockers(stdout: &[String]) -> u32 {
+/// Parse a `BLOCKERS=N` line from reviewer output. `None` when no parseable marker
+/// is present: a review that could not report is not a review that found nothing.
+fn parse_blockers(stdout: &[String]) -> Option<u32> {
     for line in stdout {
         if let Some(rest) = line.strip_prefix("BLOCKERS=") {
             if let Ok(n) = rest.trim().parse() {
-                return n;
+                return Some(n);
             }
         }
     }
-    0
+    None
 }
 
 #[cfg(test)]
@@ -1324,33 +1338,69 @@ mod tests {
 
     #[test]
     fn parse_blockers_reads_the_marker() {
-        assert_eq!(parse_blockers(&["noise".into(), "BLOCKERS=3".into()]), 3);
-        assert_eq!(parse_blockers(&["nothing here".into()]), 0);
+        assert_eq!(
+            parse_blockers(&["noise".into(), "BLOCKERS=3".into()]),
+            Some(3)
+        );
+        assert_eq!(parse_blockers(&["BLOCKERS=0".into()]), Some(0));
     }
 
     #[test]
-    fn parse_blockers_treats_an_absent_marker_as_clean() {
-        // ⚠ KNOWN GAP, asserted so it is a decision rather than a surprise.
-        //
-        // An absent marker is indistinguishable from a clean review, so a reviewer
-        // that crashed, ran out of budget mid-sentence, or simply wrote prose scores
-        // ZERO blockers and satisfies the review gate. That is stronger than allowing
-        // the turn: it actively passes it.
-        //
-        // Under DOCTRINE I1 as amended 2026-09-03 these are two different failures -
-        // a check that ran and found nothing versus a check that could not report -
-        // and they must not share an outcome. Fixing it means returning Option<u32>
-        // and routing None to NeedsHuman, which is a state-machine change and so is
-        // deliberately NOT bundled with the W2 prompt transplant.
-        //
-        // The prompt half of the mitigation is in place: `steps::review` now demands
-        // the line be emitted even when N is 0, pinned by
-        // `steps::tests::the_review_prompt_states_the_parse_contract_the_driver_relies_on`.
+    fn parse_blockers_distinguishes_an_absent_marker_from_a_clean_review() {
+        // Under DOCTRINE I1 (amended 2026-09-03) a check that ran and found nothing
+        // and a check that could not report are different failures and must not
+        // share an outcome (#73). A reviewer that crashed, ran out of budget
+        // mid-sentence, or wrote prose reports NOTHING — never zero blockers.
         assert_eq!(
             parse_blockers(&["the model wrote an essay and stopped".into()]),
-            0
+            None
         );
-        assert_eq!(parse_blockers(&[]), 0);
+        assert_eq!(parse_blockers(&[]), None);
+        assert_eq!(parse_blockers(&["BLOCKERS=lots".into()]), None);
+    }
+
+    #[tokio::test]
+    async fn review_without_a_blockers_marker_parks_at_needs_human() {
+        // The gate must fail CLOSED: a review that never reported cannot pass it
+        // (#73). Oracle, build, check pass, then a reviewer that writes prose.
+        let script = vec![
+            FakeRunner::ok(0.01, &["test_a.rs"]),
+            FakeRunner::ok(0.01, &["built"]),
+            FakeRunner::ok(0.01, &["checked"]),
+            FakeRunner::ok(0.01, &["looks fine to me, ship it"]),
+        ];
+        let (ctx, crx) = mpsc::unbounded_channel();
+        let (etx, mut erx) = mpsc::unbounded_channel();
+        let handle = tokio::spawn(run(
+            FakeRunner::new(script),
+            FakeForge::default(),
+            spec(Tier::T1, 100.0, 1),
+            RunCtx::standalone(),
+            crx,
+            etx,
+        ));
+
+        let mut seen = vec![];
+        loop {
+            let e = erx.recv().await.expect("stream closed before NeedsHuman");
+            if let Event::PhaseChanged { from, to, .. } = e.event {
+                seen.push(to);
+                if to == Phase::NeedsHuman {
+                    assert_eq!(from, Phase::Reviewing, "parked from the review step");
+                    break;
+                }
+            }
+        }
+        assert!(
+            !seen.contains(&Phase::MergeCheck),
+            "an unreported review must never pass the gate: {seen:?}"
+        );
+
+        ctx.send(Command::Abandon {
+            cmd_id: "cleanup".into(),
+        })
+        .unwrap();
+        let _ = handle.await;
     }
 
     #[tokio::test(start_paused = true)]
