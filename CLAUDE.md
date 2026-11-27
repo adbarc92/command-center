@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+Read [docs/ROUTER.md](docs/ROUTER.md) first; it routes to every doc.
+
 Project conventions live in the global `~/.claude/CLAUDE.md` and this project's memory store
 (`MEMORY.md` index, auto-loaded at session start).
 
